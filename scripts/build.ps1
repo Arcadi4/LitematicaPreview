@@ -8,7 +8,9 @@ try {
     $originalFlags = $env:RUSTFLAGS
     try {
         # Ship without a separate Visual C++ runtime installer.
-        $env:RUSTFLAGS = "$originalFlags -C target-feature=+crt-static"
+        if ($env:RUSTFLAGS -notlike '*target-feature=+crt-static*') {
+            $env:RUSTFLAGS = if ($originalFlags) { "$originalFlags -C target-feature=+crt-static" } else { "-C target-feature=+crt-static" }
+        }
         & cargo build --manifest-path Native/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
         if ($LASTEXITCODE -ne 0) { throw 'Native build failed.' }
     } finally { $env:RUSTFLAGS = $originalFlags }

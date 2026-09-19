@@ -1,0 +1,7 @@
+App/bin/
+App/obj/
+Native/target/
+artifacts/
+.vs/
+.DS_Store
+*.user

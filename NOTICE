@@ -1,0 +1,30 @@
+Litematica Preview is a Windows port of LitematicaQL by Arcadi4.
+Source baseline: 4bbeeae4ddfd5d4afa0280ba42f6a01bc8df7ab6.
+The source repository's LICENSE is GNU AGPL version 3 and is preserved.
+The source NOTICE described an older MIT license; this port follows LICENSE.
+
+Nucleation and schematic-mesher power file decoding and meshing.
+OpenTK and GLFW provide OpenGL bindings and the Windows rendering control.
+See ThirdParty/ for bundled dependency license texts.
+
+Third-party Minecraft resource pack
+------------------------------------
+
+The file `Assets/pack.zip`, is a separate third-party Minecraft resource
+pack. Its `pack.mcmeta` identifies it as Minecraft's default textures for pack
+and mod creators (`pack_format` 71). Its Minecraft assets are copyrighted by
+Mojang AB and/or its licensors. They are not original LitematicaQL material
+and are not covered by the AGPL license in LICENSE; this project does not offer
+them under that license.
+
+LitematicaQL includes this resource pack solely to provide a legitimate,
+non-commercial, offline preview of Minecraft schematics. The maintainers
+believe this limited use is the kind of fan use Mojang may tacitly permit, but
+this notice is not a representation that Mojang has reviewed, endorsed, or
+licensed LitematicaQL. No ownership of or permission to redistribute Mojang's
+assets is claimed here; all rights remain with Mojang AB and its licensors.
+
+Anyone redistributing a build containing `pack.zip` is responsible for
+ensuring that their use and redistribution of those assets is permitted under
+the applicable Mojang terms. The archive may be omitted or replaced with a
+resource pack obtained with the necessary permission.

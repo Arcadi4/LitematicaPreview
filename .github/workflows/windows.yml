@@ -1,0 +1,30 @@
+name: Windows
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Native format and ABI checks
+        run: cargo test --manifest-path Native/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
+      - name: Build the app and installer
+        shell: pwsh
+        run: ./scripts/build.ps1 -Installer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LitematicaPreview-win-x64
+          path: |
+            artifacts/win-x64/
+            artifacts/*-setup.exe
+          if-no-files-found: error

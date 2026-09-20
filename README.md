@@ -46,8 +46,8 @@ cached while the worker remains healthy.
 
 ### Options
 
-- **Installer (`*-setup.exe`)**: Download the setup executable from [Releases](https://github.com/Arcadi4/LitematicaPreview/releases). Installs per-user without requiring administrator privileges. If WebView2 is missing, setup automatically downloads and installs Microsoft's bootstrapper.
-- **Portable Package**: Download and extract the portable archive and run `LitematicaPreview.exe`. Keep `Assets`, `Demos`, and `Licenses` alongside the executable.
+- **Installer (`LitematicaPreview-<version>-win-x64-setup.exe`)**: Download the setup executable from [Releases](https://github.com/Arcadi4/LitematicaPreview/releases). Installs per-user without requiring administrator privileges. If WebView2 is missing, setup automatically downloads and installs Microsoft's bootstrapper. After Welcome, the file-associations page lets you choose individual extensions; registration and all supported extensions are checked by default.
+- **Portable Package (`LitematicaPreview-<version>-win-x64-portable.zip`)**: Download and extract the portable archive and run `LitematicaPreview.exe`. Keep `Assets`, `Demos`, and `Licenses` alongside the executable. Extracting or running the portable package does not register file associations.
 
 ## Usage
 
@@ -64,21 +64,28 @@ Open a schematic in any of the following ways:
 
 ### File Associations
 
-The application can register as a Windows handler for supported schematic formats:
+The application can register as a Windows handler for supported schematic formats. Choosing the default handler remains under Windows' control:
 
+- **During setup**: The file-associations page follows Welcome. Registration and all supported extensions start checked; uncheck registration to continue without it, or select only the extensions you want. Registration requires at least one selected extension. The separate checkbox to open Windows Default Apps settings starts unchecked. Silent setup never registers formats or opens Settings. Reinstalling replaces this copy's registered selection; leaving registration disabled removes registrations owned by this copy.
 - **From the app**: Open the menu and select **Set as default app…** to register and open Windows Default Apps settings. Select **Remove file associations** to unregister.
 - **From the command line** (convenient for portable copies):
 
 ```powershell
-# Register file associations under HKCU
+# Register all supported file associations under HKCU
 .\LitematicaPreview.exe --register
+
+# Replace this copy's registered selection with these extensions
+.\LitematicaPreview.exe --register-extensions ".litematic,.schem"
+
+# Open Windows Default Apps settings without changing registration
+.\LitematicaPreview.exe --default-apps
 
 # Remove file associations registered by this copy
 .\LitematicaPreview.exe --unregister
 ```
 
 > [!IMPORTANT]
-> Registrations are written strictly to the current user's registry hive (`HKCU`) and respect Windows `UserChoice`. Existing file associations are never overwritten without user consent.
+> Registrations are written strictly to the current user's registry hive (`HKCU`). The app never overwrites Windows `UserChoice`; choose defaults in Windows Settings or the **Open with** dialog. Removing registrations only removes entries owned by this executable, preserving another installed or portable copy's registrations.
 
 ## Supported Formats
 
@@ -125,12 +132,21 @@ Run the PowerShell build script from the repository root:
 # Add the MSVC Rust target if not already installed
 rustup target add x86_64-pc-windows-msvc
 
-# Build the portable application (artifacts/win-x64/)
+# Build the setup executable and portable ZIP; retain artifacts/win-x64/
 ./scripts/build.ps1
 
-# Build both portable app and NSIS setup installer (artifacts/*-setup.exe)
-./scripts/build.ps1 -Installer
+# Automated build: suppress the optional final folder-opening prompt
+./scripts/build.ps1 -NonInteractive
 ```
+
+Every build creates the following outputs using the version in `App/src-tauri/tauri.conf.json`:
+
+- `artifacts/LitematicaPreview-<version>-win-x64-setup.exe`
+- `artifacts/LitematicaPreview-<version>-win-x64-portable.zip`, containing `LitematicaPreview.exe`, `Assets`, `Demos`, and `Licenses` at the archive root
+- `artifacts/win-x64/`, the complete portable staging directory, ready to run
+- `artifacts/logs/build-<timestamp>.log`, the full build transcript, including compiler and bundler output
+
+The script prints numbered stages, elapsed time, absolute package paths, file sizes, and installation guidance. Failures identify the stage and log path. An interactive terminal may offer to open the artifacts folder when the build completes; CI, redirected input/output, and `-NonInteractive` runs never prompt. Existing `-Installer` commands remain supported and produce the same two packages. GitHub workflows upload both packages and the build logs; releases also include SHA-256 checksums.
 
 ### Development Commands
 

@@ -43,9 +43,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test schematic decoding and meshing
         run: cargo test --manifest-path Native/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
-      - name: Build the app and installer
+      - name: Build setup and portable packages
         shell: pwsh
-        run: ./scripts/build.ps1 -Installer
+        run: ./scripts/build.ps1 -NonInteractive
       - name: Check frontend formatting
         run: pnpm --prefix App run format -- --check
       - name: Test the Tauri host
@@ -56,4 +56,12 @@ jobs:
           path: |
             artifacts/win-x64/
             artifacts/*-setup.exe
+            artifacts/*-portable.zip
           if-no-files-found: error
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: LitematicaPreview-build-logs
+          path: artifacts/logs/
+          if-no-files-found: ignore

@@ -1,0 +1,11 @@
+* text=auto eol=lf
+
+*.ico binary
+*.png binary
+*.zip binary
+*.litematic binary
+*.schem binary
+*.schematic binary
+*.nbt binary
+*.mcstructure binary
+*.nusn binary

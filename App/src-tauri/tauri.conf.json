@@ -51,6 +51,7 @@
         "silent": true
       },
       "nsis": {
+        "template": "../../scripts/installer.nsi",
         "installMode": "currentUser",
         "installerIcon": "../../Assets/app.ico",
         "installerHooks": "../../scripts/installer-hooks.nsh",

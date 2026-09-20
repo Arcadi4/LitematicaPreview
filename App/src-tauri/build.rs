@@ -1,4 +1,21 @@
+#[path = "src/formats.rs"]
+mod formats;
+
 fn main() {
+    println!("cargo:rerun-if-changed=src/formats.rs");
+    let mut include =
+        String::from("; Generated from src/formats.rs.\n!macro LP_FOREACH_EXTENSION APPLY\n");
+    for extension in formats::EXTENSIONS {
+        include.push_str(&format!(
+            "  !insertmacro ${{APPLY}} \"{}\" \"{}\"\n",
+            &extension[1..],
+            extension
+        ));
+    }
+    include.push_str("!macroend\n");
+    std::fs::create_dir_all("gen").expect("Unable to create installer metadata directory");
+    std::fs::write("gen/installer-extensions.nsh", include)
+        .expect("Unable to generate installer extension choices");
     tauri_build::try_build(
         tauri_build::Attributes::new()
             .windows_attributes(

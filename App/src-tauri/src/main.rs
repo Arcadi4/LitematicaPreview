@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod associations;
+mod formats;
 mod preview;
 mod preview_process;
 mod protocol;
@@ -15,15 +16,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
-pub const EXTENSIONS: &[&str] = &[
-    ".litematic",
-    ".schem",
-    ".schematic",
-    ".nbt",
-    ".snbt",
-    ".mcstructure",
-    ".nusn",
-];
+pub use formats::EXTENSIONS;
 
 struct HostState {
     worker: Arc<PreviewWorker>,

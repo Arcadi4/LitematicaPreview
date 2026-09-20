@@ -1,145 +1,164 @@
-# Litematica Preview
+<div align="center">
+  <img src="Assets/icon.png" alt="Litematica Preview icon" width="160" />
+  <h1>Litematica Preview</h1>
+  <p><strong>Fast, offline Minecraft schematic viewer for Windows</strong></p>
 
-A Windows x64 schematic viewer based on
-[LitematicaQL](https://github.com/Arcadi4/LitematicaQL), without the macOS Quick Look
-integration. The desktop app uses Tauri 2, Fluent UI React v9, and an on-demand
-WebGL 2 renderer. Nucleation decodes and meshes schematics locally; files are not
-uploaded to a service.
+  [![Windows Build](https://img.shields.io/github/actions/workflow/status/Arcadi4/LitematicaPreview/windows.yml?style=flat-square&label=Windows)](https://github.com/Arcadi4/LitematicaPreview/actions)
+  [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-0078d4?style=flat-square&logo=windows)](https://github.com/Arcadi4/LitematicaPreview)
+  [![Tauri 2](https://img.shields.io/badge/Tauri-v2-24c8db?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
+  [![Fluent UI](https://img.shields.io/badge/Fluent%20UI-React%20v9-0078d4?style=flat-square&logo=react)](https://react.fluentui.dev)
+  [![Nucleation](https://img.shields.io/badge/Powered%20by-Nucleation-ff8c00?style=flat-square)](https://github.com/Schem-at/Nucleation)
 
-## Install and run
+  [Features](#features) • [Installation](#installation) • [Supported Formats](#supported-formats) • [Controls](#controls) • [Development](#development)
+</div>
 
-- **Supported system:** Windows 10 or 11, x64, with a graphics driver that supports
-  WebGL 2 and the [Microsoft Edge WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/).
-- **Installer:** run the `*-setup.exe` release. Installation is per-user and does
-  not require administrator rights for the app. If WebView2 is missing, setup
-  downloads and runs Microsoft's bootstrapper, so an internet connection is
-  required for that prerequisite.
-- **Portable:** extract the complete portable package and run
-  `LitematicaPreview.exe`. Keep `Assets`, `Demos`, and `Licenses` beside it.
-  WebView2 must already be installed; copying the executable alone is insufficient.
-- Neither .NET nor Node.js is required to run the packaged app. Once WebView2 is
-  installed, previewing works offline.
+Litematica Preview is a native Windows desktop application for inspecting and viewing Minecraft schematics and structures in real-time 3D. Adapted from [LitematicaQL](https://github.com/Arcadi4/LitematicaQL) for macOS, it uses [Nucleation](https://github.com/Schem-at/Nucleation) to decode and mesh builds locally without uploading files to external services.
 
-Open a file using **Open**, drop a file onto the window, choose a bundled demo,
-or pass a path on the command line:
+The app pairs a Rust host with Fluent UI React v9 and an on-demand WebGL 2 renderer, delivering a responsive desktop experience with native Windows shell integration.
+
+## Features
+
+- **Offline & Private**: Decoding and meshing run entirely locally via Nucleation; schematic data is never uploaded.
+- **Seven Format Support**: Inspect `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, and `.nusn` files.
+- **Accurate Material Meshing**: Opaque, cutout, and transparent geometry are rendered in dedicated passes with repeated greedy meshing and high-fidelity textures.
+- **Tight Geometry Framing**: Initial camera framing and **Fit** calculate tight bounding geometry rather than empty chunk boundaries.
+- **On-Demand Rendering**: The WebGL 2 engine redraws only on user input, resize, or file loads instead of running a perpetual animation loop.
+- **Responsive Architecture**: Meshes stream across Tauri IPC as binary vertex buffers, yielding during GPU uploads and discarding stale requests when a new file opens.
+- **Windows Integration**: Per-user file association management, Fluent UI v9 controls, light/dark/system themes, and drag-and-drop support.
+
+## Installation
+
+### Requirements
+
+- Windows 10 or 11 (x64)
+- A graphics driver with WebGL 2 support
+- [Microsoft Edge WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
+
+> [!NOTE]
+> WebView2 is pre-installed on Windows 11 and recent Windows 10 builds. Neither .NET nor Node.js is required at runtime. Once WebView2 is present, previewing works completely offline.
+
+### Options
+
+- **Installer (`*-setup.exe`)**: Download the setup executable from [Releases](https://github.com/Arcadi4/LitematicaPreview/releases). Installs per-user without requiring administrator privileges. If WebView2 is missing, setup automatically downloads and installs Microsoft's bootstrapper.
+- **Portable Package**: Download and extract the portable archive and run `LitematicaPreview.exe`. Keep `Assets`, `Demos`, and `Licenses` alongside the executable.
+
+## Usage
+
+Open a schematic in any of the following ways:
+
+- Click **Open** (or press `Ctrl+O`) to choose a file.
+- Drag and drop a supported file directly into the window.
+- Select any of the bundled sample builds on the welcome screen.
+- Launch from the command line:
 
 ```powershell
-.\LitematicaPreview.exe "C:\Schematics\My build.litematic"
+.\LitematicaPreview.exe "C:\Schematics\Cottage.litematic"
 ```
 
-Supported formats are `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`,
-`.mcstructure`, and `.nusn`. Opaque, cutout, and transparent materials retain their
-separate rendering behavior. The initial camera and **Fit** frame the actual
-geometry rather than padded schematic dimensions.
+### File Associations
 
-## Controls
+The application can register as a Windows handler for supported schematic formats:
 
-| Action | Control |
-| --- | --- |
-| Open a schematic | **Open** or `Ctrl+O` |
-| Orbit | Left-button drag, or arrow keys with the preview focused |
-| Pan | Right- or middle-button drag, or `Shift` + arrow keys |
-| Zoom | Mouse wheel, `+` / `-`, or the zoom buttons |
-| Fit geometry | **Fit**, `F`, or `Home` with the preview focused |
-| Show or hide the ground grid | **Ground grid** |
-| Return to the welcome screen | **Home** toolbar command |
-| Cancel a pending load | **Cancel** or `Esc` |
-
-The application menu also provides **Controls and shortcuts**, system/light/dark
-appearance settings, and **About and licenses**. Rendering happens on changes
-and input, not on a perpetual animation timer.
-
-The Rust host caches the resource pack and serializes decoding/meshing on a
-background worker. New opens cancel queued work and discard stale results;
-Nucleation itself is not interruptible. Meshes cross Tauri IPC as binary buffers,
-not JSON vertex arrays. GPU uploads yield between bounded chunks, and superseded
-CPU/GPU resources are released. The renderer caps device pixel ratio at 2 and
-redraws only for load, resize, or camera/grid input.
-
-### File associations
-
-Setup registers the app as an available handler. The application menu's
-**Set as default app…** registers it and opens Windows Default Apps settings;
-Windows may require you to choose it for each file type. **Remove file
-associations** removes registrations owned by this copy.
-
-For portable copies, the same operations are available without opening the UI:
+- **From the app**: Open the menu and select **Set as default app…** to register and open Windows Default Apps settings. Select **Remove file associations** to unregister.
+- **From the command line** (convenient for portable copies):
 
 ```powershell
+# Register file associations under HKCU
 .\LitematicaPreview.exe --register
+
+# Remove file associations registered by this copy
 .\LitematicaPreview.exe --unregister
 ```
 
-These commands only manage registrations; `--register` does not open Settings.
-Registration is under the current user's registry hive. Existing extension
-defaults and Windows' protected `UserChoice` are preserved. An unclaimed
-extension receives an initial default. A second copy cannot take over an
-existing copy's registration: unregister the owner first. Uninstalling or
-unregistering a different copy leaves the owner's associations intact.
+> [!IMPORTANT]
+> Registrations are written strictly to the current user's registry hive (`HKCU`) and respect Windows `UserChoice`. Existing file associations are never overwritten without user consent.
 
-## Build from source
+## Supported Formats
 
-Install these Windows build prerequisites:
+| Extension | Format | Description |
+| --- | --- | --- |
+| `.litematic` | Litematica | Fabric / Litematica mod schematic |
+| `.schem` | Sponge Schematic | Sponge schematic v2 and v3 (WorldEdit modern) |
+| `.schematic` | MCEdit Schematic | Classic legacy schematic format (Minecraft 1.12 and earlier) |
+| `.nbt` | Java Structure Block | Vanilla Java Edition structure NBT |
+| `.snbt` | Structure SNBT | Text-based SNBT structure (brace and bracket block states) |
+| `.mcstructure` | Bedrock Structure | Minecraft Bedrock Edition structure export |
+| `.nusn` | Nucleation Snapshot | Nucleation native binary snapshot |
 
-- Node.js 24 LTS, including npm.
-- A current stable Rust toolchain with `x86_64-pc-windows-msvc` installed.
-- Visual Studio 2022 or newer Build Tools with **Desktop development with C++**,
-  the x64 MSVC tools, and a Windows SDK.
-- WebView2 Evergreen Runtime for running the app during development.
+## Controls
 
-From the repository root in PowerShell:
+| Action | Input |
+| --- | --- |
+| **Open schematic** | Click **Open** or press `Ctrl+O` |
+| **Orbit camera** | Left-click and drag, or Arrow keys (with preview focused) |
+| **Pan camera** | Right-click / Middle-click and drag, or `Shift` + Arrow keys |
+| **Zoom** | Mouse scroll wheel, `+` / `-`, or Zoom buttons |
+| **Fit geometry** | Click **Fit**, or press `F` / `Home` |
+| **Toggle ground grid** | Click **Ground grid** in the toolbar |
+| **Return to home** | Click **Home** in the toolbar |
+| **Cancel load** | Click **Cancel** or press `Esc` |
+
+> [!TIP]
+> The top-right menu provides quick access to **Controls and shortcuts**, appearance settings (System / Light / Dark), and license notices.
+
+## Development
+
+### Prerequisites
+
+- [Node.js 24 LTS](https://nodejs.org/) and npm
+- Current stable [Rust](https://www.rust-lang.org/) toolchain with the `x86_64-pc-windows-msvc` target installed
+- Visual Studio 2022 Build Tools with **Desktop development with C++**, x64 MSVC tools, and Windows SDK
+- Microsoft Edge WebView2 Evergreen Runtime
+
+### Build from Source
+
+Run the PowerShell build script from the repository root:
 
 ```powershell
+# Add the MSVC Rust target if not already installed
 rustup target add x86_64-pc-windows-msvc
+
+# Build the portable application (artifacts/win-x64/)
 ./scripts/build.ps1
+
+# Build both portable app and NSIS setup installer (artifacts/*-setup.exe)
 ./scripts/build.ps1 -Installer
 ```
 
-The script installs the locked npm dependencies with `npm ci`, invokes Tauri's
-release build (which builds the frontend), and passes `--locked` to Cargo. The
-default output is the complete portable app at `artifacts/win-x64/`.
-`-Installer` also builds a per-user NSIS setup and copies it to
-`artifacts/*-setup.exe`. Tauri acquires its NSIS tooling; Inno Setup is not needed.
-The script uses the Tauri resource map for both package layouts and statically
-links the MSVC runtime. The release app does not depend on a native decoder DLL.
+### Development Commands
 
-Development with the actual desktop host:
+Run the full desktop app with hot-reloading:
 
 ```powershell
 npm --prefix App ci
 npm --prefix App run tauri -- dev
 ```
 
-Frontend-only development and type checking/building:
+Run frontend-only development:
 
 ```powershell
 npm --prefix App run dev
 npm --prefix App run build
 ```
 
-The frontend-only server cannot provide native file dialogs, schematic loading,
-or Windows integration; use `tauri dev` for end-to-end interaction.
-
-Rust formatting and decoder checks:
+Run test suites and code validation:
 
 ```powershell
-cargo fmt --manifest-path Native/Cargo.toml -- --check
-cargo fmt --manifest-path App/src-tauri/Cargo.toml -- --check
+# Native decoder and mesher tests
 cargo test --manifest-path Native/Cargo.toml --release --locked
-npm --prefix App run build
+
+# Host compile and unit tests
 cargo check --manifest-path App/src-tauri/Cargo.toml --all-targets --locked
 cargo test --manifest-path App/src-tauri/Cargo.toml --release --locked
+
+# Code formatting checks
+cargo fmt --manifest-path Native/Cargo.toml -- --check
+cargo fmt --manifest-path App/src-tauri/Cargo.toml -- --check
 ```
 
-## Licenses and assets
+## Acknowledgements
 
-The project follows the GNU AGPL v3 license in `LICENSE`. Dependency notices and
-license texts are in `ThirdParty/`; packaged copies include them under
-`Licenses/`, accessible through **About and licenses** → **Open licenses folder**.
-Historical OpenTK/GLFW notices remain in the repository for provenance, but the
-current app does not ship those libraries.
-
-`Assets/pack.zip` contains separate third-party Minecraft textures, not AGPL
-project artwork. See `NOTICE` for the Mojang attribution and redistribution
-limitations. Bundled demos and existing assets are repository inputs; building
-does not require a sibling copy of the macOS project.
+- [LitematicaQL](https://github.com/Arcadi4/LitematicaQL): The macOS Quick Look previewer this desktop application is adapted from.
+- [Nucleation](https://github.com/Schem-at/Nucleation) by [@Nano112](https://github.com/Nano112): Powers the schematic decoding and meshing pipeline.
+- [Tauri](https://tauri.app/): Desktop application framework.
+- [Fluent UI React](https://react.fluentui.dev/): Windows Fluent Design system components.

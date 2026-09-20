@@ -26,6 +26,13 @@ The app pairs a Rust host with Fluent UI React v9 and an on-demand WebGL 2 rende
 - **Responsive Architecture**: Meshes stream across Tauri IPC as binary vertex buffers, yielding during GPU uploads and discarding stale requests when a new file opens.
 - **Windows Integration**: Per-user file association management, Fluent UI v9 controls, light/dark/system themes, and drag-and-drop support.
 
+File-open failures and recoverable internal errors display their diagnostic in an
+error dialog and return to the home screen. Decoding runs in an isolated worker:
+even a native decoder crash does not close the viewer, and the next open starts
+a fresh worker. On Windows the worker has a 2 GiB memory limit. Extremely detailed
+schematics can exceed this limit and cannot be previewed. The resource pack is
+cached while the worker remains healthy.
+
 ## Installation
 
 ### Requirements

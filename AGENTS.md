@@ -83,8 +83,10 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
 
 - Rust owns decoded previews until binary IPC serialization finishes. The WebView
   uploads typed-array views to WebGL and releases superseded CPU/GPU resources.
-- The native resource pack is cached, with one active decode/mesh call per process.
+- A persistent isolated decoder process caches the resource pack and serializes
+  decode/mesh calls. Windows limits it to 2 GiB and kills it with the host.
   Cancel queued work and dispose stale results; Nucleation itself is not cancellable.
+  Native worker crashes must surface in an error dialog with home recovery.
 - Keep opaque, cutout, and transparent parts separate. Greedy materials use their
   own repeating textures. The atlas is shared and clamped. Never flatten them.
 - Include greedy parts in triangle counts and bounds. Nucleation 0.10.14's

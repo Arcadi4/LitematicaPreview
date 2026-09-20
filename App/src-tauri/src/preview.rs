@@ -78,6 +78,27 @@ impl PreviewWorker {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::PreviewWorker;
+
+    #[test]
+    fn reload_and_delayed_requests_cannot_revive_stale_work() {
+        let worker = PreviewWorker::default();
+        worker.advance(20);
+        worker.advance(19);
+        assert!(worker.ensure_current(20).is_ok());
+        assert!(worker.ensure_current(19).is_err());
+
+        let reloaded = worker.begin_session();
+        assert!(worker.ensure_current(20).is_err());
+        worker.advance(reloaded + 1);
+        worker.advance(20);
+        assert!(worker.ensure_current(reloaded + 1).is_ok());
+        assert!(worker.ensure_current(reloaded).is_err());
+    }
+}
+
 fn read_bounded(path: &Path, current: impl Fn() -> Result<(), String>) -> Result<Vec<u8>, String> {
     let file = File::open(path).map_err(|e| format!("Unable to open {}: {e}", path.display()))?;
     let metadata = file

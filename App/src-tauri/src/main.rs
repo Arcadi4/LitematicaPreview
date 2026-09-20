@@ -252,9 +252,21 @@ fn main() {
         }
         return;
     }
-    let registration = match (first.as_deref(), args.next()) {
-        (Some(argument), None) if argument == "--register" => Some(associations::register()),
-        (Some(argument), None) if argument == "--unregister" => Some(associations::unregister()),
+    let remaining: Vec<_> = args.collect();
+    let registration = match first.as_deref().and_then(|arg| arg.to_str()) {
+        Some("--register") if remaining.is_empty() => Some(associations::register()),
+        Some("--unregister") if remaining.is_empty() => Some(associations::unregister()),
+        Some("--default-apps") if remaining.is_empty() => Some(associations::open_settings()),
+        Some("--register-extensions") => Some(match remaining.as_slice() {
+            [selection] => selection
+                .to_str()
+                .ok_or_else(|| "Invalid extension selection.".to_string())
+                .and_then(associations::register_extensions),
+            _ => Err("Pass a comma-separated list of supported extensions.".into()),
+        }),
+        Some("--register" | "--unregister" | "--default-apps") => {
+            Some(Err("Unexpected registration arguments.".into()))
+        }
         _ => None,
     };
     // Installer hooks must finish without constructing WebView2 or opening

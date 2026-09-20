@@ -1,3 +1,22 @@
+pub fn register() -> Result<(), String> {
+    platform::register(crate::EXTENSIONS)
+}
+
+pub fn register_extensions(selection: &str) -> Result<(), String> {
+    let mut selected = Vec::new();
+    for value in selection.split(',') {
+        let extension = crate::EXTENSIONS
+            .iter()
+            .copied()
+            .find(|extension| extension.eq_ignore_ascii_case(value.trim()))
+            .ok_or_else(|| format!("Unsupported schematic extension: {value}"))?;
+        if !selected.contains(&extension) {
+            selected.push(extension);
+        }
+    }
+    platform::register(&selected)
+}
+
 #[cfg(windows)]
 mod platform {
     use std::{borrow::Cow, io, ptr};
@@ -77,7 +96,7 @@ mod platform {
         };
     }
 
-    pub fn register() -> Result<(), String> {
+    pub fn register(selected: &[&str]) -> Result<(), String> {
         let executable = executable()?;
         let command = format!("\"{executable}\" \"%1\"");
         let user = RegKey::predef(HKEY_CURRENT_USER);
@@ -102,6 +121,30 @@ mod platform {
             );
         }
 
+        let owns_registration = value(&user, &format!(r"{PROG_KEY}\shell\open\command"), "")?
+            .is_some_and(|owner| owner.eq_ignore_ascii_case(&command));
+        if owns_registration {
+            for extension in crate::EXTENSIONS
+                .iter()
+                .filter(|extension| !selected.contains(extension))
+            {
+                let key = format!(r"Software\Classes\{extension}");
+                if value(&user, &key, "")?.is_some_and(|default| default == PROG_ID) {
+                    remove_value(&user, &key, "")?;
+                }
+                remove_value(&user, &format!(r"{key}\OpenWithProgids"), PROG_ID)?;
+                remove_value(
+                    &user,
+                    &format!(r"{APPLICATION_KEY}\SupportedTypes"),
+                    extension,
+                )?;
+                remove_value(
+                    &user,
+                    &format!(r"{CAPABILITIES_KEY}\FileAssociations"),
+                    extension,
+                )?;
+            }
+        }
         set(&user, PROG_KEY, "", "Minecraft schematic")?;
         set(
             &user,
@@ -130,7 +173,7 @@ mod platform {
             "View Minecraft schematics and structures offline.",
         )?;
 
-        for extension in crate::EXTENSIONS {
+        for extension in selected {
             let extension_key = format!(r"Software\Classes\{extension}");
             // Only unclaimed extensions get an initial default. Never touch
             // Explorer's protected UserChoice keys or replace another default.
@@ -233,7 +276,7 @@ mod platform {
 
 #[cfg(not(windows))]
 mod platform {
-    pub fn register() -> Result<(), String> {
+    pub fn register(_: &[&str]) -> Result<(), String> {
         Err("File associations are only supported on Windows.".to_string())
     }
 
@@ -246,4 +289,4 @@ mod platform {
     }
 }
 
-pub use platform::{open_settings, register, unregister};
+pub use platform::{open_settings, unregister};

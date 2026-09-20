@@ -7,6 +7,7 @@ use std::sync::Mutex;
 
 use nucleation::meshing::ResourcePackSource;
 
+use crate::preview_process::DecoderProcess;
 use crate::protocol;
 
 const MAX_INPUT_BYTES: usize = 1_024 * 1_024 * 1_024;
@@ -14,7 +15,7 @@ const MAX_INPUT_BYTES: usize = 1_024 * 1_024 * 1_024;
 #[derive(Default)]
 pub struct PreviewWorker {
     generation: AtomicU64,
-    pack: Mutex<Option<ResourcePackSource>>,
+    process: Mutex<Option<DecoderProcess>>,
 }
 
 impl PreviewWorker {
@@ -40,41 +41,31 @@ impl PreviewWorker {
 
     pub fn load(&self, path: &Path, pack_path: &Path, request_id: u64) -> Result<Vec<u8>, String> {
         self.ensure_current(request_id)?;
-        let mut pack = self
-            .pack
+        let mut process = self
+            .process
             .lock()
             .map_err(|_| "The preview worker is unavailable. Restart the app.".to_string())?;
         self.ensure_current(request_id)?;
 
-        // Catch inside the guard's lifetime: recoverable decoder/mesher panics
-        // do not unwind through the mutex or poison the cached resource pack.
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            let data = read_bounded(path, || self.ensure_current(request_id))?;
-            if pack.is_none() {
-                let bytes = read_bounded(pack_path, || self.ensure_current(request_id))?;
-                let loaded = ResourcePackSource::from_bytes(&bytes)
-                    .map_err(|e| format!("The bundled block resources are invalid: {e}"))?;
-                *pack = Some(loaded);
-            }
-            self.ensure_current(request_id)?;
-            let preview = litematica_preview_native::load(
-                &data,
-                pack.as_ref()
-                    .ok_or("The bundled block resources are unavailable.")?,
-            )?;
-            drop(data);
-            self.ensure_current(request_id)?;
-            let bytes = protocol::serialize(&preview, || self.ensure_current(request_id))?;
-            self.ensure_current(request_id)?;
-            Ok(bytes)
-        }));
+        if process.is_none() {
+            *process = Some(DecoderProcess::spawn()?);
+        }
         self.ensure_current(request_id)?;
-        result.unwrap_or_else(|_| {
-            Err(
-                "The decoder could not preview this schematic. Try a smaller or different file."
-                    .into(),
-            )
-        })
+        let result = process
+            .as_mut()
+            .ok_or("The preview worker is unavailable.")?
+            .load(path, pack_path);
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                // A native abort cannot unwind into the host. Discard the
+                // broken connection so the next request starts a fresh child.
+                process.take();
+                Err(error)
+            }
+        };
+        self.ensure_current(request_id)?;
+        result
     }
 }
 
@@ -97,6 +88,44 @@ mod tests {
         assert!(worker.ensure_current(reloaded + 1).is_ok());
         assert!(worker.ensure_current(reloaded).is_err());
     }
+}
+
+// Called only in the isolated decoder process. Keep native decoding, pack
+// caching and LPV1 serialization identical to the in-process implementation.
+pub(crate) fn decode(
+    path: &Path,
+    pack_path: &Path,
+    pack: &mut Option<ResourcePackSource>,
+) -> Result<Vec<u8>, String> {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let data = read_bounded(path, || Ok(()))?;
+        if pack.is_none() {
+            let bytes = read_bounded(pack_path, || Ok(()))?;
+            *pack = Some(
+                ResourcePackSource::from_bytes(&bytes)
+                    .map_err(|e| format!("The bundled block resources are invalid: {e}"))?,
+            );
+        }
+        let preview = litematica_preview_native::load(
+            &data,
+            pack.as_ref()
+                .ok_or("The bundled block resources are unavailable.")?,
+        )?;
+        drop(data);
+        protocol::serialize(&preview, || Ok(()))
+    }));
+    result.unwrap_or_else(|panic| {
+        // Do not reuse native state that was being mutated during a panic.
+        *pack = None;
+        let detail = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("Unknown native panic");
+        Err(format!(
+            "The decoder encountered an internal error: {detail}"
+        ))
+    })
 }
 
 fn read_bounded(path: &Path, current: impl Fn() -> Result<(), String>) -> Result<Vec<u8>, String> {

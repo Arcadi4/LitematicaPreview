@@ -1,0 +1,354 @@
+use std::io::{self, Read, Write};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::time::{Duration, Instant};
+
+const TOKEN_BYTES: usize = 32;
+const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+const MAX_ERROR_BYTES: usize = 1024 * 1024;
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+const PREVIEW: u8 = 0;
+const ERROR: u8 = 1;
+
+pub struct DecoderProcess {
+    child: Child,
+    stream: Option<TcpStream>,
+    // Kept open for the child's lifetime watchdog, including during native calls.
+    input: Option<ChildStdin>,
+    #[cfg(windows)]
+    _job: std::os::windows::io::OwnedHandle,
+}
+
+impl DecoderProcess {
+    pub fn spawn() -> Result<Self, String> {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .map_err(|e| format!("Unable to create the decoder connection: {e}"))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|e| format!("Unable to configure the decoder connection: {e}"))?;
+        let address = listener
+            .local_addr()
+            .map_err(|e| format!("Unable to locate the decoder connection: {e}"))?;
+        let token = authentication_token()?;
+        let executable = std::env::current_exe()
+            .map_err(|e| format!("Unable to locate the decoder executable: {e}"))?;
+        let mut command = Command::new(executable);
+        command
+            .arg("--preview-worker")
+            .arg(address.port().to_string())
+            .stdin(Stdio::piped())
+            // Nucleation writes to stdout. Neither log stream carries protocol
+            // data or has a pipe that could fill and deadlock native decoding.
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        #[cfg(windows)]
+        let job = decoder_job()?;
+        let mut child = command
+            .spawn()
+            .map_err(|e| format!("Unable to start the decoder process: {e}"))?;
+        let input = child.stdin.take();
+        let mut process = Self {
+            child,
+            stream: None,
+            input,
+            #[cfg(windows)]
+            _job: job,
+        };
+        #[cfg(windows)]
+        process.assign_job()?;
+        process
+            .input
+            .as_mut()
+            .ok_or("The decoder input pipe is unavailable.")?
+            .write_all(&token)
+            .map_err(|e| process.failure(e))?;
+
+        let deadline = Instant::now() + STARTUP_TIMEOUT;
+        loop {
+            if let Some(status) = process
+                .child
+                .try_wait()
+                .map_err(|e| format!("Unable to inspect the decoder process: {e}"))?
+            {
+                return Err(format!(
+                    "The decoder process stopped during startup ({status})."
+                ));
+            }
+            if Instant::now() >= deadline {
+                return Err("The decoder process did not connect within ten seconds.".into());
+            }
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let timeout = deadline.saturating_duration_since(Instant::now());
+                    if timeout.is_zero() {
+                        continue;
+                    }
+                    stream
+                        .set_nonblocking(false)
+                        .and_then(|()| stream.set_read_timeout(Some(timeout)))
+                        .map_err(|e| format!("Unable to configure decoder authentication: {e}"))?;
+                    let mut received = [0; TOKEN_BYTES];
+                    if stream.read_exact(&mut received).is_err() || received != token {
+                        continue;
+                    }
+                    stream
+                        .set_read_timeout(None)
+                        .and_then(|()| stream.set_nodelay(true))
+                        .map_err(|e| format!("Unable to configure the decoder connection: {e}"))?;
+                    process.stream = Some(stream);
+                    return Ok(process);
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => return Err(format!("Unable to connect to the decoder: {error}")),
+            }
+        }
+    }
+
+    // The outer error invalidates the process; an inner decoder error leaves
+    // the connection and resource-pack cache available for the next request.
+    pub fn load(
+        &mut self,
+        path: &Path,
+        pack_path: &Path,
+    ) -> Result<Result<Vec<u8>, String>, String> {
+        let request = serde_json::to_vec(&(path, pack_path))
+            .map_err(|e| format!("Unable to describe the decoder request: {e}"))?;
+        if request.len() > MAX_REQUEST_BYTES {
+            return Ok(Err("The schematic or resource path is too long.".into()));
+        }
+        let result = (|| -> io::Result<Result<Vec<u8>, String>> {
+            let stream = self.stream.as_mut().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotConnected, "The decoder is not connected")
+            })?;
+            write_frame(stream, &request)?;
+            let mut status = [0];
+            stream.read_exact(&mut status)?;
+            match status[0] {
+                PREVIEW => Ok(Ok(read_frame(stream, u32::MAX as usize)?)),
+                ERROR => {
+                    let bytes = read_frame(stream, MAX_ERROR_BYTES)?;
+                    let error = String::from_utf8(bytes).map_err(invalid_data)?;
+                    Ok(Err(error))
+                }
+                _ => Err(invalid_data("The decoder returned an invalid response")),
+            }
+        })();
+        result.map_err(|error| self.failure(error))
+    }
+
+    #[cfg(windows)]
+    fn assign_job(&self) -> Result<(), String> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+        let assigned = unsafe {
+            AssignProcessToJobObject(self._job.as_raw_handle(), self.child.as_raw_handle())
+        };
+        if assigned == 0 {
+            return Err(format!(
+                "Unable to isolate the decoder process: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        Ok(())
+    }
+
+    fn failure(&mut self, error: io::Error) -> String {
+        // EOF may reach us just before the OS records the exit code. Allow that
+        // short teardown to finish, but never wait forever for a broken peer.
+        let deadline = Instant::now() + Duration::from_millis(250);
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => {
+                    return format!("The decoder process stopped unexpectedly ({status}). The schematic could not be loaded.{}", process_limit_message());
+                }
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                _ => return format!("The decoder connection failed: {error}"),
+            }
+        }
+    }
+}
+
+impl Drop for DecoderProcess {
+    fn drop(&mut self) {
+        // Closing stdin also terminates a child that is still inside native
+        // code. kill/wait ensures ordinary replacement does not leave zombies.
+        self.input.take();
+        self.stream.take();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
+    let port: u16 = port
+        .to_str()
+        .and_then(|value| value.parse().ok())
+        .filter(|port| *port != 0)
+        .ok_or("Invalid decoder connection port.")?;
+    let mut token = [0; TOKEN_BYTES];
+    io::stdin()
+        .read_exact(&mut token)
+        .map_err(|e| format!("Unable to read decoder authentication: {e}"))?;
+    // A host can exit while a native call is active and cannot unwind. The
+    // inherited pipe closes on host exit; do not leave that decoder orphaned.
+    std::thread::Builder::new()
+        .name("preview-host-lifetime".into())
+        .spawn(|| {
+            let mut byte = [0];
+            let mut input = io::stdin().lock();
+            loop {
+                match input.read(&mut byte) {
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    _ => std::process::exit(0),
+                }
+            }
+        })
+        .map_err(|e| format!("Unable to monitor the preview host: {e}"))?;
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let mut stream = TcpStream::connect_timeout(&address, STARTUP_TIMEOUT)
+        .map_err(|e| format!("Unable to connect to the preview host: {e}"))?;
+    stream
+        .set_nodelay(true)
+        .and_then(|()| stream.write_all(&token))
+        .map_err(|e| format!("Unable to authenticate the decoder: {e}"))?;
+    let mut pack = None;
+    loop {
+        let request = read_frame(&mut stream, MAX_REQUEST_BYTES)
+            .map_err(|e| format!("Unable to read the decoder request: {e}"))?;
+        let (path, pack_path): (PathBuf, PathBuf) = serde_json::from_slice(&request)
+            .map_err(|e| format!("Invalid decoder request: {e}"))?;
+        let result = crate::preview::decode(&path, &pack_path, &mut pack);
+        let (status, bytes) = match &result {
+            Ok(bytes) if bytes.len() <= u32::MAX as usize => (PREVIEW, bytes.as_slice()),
+            Ok(_) => (
+                ERROR,
+                b"The preview is too large to transfer to the graphics device.".as_slice(),
+            ),
+            Err(error) if error.len() <= MAX_ERROR_BYTES => (ERROR, error.as_bytes()),
+            Err(_) => (
+                ERROR,
+                b"The decoder encountered an internal error with an oversized diagnostic."
+                    .as_slice(),
+            ),
+        };
+        stream
+            .write_all(&[status])
+            .and_then(|()| write_frame(&mut stream, bytes))
+            .map_err(|e| format!("Unable to send the decoder response: {e}"))?;
+    }
+}
+
+fn read_frame(stream: &mut TcpStream, maximum: usize) -> io::Result<Vec<u8>> {
+    let mut length = [0; 4];
+    stream.read_exact(&mut length)?;
+    let length = u32::from_le_bytes(length) as usize;
+    if length == 0 || length > maximum {
+        return Err(invalid_data("The decoder packet length is invalid"));
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| io::Error::other("There is not enough memory to receive this preview"))?;
+    bytes.resize(length, 0);
+    stream.read_exact(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn write_frame(stream: &mut TcpStream, bytes: &[u8]) -> io::Result<()> {
+    let length =
+        u32::try_from(bytes.len()).map_err(|_| invalid_data("The decoder packet is too large"))?;
+    stream.write_all(&length.to_le_bytes())?;
+    stream.write_all(bytes)
+}
+
+fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, error)
+}
+
+#[cfg(windows)]
+fn authentication_token() -> Result<[u8; TOKEN_BYTES], String> {
+    use windows_sys::Win32::Security::Cryptography::{
+        BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+    };
+    let mut token = [0; TOKEN_BYTES];
+    let status = unsafe {
+        BCryptGenRandom(
+            std::ptr::null_mut(),
+            token.as_mut_ptr(),
+            token.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    if status < 0 {
+        return Err(format!(
+            "Unable to authenticate the decoder process (OS status {status})."
+        ));
+    }
+    Ok(token)
+}
+
+#[cfg(not(windows))]
+fn authentication_token() -> Result<[u8; TOKEN_BYTES], String> {
+    let mut token = [0; TOKEN_BYTES];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut random| random.read_exact(&mut token))
+        .map_err(|e| format!("Unable to authenticate the decoder process: {e}"))?;
+    Ok(token)
+}
+
+#[cfg(windows)]
+fn decoder_job() -> Result<std::os::windows::io::OwnedHandle, String> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::JobObjects::{
+        CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+    };
+    // No inheritable handle: abrupt host termination closes the last job
+    // handle. Refuse to decode unless confinement was established.
+    let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if handle.is_null() {
+        return Err(format!(
+            "Unable to create the decoder job: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    let job = unsafe { OwnedHandle::from_raw_handle(handle) };
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    limits.BasicLimitInformation.LimitFlags =
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+    limits.ProcessMemoryLimit = 2 * 1024 * 1024 * 1024;
+    let configured = unsafe {
+        SetInformationJobObject(
+            job.as_raw_handle(),
+            JobObjectExtendedLimitInformation,
+            (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            std::mem::size_of_val(&limits) as u32,
+        )
+    };
+    if configured == 0 {
+        return Err(format!(
+            "Unable to limit decoder memory: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(job)
+}
+
+fn process_limit_message() -> &'static str {
+    if cfg!(windows) {
+        " Decoder memory is limited to 2 GiB to protect the app and the system."
+    } else {
+        ""
+    }
+}

@@ -2,6 +2,7 @@
 
 mod associations;
 mod preview;
+mod preview_process;
 mod protocol;
 mod resources;
 
@@ -234,6 +235,23 @@ fn run() -> Result<(), String> {
 fn main() {
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
+    // The private decoder mode never constructs Tauri, WebView2 or a dialog.
+    // Authentication is supplied through an inherited pipe, not command-line
+    // arguments or a frontend-accessible command.
+    if first
+        .as_deref()
+        .is_some_and(|argument| argument == "--preview-worker")
+    {
+        let result = match (args.next(), args.next()) {
+            (Some(port), None) => preview_process::run(&port),
+            _ => Err("Invalid decoder process arguments.".into()),
+        };
+        if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let registration = match (first.as_deref(), args.next()) {
         (Some(argument), None) if argument == "--register" => Some(associations::register()),
         (Some(argument), None) if argument == "--unregister" => Some(associations::unregister()),

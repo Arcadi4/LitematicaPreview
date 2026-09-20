@@ -6,12 +6,12 @@ publish = false
 
 [lib]
 name = "litematica_preview_native"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [profile.release]
 lto = "fat"
 codegen-units = 1
-# Recoverable mesher panics must not cross the C ABI.
+# The desktop host catches recoverable mesher panics.
 panic = "unwind"
 
 [dependencies]

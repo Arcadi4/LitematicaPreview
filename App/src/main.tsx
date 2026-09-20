@@ -17,10 +17,17 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { error: strin
   render() {
     if (this.state.error !== null) {
       return (
-        <main className="fatal-error" role="alert">
-          <h1>Litematica Preview could not display its interface.</h1>
-          <p>Your schematic files have not been changed.</p>
-          <pre>{this.state.error}</pre>
+        <main
+          className="mx-auto max-h-full max-w-2xl overflow-auto p-6 text-[CanvasText] bg-[Canvas] leading-relaxed"
+          role="alert"
+        >
+          <h1 className="text-2xl font-bold leading-snug mb-4">
+            Litematica Preview could not display its interface.
+          </h1>
+          <p className="mb-4">Your schematic files have not been changed.</p>
+          <pre className="my-4 p-4 border border-[GrayText] rounded-md whitespace-pre-wrap break-words">
+            {this.state.error}
+          </pre>
           <p>
             Close and reopen the application to try again. If this keeps happening, reinstall the
             complete application.

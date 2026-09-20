@@ -372,6 +372,7 @@ export default function App() {
 
   const dark = theme === "dark" || (theme === "system" && systemDark)
   useEffect(() => {
+    document.documentElement.classList.toggle("dark", dark)
     document.documentElement.style.colorScheme = dark ? "dark" : "light"
     try {
       localStorage.setItem("litematica-preview-theme", theme)
@@ -424,13 +425,16 @@ export default function App() {
       theme={dark ? webDarkTheme : webLightTheme}
       // Portals inherit theme tokens, not the full-window app-shell layout.
       applyStylesToPortals={false}
-      className={`app-shell ${dark ? "theme-dark" : "theme-light"}`}
+      className={`flex flex-col w-full h-full min-w-[320px] text-text bg-surface-secondary ${dark ? "dark theme-dark" : "theme-light"}`}
     >
-      <header className="app-header">
-        <div className="brand">
-          <img src={icon} width="30" height="30" alt="" />
+      <header className="flex-none flex items-center justify-between gap-4 min-h-14 sm:min-h-16 px-4 py-2.5 sm:px-6 sm:py-3 bg-surface border-b border-border">
+        <div className="flex items-center gap-2.5 sm:gap-3 text-sm sm:text-base font-semibold tracking-tight">
+          <img className="object-contain flex-none" src={icon} width="30" height="30" alt="" />
           <span>{appName}</span>
-          <Badge appearance="outline" className="desktop-badge">
+          <Badge
+            appearance="outline"
+            className="ml-1.5! font-normal! text-muted! hidden! sm:inline-flex!"
+          >
             Desktop
           </Badge>
         </div>
@@ -491,7 +495,10 @@ export default function App() {
         </Menu>
       </header>
 
-      <nav className="command-bar" aria-label="Preview commands">
+      <nav
+        className="flex-none flex items-center gap-1 sm:gap-1.5 min-h-12 sm:min-h-14 px-3 py-2 sm:px-5 sm:py-2.5 border-b border-border bg-surface"
+        aria-label="Preview commands"
+      >
         <Button
           appearance="primary"
           icon={<FolderOpen20Regular />}
@@ -499,12 +506,12 @@ export default function App() {
           onClick={() => void chooseFile()}
           title="Open schematic (Ctrl+O)"
         >
-          Open<span className="shortcut-hint">Ctrl+O</span>
+          Open<span className="ml-2.5 opacity-75 text-xs font-normal hidden sm:inline">Ctrl+O</span>
         </Button>
         <Tooltip content="Return home" relationship="label">
           <Button appearance="subtle" icon={<Home20Regular />} onClick={home} aria-label="Home" />
         </Tooltip>
-        <span className="command-separator" />
+        <span className="self-center h-5 w-px mx-1 sm:mx-1.5 bg-border shrink-0" />
         <Button
           appearance="subtle"
           icon={<ArrowExpand20Regular />}
@@ -512,7 +519,7 @@ export default function App() {
           onClick={() => rendererRef.current?.fit()}
           title="Fit schematic (F)"
         >
-          Fit<span className="shortcut-hint">F</span>
+          Fit<span className="ml-2.5 opacity-75 text-xs font-normal hidden sm:inline">F</span>
         </Button>
         <Tooltip content="Zoom out (−)" relationship="label">
           <Button
@@ -532,7 +539,7 @@ export default function App() {
             aria-label="Zoom in"
           />
         </Tooltip>
-        <span className="command-separator" />
+        <span className="self-center h-5 w-px mx-1 sm:mx-1.5 bg-border shrink-0" />
         <Tooltip content={grid ? "Hide ground grid" : "Show ground grid"} relationship="label">
           <ToggleButton
             appearance="subtle"
@@ -542,13 +549,16 @@ export default function App() {
             aria-label="Ground grid"
           />
         </Tooltip>
-        <span className="command-file" title={loaded?.path || loading?.path}>
+        <span
+          className="ml-auto pl-4 max-w-[40%] md:max-w-[30%] hidden sm:block text-muted text-xs whitespace-nowrap overflow-hidden text-ellipsis"
+          title={loaded?.path || loading?.path}
+        >
           {loaded ? fileName(loaded.path) : loading ? fileName(loading.path) : "Ready when you are"}
         </span>
       </nav>
 
       {notice && (
-        <MessageBar intent={notice.intent} className="app-notice">
+        <MessageBar intent={notice.intent} className="flex-none rounded-none! break-words">
           <MessageBarBody>
             <MessageBarTitle>
               {notice.intent === "error"
@@ -572,42 +582,51 @@ export default function App() {
         </MessageBar>
       )}
 
-      <main className="workspace" aria-label={stageActive ? "Schematic preview" : "Welcome"}>
-        <section className="welcome" hidden={stageActive}>
-          <div className="welcome-content">
-            <div className="welcome-heading">
-              <div className="hero-symbol">
+      <main
+        className="relative flex-auto min-h-0 overflow-hidden"
+        aria-label={stageActive ? "Schematic preview" : "Welcome"}
+      >
+        <section
+          className="absolute inset-0 overflow-auto [overscroll-behavior:contain]"
+          hidden={stageActive}
+        >
+          <div className="w-full max-w-5xl mx-auto px-5 py-6 sm:px-8 sm:py-8 md:px-12 md:py-14">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="flex items-center justify-center w-10 h-10 text-accent bg-accent-soft border border-border rounded-xl">
                 <Cube24Regular />
               </div>
-              <span className="eyebrow">A CLOSER LOOK AT YOUR BUILDS</span>
+              <span className="text-muted text-xs font-semibold tracking-wider uppercase">
+                A CLOSER LOOK AT YOUR BUILDS
+              </span>
             </div>
-            <h1>
+            <h1 className="mt-0 mb-4 text-3xl sm:text-4xl md:text-5xl font-semibold leading-tight tracking-tight">
               Your next build,
               <br />
               from every angle.
             </h1>
-            <p className="welcome-description">
+            <p className="mt-0 max-w-xl mb-7 text-muted text-sm sm:text-base leading-relaxed">
               Open Minecraft schematics and structures in a focused, interactive 3D preview. No game
               launch needed.
             </p>
-            <div className="open-panel">
-              <div className="open-panel-icon">
+            <div className="flex items-center gap-3 sm:gap-4 min-h-24 p-4 sm:p-5 border border-dashed border-border rounded-xl bg-surface flex-wrap sm:flex-nowrap">
+              <div className="flex justify-center items-center w-10 h-10 text-accent bg-accent-soft rounded-lg shrink-0">
                 <FolderOpen20Regular />
               </div>
-              <div className="open-panel-copy">
-                <strong>Drop a schematic here</strong>
-                <span>or choose a file from your computer</span>
+              <div className="flex flex-1 flex-col gap-1">
+                <strong className="text-sm font-semibold">Drop a schematic here</strong>
+                <span className="text-muted text-xs">or choose a file from your computer</span>
               </div>
               <Button
                 appearance="primary"
                 icon={<FolderOpen20Regular />}
                 disabled={!bootstrap || choosing}
                 onClick={() => void chooseFile()}
+                className="w-full sm:w-auto!"
               >
                 {choosing ? "Choosing file…" : "Open schematic"}
               </Button>
             </div>
-            <div className="format-list" aria-label="Supported formats">
+            <div className="flex items-center flex-wrap gap-2 mt-4" aria-label="Supported formats">
               {bootstrap ? (
                 bootstrap.extensions.map((extension) => (
                   <Badge key={extension} appearance="outline" shape="rounded">
@@ -615,40 +634,44 @@ export default function App() {
                   </Badge>
                 ))
               ) : (
-                <span className="muted" role="status">
+                <span className="font-normal text-muted" role="status">
                   Preparing the schematic viewer…
                 </span>
               )}
             </div>
             {bootstrap && bootstrap.demos.length > 0 && (
-              <section className="demo-section" aria-labelledby="demos-heading">
-                <div className="section-heading">
-                  <h2 id="demos-heading">Try a bundled example</h2>
-                  <span>Explore a format, no download required</span>
+              <section className="mt-8" aria-labelledby="demos-heading">
+                <div className="flex items-baseline justify-between flex-wrap gap-x-5 gap-y-1.5 mb-3">
+                  <h2 id="demos-heading" className="m-0 text-base font-semibold">
+                    Try a bundled example
+                  </h2>
+                  <span className="text-muted text-xs">Explore a format, no download required</span>
                 </div>
-                <div className="demo-grid">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
                   {bootstrap.demos.map((demo) => (
                     <Button
                       key={demo.path}
                       appearance="outline"
-                      className="demo-card"
+                      className="flex! justify-start! items-center! gap-2.5! w-full! min-w-0! min-h-16! p-3! border-border! rounded-lg! bg-surface! text-left! hover:bg-surface-muted! hover:border-accent!"
                       onClick={() => void loadPath(demo.path)}
                       aria-label={`Open ${demo.name}, ${demo.extension}`}
                     >
-                      <span className="demo-symbol">
+                      <span className="text-muted flex shrink-0">
                         <Document20Regular />
                       </span>
-                      <span className="demo-copy">
-                        <strong>{demo.name}</strong>
-                        <span>{demo.extension}</span>
+                      <span className="flex flex-1 min-w-0 flex-col gap-1">
+                        <strong className="text-xs font-semibold overflow-hidden text-ellipsis whitespace-nowrap">
+                          {demo.name}
+                        </strong>
+                        <span className="text-muted text-xs font-normal">{demo.extension}</span>
                       </span>
-                      <ArrowRight20Regular className="demo-arrow" />
+                      <ArrowRight20Regular className="text-muted shrink-0 w-4" />
                     </Button>
                   ))}
                 </div>
               </section>
             )}
-            <p className="privacy-note">
+            <p className="flex items-center gap-2.5 mt-7 mb-0 text-muted text-xs leading-normal [&>svg]:shrink-0">
               <ShieldCheckmark20Regular />
               <span>
                 Your schematics stay on this PC. Decoding and rendering work entirely offline.
@@ -658,14 +681,14 @@ export default function App() {
         </section>
 
         <section
-          className={`preview-stage${stageActive ? " is-active" : ""}`}
+          className={`absolute inset-0 bg-surface-secondary ${stageActive ? "visible pointer-events-auto" : "invisible pointer-events-none"}`}
           aria-label="Interactive 3D model"
           aria-hidden={!stageActive}
           aria-busy={Boolean(loading)}
         >
           <canvas
             ref={canvasRef}
-            className="preview-canvas"
+            className="block w-full h-full [touch-action:none] outline-none focus-visible:outline-2 focus-visible:outline-accent focus-visible:-outline-offset-2"
             tabIndex={loaded ? 0 : -1}
             aria-label={loaded ? `3D preview of ${fileName(loaded.path)}` : "3D preview"}
             aria-describedby="canvas-controls"
@@ -675,29 +698,42 @@ export default function App() {
             arrow keys pan. Plus and minus zoom. F or Home fits the model.
           </p>
           {loaded && (
-            <div className="canvas-hint" aria-hidden="true">
+            <div
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 sm:gap-2.5 px-3 py-1.5 border border-border rounded-md bg-surface text-muted text-xs whitespace-nowrap pointer-events-none max-w-[calc(100%-2rem)] sm:max-w-none"
+              aria-hidden="true"
+            >
               Drag to orbit<span>·</span>Right-drag to pan<span>·</span>Scroll to zoom
             </div>
           )}
           {loading && (
-            <div className="loading-overlay">
-              <div className="loading-card" role="status" aria-live="polite">
-                <div className="loading-symbol">
+            <div className="absolute inset-0 grid place-items-center bg-surface-secondary p-6 sm:p-8">
+              <div
+                className="max-w-md w-full p-6 sm:p-8 border border-border rounded-xl bg-surface text-center shadow-lg"
+                role="status"
+                aria-live="polite"
+              >
+                <div className="inline-flex justify-center items-center w-12 h-12 mb-4 rounded-xl bg-accent-soft text-accent">
                   <Cube24Regular />
                 </div>
-                <h2>
+                <h2 className="mt-0 mb-2 text-xl font-semibold leading-snug">
                   {loading.phase === "decode" ? "Preparing your schematic" : "Building the preview"}
                 </h2>
-                <p className="loading-filename" title={loading.path}>
+                <p
+                  className="mt-0 mb-3 text-sm leading-relaxed break-words font-semibold"
+                  title={loading.path}
+                >
                   {fileName(loading.path)}
                 </p>
-                <p className="muted">
+                <p className="mt-0 mb-3 text-sm leading-relaxed text-muted">
                   {loading.phase === "decode"
                     ? "Reading blocks and generating geometry locally."
                     : "Uploading geometry and textures to your graphics device."}
                 </p>
-                <Button appearance="secondary" onClick={home}>
-                  Cancel<span className="shortcut-hint">Esc</span>
+                <Button appearance="secondary" onClick={home} className="mt-1.5!">
+                  Cancel
+                  <span className="ml-2.5 opacity-75 text-xs font-normal hidden sm:inline">
+                    Esc
+                  </span>
                 </Button>
               </div>
             </div>
@@ -705,17 +741,25 @@ export default function App() {
         </section>
 
         {dragging && (
-          <div className="drop-overlay" role="status">
-            <div>
+          <div
+            className="absolute z-10 inset-3 sm:inset-4 grid place-items-center border-2 border-dashed border-accent rounded-xl bg-surface opacity-95 text-center pointer-events-none"
+            role="status"
+          >
+            <div className="[&>svg]:w-10 [&>svg]:h-10 [&>svg]:mb-4 [&>svg]:text-accent">
               <FolderOpen20Regular />
-              <h2>Drop to preview</h2>
-              <p>The first supported schematic will open.</p>
+              <h2 className="mt-0 mb-2 text-2xl font-semibold">Drop to preview</h2>
+              <p className="mt-0 px-4 text-muted text-sm">
+                The first supported schematic will open.
+              </p>
             </div>
           </div>
         )}
       </main>
 
-      <footer className="status-bar" aria-label="Preview information">
+      <footer
+        className="flex-none flex items-center flex-wrap gap-x-4 sm:gap-x-6 gap-y-1.5 min-h-9 px-4 sm:px-6 py-2 border-t border-border bg-surface text-muted text-xs leading-normal [&_strong]:text-text [&_strong]:font-semibold"
+        aria-label="Preview information"
+      >
         {loaded ? (
           <>
             <span>
@@ -723,7 +767,7 @@ export default function App() {
             </span>
             <span title="Geometry dimensions in blocks">{size} blocks</span>
             <span>{numbers.format(loaded.metadata.triangleCount)} triangles</span>
-            <span className="load-time">Loaded in {loaded.seconds.toFixed(2)} s</span>
+            <span className="ml-auto">Loaded in {loaded.seconds.toFixed(2)} s</span>
           </>
         ) : (
           <>
@@ -736,7 +780,7 @@ export default function App() {
                   ? "Choose a schematic in the file dialog"
                   : "Local files. A clearer view."}
             </span>
-            <span className="status-offline">Works offline</span>
+            <span className="ml-auto hidden sm:inline">Works offline</span>
           </>
         )}
       </footer>
@@ -755,10 +799,10 @@ export default function App() {
             <DialogContent>
               {dialog === "controls" ? (
                 <>
-                  <p className="dialog-intro">
+                  <p className="mt-0 mb-5 leading-relaxed">
                     Click or Tab into the preview to use its keyboard controls.
                   </p>
-                  <dl className="controls-list">
+                  <dl className="flex flex-col gap-0 my-0 mb-5 [&>div]:grid [&>div]:grid-cols-[80px_1fr] sm:[&>div]:grid-cols-[120px_1fr] [&>div]:gap-3 sm:[&>div]:gap-4 [&>div]:py-3 [&>div]:border-b [&>div]:border-[var(--colorNeutralStroke2,#dddddd)] [&_dt]:font-semibold [&_dd]:m-0 [&_dd]:leading-normal">
                     <div>
                       <dt>Orbit</dt>
                       <dd>Left-drag / Arrow keys</dd>
@@ -792,15 +836,21 @@ export default function App() {
                       </dd>
                     </div>
                   </dl>
-                  <p className="muted">
+                  <p className="text-muted leading-relaxed">
                     Use the grid button to show or hide the ground grid. Home on the command bar
                     returns to your bundled examples.
                   </p>
                 </>
               ) : (
-                <div className="about-content">
-                  <div className="about-brand">
-                    <img src={icon} width="48" height="48" alt="" />
+                <div className="leading-relaxed [&>p]:mb-3">
+                  <div className="flex items-center gap-3.5 my-3 mb-6 [&>div]:flex [&>div]:flex-col [&>div]:gap-1 [&_strong]:text-lg [&_strong]:font-semibold [&_span]:text-xs">
+                    <img
+                      className="object-contain flex-none"
+                      src={icon}
+                      width="48"
+                      height="48"
+                      alt=""
+                    />
                     <div>
                       <strong>{appName}</strong>
                       <span>Version {bootstrap?.version || "unavailable"}</span>
@@ -816,7 +866,7 @@ export default function App() {
                     with no warranty. Redistribution is permitted under the terms of the bundled
                     license.
                   </p>
-                  <p className="muted">
+                  <p className="text-muted">
                     The application license and third-party notices are included with your
                     installation.
                   </p>

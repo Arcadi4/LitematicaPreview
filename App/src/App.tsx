@@ -604,23 +604,6 @@ export default function App() {
           hidden={stageActive}
         >
           <div className="w-full max-w-5xl mx-auto px-5 py-6 sm:px-8 sm:py-8 md:px-12 md:py-14">
-            <div className="flex items-center gap-3 mb-5">
-              <div className="flex items-center justify-center w-10 h-10 text-accent bg-accent-soft border border-border rounded-xl">
-                <Cube24Regular />
-              </div>
-              <span className="text-muted text-xs font-semibold tracking-wider uppercase">
-                A CLOSER LOOK AT YOUR BUILDS
-              </span>
-            </div>
-            <h1 className="mt-0 mb-4 text-3xl sm:text-4xl md:text-5xl font-semibold leading-tight tracking-tight">
-              Your next build,
-              <br />
-              from every angle.
-            </h1>
-            <p className="mt-0 max-w-xl mb-7 text-muted text-sm sm:text-base leading-relaxed">
-              Open Minecraft schematics and structures in a focused, interactive 3D preview. No game
-              launch needed.
-            </p>
             <div className="flex items-center gap-3 sm:gap-4 min-h-24 p-4 sm:p-5 border border-dashed border-border rounded-xl bg-surface flex-wrap sm:flex-nowrap">
               <div className="flex justify-center items-center w-10 h-10 text-accent bg-accent-soft rounded-lg shrink-0">
                 <FolderOpen20Regular />

@@ -3,8 +3,11 @@ import { createRoot } from "react-dom/client"
 import App from "./App"
 import "./styles.css"
 
-class AppErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
-  state: { error: string | null } = { error: null }
+class AppErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: string | null; recovered: string | null }
+> {
+  state: { error: string | null; recovered: string | null } = { error: null, recovered: null }
 
   static getDerivedStateFromError(error: unknown) {
     return { error: error instanceof Error ? error.message : String(error) }
@@ -12,6 +15,9 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { error: strin
 
   componentDidCatch(error: Error, information: ErrorInfo) {
     console.error("The application interface failed.", error, information.componentStack)
+    if (this.state.recovered === null) {
+      this.setState({ error: null, recovered: error.message })
+    }
   }
 
   render() {
@@ -28,13 +34,13 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, { error: strin
           <pre className="my-4 p-4 border border-[GrayText] rounded-md whitespace-pre-wrap break-words">
             {this.state.error}
           </pre>
-          <p>
-            Close and reopen the application to try again. If this keeps happening, reinstall the
-            complete application.
-          </p>
+          <button onClick={() => this.setState({ recovered: this.state.error, error: null })}>
+            Return home
+          </button>
         </main>
       )
     }
+    if (this.state.recovered !== null) return <App initialError={this.state.recovered} />
     return this.props.children
   }
 }

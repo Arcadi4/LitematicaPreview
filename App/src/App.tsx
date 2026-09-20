@@ -80,7 +80,7 @@ function savedTheme(): ThemePreference {
   }
 }
 
-export default function App() {
+export default function App({ initialError }: { initialError?: string }) {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
   const [loading, setLoading] = useState<Loading | null>(null)
   const [loaded, setLoaded] = useState<Loaded | null>(null)
@@ -91,8 +91,11 @@ export default function App() {
   const [systemDark, setSystemDark] = useState(
     () => matchMedia("(prefers-color-scheme: dark)").matches,
   )
-  const [dialog, setDialog] = useState<"controls" | "about">("controls")
-  const [dialogOpen, setDialogOpen] = useState(false)
+  const [dialog, setDialog] = useState<"controls" | "about" | "error">(
+    initialError ? "error" : "controls",
+  )
+  const [dialogOpen, setDialogOpen] = useState(Boolean(initialError))
+  const [errorDetails, setErrorDetails] = useState(initialError || "")
   const [actionBusy, setActionBusy] = useState(false)
   const [choosing, setChoosing] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -101,7 +104,7 @@ export default function App() {
   const gridRef = useRef(true)
   const mounted = useRef(false)
   const generation = useRef(0)
-  const initialPathConsumed = useRef(false)
+  const initialPathConsumed = useRef(Boolean(initialError))
   const choosingRef = useRef(false)
   const actionBusyRef = useRef(false)
   const titleQueue = useRef<Promise<void>>(Promise.resolve())
@@ -174,6 +177,48 @@ export default function App() {
     [cancelNative, updateTitle],
   )
 
+  useEffect(() => {
+    if (notice?.intent !== "error") return
+    const id = ++generation.current
+    const renderer = rendererRef.current
+    rendererRef.current = null
+    setLoaded(null)
+    setLoading(null)
+    setDragging(false)
+    setNotice(null)
+    setErrorDetails(notice.message)
+    setDialog("error")
+    setDialogOpen(true)
+    // Recovery failures are included in the same dialog, never recursively reported.
+    const recoveryFailed = (error: unknown) => {
+      if (isCurrent(id)) setErrorDetails((text) => `${text}\n\nRecovery: ${errorMessage(error)}`)
+    }
+    try {
+      renderer?.dispose()
+    } catch (error) {
+      recoveryFailed(error)
+    }
+    void invoke("cancel_load", { requestId: id }).catch(recoveryFailed)
+    void getCurrentWindow().setTitle(appName).catch(recoveryFailed)
+  }, [notice, isCurrent])
+
+  useEffect(() => {
+    const onError = (event: ErrorEvent) => {
+      event.preventDefault()
+      setNotice({ intent: "error", message: errorMessage(event.error || event.message) })
+    }
+    const onRejection = (event: PromiseRejectionEvent) => {
+      event.preventDefault()
+      setNotice({ intent: "error", message: errorMessage(event.reason) })
+    }
+    window.addEventListener("error", onError)
+    window.addEventListener("unhandledrejection", onRejection)
+    return () => {
+      window.removeEventListener("error", onError)
+      window.removeEventListener("unhandledrejection", onRejection)
+    }
+  }, [])
+
   const loadPath = useCallback(
     async (path: string) => {
       if (!mounted.current) return
@@ -229,7 +274,7 @@ export default function App() {
         rendererRef.current?.clear()
         setLoading(null)
         if (errorMessage(error) !== "Cancelled")
-          setNotice({ intent: "error", message: errorMessage(error) })
+          setNotice({ intent: "error", message: `${path}\n\n${errorMessage(error)}` })
       }
     },
     [cancelNative, clearView, graphicsFailed, isCurrent, updateTitle],
@@ -790,10 +835,19 @@ export default function App() {
         <DialogSurface>
           <DialogBody>
             <DialogTitle>
-              {dialog === "controls" ? "Controls and shortcuts" : `About ${appName}`}
+              {dialog === "error"
+                ? "Unable to open preview"
+                : dialog === "controls"
+                  ? "Controls and shortcuts"
+                  : `About ${appName}`}
             </DialogTitle>
             <DialogContent>
-              {dialog === "controls" ? (
+              {dialog === "error" ? (
+                <>
+                  <p>The preview was closed. You are back on the home screen.</p>
+                  <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] max-h-[45vh] overflow-auto select-text text-xs">{errorDetails}</pre>
+                </>
+              ) : dialog === "controls" ? (
                 <>
                   <p className="mt-0 mb-5 leading-relaxed">
                     Click or Tab into the preview to use its keyboard controls.

@@ -46,7 +46,7 @@ import {
 import { invoke } from "@tauri-apps/api/core"
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import { getCurrentWindow } from "@tauri-apps/api/window"
-import icon from "../../Assets/app.ico?url"
+import icon from "../../Assets/app-ui.png"
 import { SchematicRenderer, type PreviewMetadata } from "./renderer"
 
 type Bootstrap = {

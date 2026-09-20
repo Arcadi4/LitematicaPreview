@@ -91,7 +91,8 @@ export default function App() {
   const [systemDark, setSystemDark] = useState(
     () => matchMedia("(prefers-color-scheme: dark)").matches,
   )
-  const [dialog, setDialog] = useState<"controls" | "about" | null>(null)
+  const [dialog, setDialog] = useState<"controls" | "about">("controls")
+  const [dialogOpen, setDialogOpen] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
   const [choosing, setChoosing] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -386,10 +387,10 @@ export default function App() {
       if (event.defaultPrevented || event.altKey) return
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
         event.preventDefault()
-        if (!dialog) void chooseFile()
+        if (!dialogOpen) void chooseFile()
         return
       }
-      if (dialog || event.ctrlKey || event.metaKey) return
+      if (dialogOpen || event.ctrlKey || event.metaKey) return
       const target = event.target
       if (
         target instanceof HTMLElement &&
@@ -407,7 +408,7 @@ export default function App() {
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [chooseFile, dialog, home, loaded, loading])
+  }, [chooseFile, dialogOpen, home, loaded, loading])
 
   const toggleGrid = () => {
     const visible = !gridRef.current
@@ -455,10 +456,22 @@ export default function App() {
           </MenuTrigger>
           <MenuPopover>
             <MenuList>
-              <MenuItem icon={<Keyboard20Regular />} onClick={() => setDialog("controls")}>
+              <MenuItem
+                icon={<Keyboard20Regular />}
+                onClick={() => {
+                  setDialog("controls")
+                  setDialogOpen(true)
+                }}
+              >
                 Controls and shortcuts
               </MenuItem>
-              <MenuItem icon={<Info20Regular />} onClick={() => setDialog("about")}>
+              <MenuItem
+                icon={<Info20Regular />}
+                onClick={() => {
+                  setDialog("about")
+                  setDialogOpen(true)
+                }}
+              >
                 About and licenses
               </MenuItem>
               <MenuDivider />
@@ -786,9 +799,9 @@ export default function App() {
       </footer>
 
       <Dialog
-        open={dialog !== null}
+        open={dialogOpen}
         onOpenChange={(_, data) => {
-          if (!data.open) setDialog(null)
+          setDialogOpen(data.open)
         }}
       >
         <DialogSurface>
@@ -878,14 +891,14 @@ export default function App() {
                 <Button
                   disabled={actionBusy}
                   onClick={() => {
-                    setDialog(null)
+                    setDialogOpen(false)
                     void nativeAction("show_licenses")
                   }}
                 >
                   Open licenses folder
                 </Button>
               )}
-              <Button appearance="primary" onClick={() => setDialog(null)}>
+              <Button appearance="primary" onClick={() => setDialogOpen(false)}>
                 Close
               </Button>
             </DialogActions>

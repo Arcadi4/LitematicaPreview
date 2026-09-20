@@ -20,7 +20,8 @@ try {
         $env:RUSTFLAGS = if ($originalFlags) { "$originalFlags -C target-feature=+crt-static" } else { '-C target-feature=+crt-static' }
     }
 
-    & npm.cmd --prefix App ci
+    $pnpm = if (Get-Command pnpm.cmd -ErrorAction SilentlyContinue) { 'pnpm.cmd' } else { 'pnpm' }
+    & $pnpm --prefix App install --frozen-lockfile
     if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed.' }
 
     $tauriArgs = @('build', '--target', $target, '--ci')
@@ -33,7 +34,7 @@ try {
     # Tauri's beforeBuildCommand builds the frontend. Arguments after the second
     # separator go to Cargo, so --locked applies to the Rust dependency graph.
     $tauriArgs += @('--', '--locked')
-    & npm.cmd --prefix App run tauri -- @tauriArgs
+    & $pnpm --prefix App exec tauri @tauriArgs
     if ($LASTEXITCODE -ne 0) { throw 'Tauri release build failed.' }
 
     $executable = Join-Path $releaseRoot 'LitematicaPreview.exe'

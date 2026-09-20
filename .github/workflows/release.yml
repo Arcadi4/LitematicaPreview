@@ -67,13 +67,16 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - uses: pnpm/action-setup@v4
+        if: steps.check_tag.outputs.exists != 'true'
+        with:
+          version: 12
       - uses: actions/setup-node@v7
         if: steps.check_tag.outputs.exists != 'true'
         with:
           node-version: "24"
-          cache: npm
-          cache-dependency-path: App/package-lock.json
-
+          cache: pnpm
+          cache-dependency-path: App/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
         if: steps.check_tag.outputs.exists != 'true'
         with:
@@ -107,8 +110,7 @@ jobs:
 
       - name: Check frontend formatting
         if: steps.check_tag.outputs.exists != 'true'
-        working-directory: App
-        run: npm exec -- prettier --check src index.html package.json tsconfig.json vite.config.ts
+        run: pnpm --prefix App run format -- --check
 
       - name: Test the Tauri host
         if: steps.check_tag.outputs.exists != 'true'

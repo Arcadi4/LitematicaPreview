@@ -509,7 +509,7 @@ export default function App() {
       </header>
 
       <nav
-        className="flex-none flex items-center gap-1 sm:gap-1.5 min-h-12 sm:min-h-14 px-3 py-2 sm:px-5 sm:py-2.5 border-b border-border bg-surface"
+        className="flex-none flex items-center gap-1.5 sm:gap-2 min-h-14 px-3 py-2 sm:px-5 sm:py-2.5 border-b border-border bg-surface [&>button]:h-9! [&>button]:shrink-0 [&>button:has(span.hidden)]:px-3! [&>button:has(span.hidden)]:gap-2! [&>button:not(:has(span.hidden))]:w-9! [&>button:not(:has(span.hidden))]:min-w-9!"
         aria-label="Preview commands"
       >
         <Button
@@ -519,12 +519,12 @@ export default function App() {
           onClick={() => void chooseFile()}
           title="Open schematic (Ctrl+O)"
         >
-          Open<span className="ml-2.5 opacity-75 text-xs font-normal hidden sm:inline">Ctrl+O</span>
+          Open<span className="ml-1 opacity-75 text-xs font-normal hidden sm:inline">Ctrl+O</span>
         </Button>
         <Tooltip content="Return home" relationship="label">
           <Button appearance="subtle" icon={<Home20Regular />} onClick={home} aria-label="Home" />
         </Tooltip>
-        <span className="self-center h-5 w-px mx-1 sm:mx-1.5 bg-border shrink-0" />
+        <span className="self-center h-5 w-px mx-0.5 sm:mx-1 bg-border shrink-0" />
         <Button
           appearance="subtle"
           icon={<ArrowExpand20Regular />}
@@ -532,7 +532,7 @@ export default function App() {
           onClick={() => rendererRef.current?.fit()}
           title="Fit schematic (F)"
         >
-          Fit<span className="ml-2.5 opacity-75 text-xs font-normal hidden sm:inline">F</span>
+          Fit<span className="ml-1 opacity-75 text-xs font-normal hidden sm:inline">F</span>
         </Button>
         <Tooltip content="Zoom out (−)" relationship="label">
           <Button
@@ -552,7 +552,7 @@ export default function App() {
             aria-label="Zoom in"
           />
         </Tooltip>
-        <span className="self-center h-5 w-px mx-1 sm:mx-1.5 bg-border shrink-0" />
+        <span className="self-center h-5 w-px mx-0.5 sm:mx-1 bg-border shrink-0" />
         <Tooltip content={grid ? "Hide ground grid" : "Show ground grid"} relationship="label">
           <ToggleButton
             appearance="subtle"

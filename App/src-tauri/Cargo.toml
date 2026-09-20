@@ -25,7 +25,7 @@ litematica-preview-native = { path = "../../Native" }
 nucleation = { version = "=0.10.14", default-features = false, features = ["meshing"] }
 
 [target.'cfg(windows)'.dependencies]
-winreg = "0.55"
+winreg = "0.56"
 windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]

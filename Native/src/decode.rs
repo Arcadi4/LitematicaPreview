@@ -6,7 +6,7 @@ use regex::Regex;
 #[path = "structure_nbt.rs"]
 mod structure_nbt;
 
-// Compressed schematic bytes accepted from the native bridge.
+// Compressed schematic bytes accepted from the desktop host.
 const MAX_INPUT_BYTES: usize = 1_024 * 1_024 * 1_024;
 // Inflated NBT bytes Nucleation may allocate while decoding.
 const MAX_DECOMPRESSED_BYTES: usize = 1_024 * 1_024 * 1_024;

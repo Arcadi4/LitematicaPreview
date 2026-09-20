@@ -2,8 +2,8 @@
 
 `Demos/` contains the seven original LitematicaQL sample builds, copied from
 commit `4bbeeae4ddfd5d4afa0280ba42f6a01bc8df7ab6`. They were authored by the
-source app's demo generator, not downloaded community builds. This Windows
-port tracks the generated files directly; a Node toolchain is not required.
+source app's demo generator, not downloaded community builds. The Tauri app
+tracks these generated fixtures directly; they do not need to be regenerated.
 The original generator remains in the LitematicaQL source repository at
 `Renderer/scripts/generate-demos.ts`.
 

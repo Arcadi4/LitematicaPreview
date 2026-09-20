@@ -4,8 +4,22 @@ The source repository's LICENSE is GNU AGPL version 3 and is preserved.
 The source NOTICE described an older MIT license; this port follows LICENSE.
 
 Nucleation and schematic-mesher power file decoding and meshing.
-OpenTK and GLFW provide OpenGL bindings and the Windows rendering control.
-See ThirdParty/ for bundled dependency license texts.
+Tauri 2 provides the Rust desktop host and the Windows WebView2 integration.
+React and Fluent UI React v9 provide the desktop interface and Fluent System Icons.
+The preview renderer uses WebGL 2 and gl-matrix for camera and matrix operations.
+The shipped app does not use .NET, OpenTK, GLFW, or a Node.js runtime.
+
+See ThirdParty/ for bundled dependency license texts and dependency inventories.
+The historical OpenTK and GLFW license files are retained as provenance; those
+components are not part of the current executable. WebView2 is a separately
+installed Microsoft runtime and remains subject to Microsoft's license terms.
+
+Primary upstream license sources:
+  Tauri: https://github.com/tauri-apps/tauri/blob/dev/LICENSE-MIT
+  React: https://github.com/facebook/react/blob/main/LICENSE
+  Fluent UI: https://github.com/microsoft/fluentui/blob/master/LICENSE
+  Fluent System Icons: https://github.com/microsoft/fluentui-system-icons/blob/main/LICENSE
+  gl-matrix: https://github.com/toji/gl-matrix/blob/master/LICENSE.md
 
 Third-party Minecraft resource pack
 ------------------------------------

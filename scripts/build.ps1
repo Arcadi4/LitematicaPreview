@@ -24,13 +24,8 @@ try {
     & $pnpm --prefix App install --frozen-lockfile
     if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed.' }
 
-    $tauriArgs = @('build', '--target', $target, '--ci')
-    if ($Installer) {
-        if (Test-Path -LiteralPath $installerRoot) { Remove-Item -LiteralPath $installerRoot -Recurse -Force }
-        $tauriArgs += @('--bundles', 'nsis')
-    } else {
-        $tauriArgs += '--no-bundle'
-    }
+    if (Test-Path -LiteralPath $installerRoot) { Remove-Item -LiteralPath $installerRoot -Recurse -Force }
+    $tauriArgs = @('build', '--target', $target, '--ci', '--bundles', 'nsis')
     # Tauri's beforeBuildCommand builds the frontend. Arguments after the second
     # separator go to Cargo, so --locked applies to the Rust dependency graph.
     $tauriArgs += @('--', '--locked')
@@ -58,15 +53,21 @@ try {
         }
     }
 
-    if ($Installer) {
-        $setups = @(Get-ChildItem -LiteralPath $installerRoot -Filter '*-setup.exe' -File)
-        if ($setups.Count -eq 0) { throw 'The NSIS setup executable is missing.' }
-        foreach ($setup in $setups) {
-            Copy-Item -LiteralPath $setup.FullName -Destination (Join-Path $root 'artifacts') -Force
-        }
+    $packageName = "LitematicaPreview-$($config.version)-win-x64"
+    $setupPath = Join-Path $root "artifacts/$packageName-setup.exe"
+    $portableZip = Join-Path $root "artifacts/$packageName-portable.zip"
+    $setups = @(Get-ChildItem -LiteralPath $installerRoot -Filter '*-setup.exe' -File)
+    if ($setups.Count -ne 1) { throw 'Expected one fresh NSIS setup executable.' }
+    Copy-Item -LiteralPath $setups[0].FullName -Destination $setupPath -Force
+    foreach ($file in @('LitematicaPreview.exe', 'Assets/pack.zip', 'Licenses/LICENSE', 'Licenses/NOTICE')) {
+        $required = Join-Path $portableRoot $file
+        if (!(Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing portable file: $required" }
     }
-    Write-Host "Portable app: $portableRoot"
-    if ($Installer) { Write-Host "NSIS installer: $(Join-Path $root 'artifacts/*-setup.exe')" }
+    if (Test-Path -LiteralPath $portableZip) { Remove-Item -LiteralPath $portableZip -Force }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($portableRoot, $portableZip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+    Write-Host "Setup: $setupPath"
+    Write-Host "Portable ZIP: $portableZip"
 } finally {
     $env:RUSTFLAGS = $originalFlags
     $env:CARGO_TARGET_DIR = $originalTargetDir

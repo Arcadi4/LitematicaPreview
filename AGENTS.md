@@ -1,19 +1,85 @@
 # Litematica Preview
 
-Windows x64 desktop app. `App/` is Tauri 2 with a Rust host and Fluent UI React;
-`Native/` is the Rust Nucleation decoder/mesher library. Seven formats, listed once
-in the Rust host, are used by dialogs, drag/drop, and registration.
+Windows x64 desktop app for offline Minecraft schematic and structure viewing.
+- `App/`: Tauri 2 desktop application with a Rust host (`App/src-tauri/`) and Fluent UI React v9 frontend (`App/src/`). Uses an on-demand WebGL 2 renderer with `gl-matrix`.
+- `Native/`: Rust library (`litematica_preview_native`) wrapping Nucleation 0.10.14 for decoding and meshing.
+- `Assets/`: Tracked inputs including default resource pack (`Assets/pack.zip`) and application icons.
+- `Fixtures/`: Seven demo schematics in `Demos/` and minimal format fixtures in `Formats/`.
+- `scripts/`: PowerShell build scripts (`build.ps1`) and NSIS installer configuration (`installer-hooks.nsh`).
 
-## Build
+Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, `.nusn` (defined once in Rust host `EXTENSIONS` in `App/src-tauri/src/main.rs`).
 
-- Windows: `./scripts/build.ps1 -Installer` (Node.js, Rust MSVC, C++ Build Tools,
-  Windows SDK; WebView2 Evergreen is installed by setup when missing).
-- Frontend: `npm --prefix App ci` then `npm --prefix App run build`.
-- Rust compile only (after frontend build): `cargo check --manifest-path App/src-tauri/Cargo.toml --all-targets --locked`.
-- Decoder checks: `cargo test --manifest-path Native/Cargo.toml --release --locked`.
-- Do not report Windows runtime, installer, or benchmark results from a Mac.
+## Setup and Prerequisites
 
-## Ownership and constraints
+- Package manager: `pnpm` (v12, see `devEngines` in `App/package.json`).
+- Node.js: Node.js 24 LTS.
+- Rust: Current stable Rust toolchain with `x86_64-pc-windows-msvc` target for Windows builds.
+- Windows desktop builds: Visual Studio C++ Build Tools (Desktop development with C++, x64 MSVC, Windows SDK) and WebView2 Evergreen Runtime.
+- Install frontend dependencies:
+  ```bash
+  pnpm --prefix App install --frozen-lockfile
+  ```
+
+## Development Workflow
+
+- Run the desktop app with hot-reloading (Windows):
+  ```bash
+  pnpm --prefix App exec tauri dev
+  ```
+- Run frontend development server (Vite+ on port 1420):
+  ```bash
+  pnpm --prefix App run dev
+  ```
+- Build frontend assets (`tsc --noEmit && vp build`):
+  ```bash
+  pnpm --prefix App run build
+  ```
+- Preview built frontend:
+  ```bash
+  pnpm --prefix App run preview
+  ```
+
+## Testing and Quality Checks
+
+- Check frontend formatting:
+  ```bash
+  pnpm --prefix App run format -- --check
+  ```
+- Format frontend code (oxfmt, semi: false):
+  ```bash
+  pnpm --prefix App run format
+  ```
+- Check Rust formatting:
+  ```bash
+  cargo fmt --manifest-path Native/Cargo.toml -- --check
+  cargo fmt --manifest-path App/src-tauri/Cargo.toml -- --check
+  ```
+- Native decoder and mesher tests:
+  ```bash
+  cargo test --manifest-path Native/Cargo.toml --release --locked
+  ```
+- Rust Tauri host compile check:
+  ```bash
+  cargo check --manifest-path App/src-tauri/Cargo.toml --all-targets --locked
+  ```
+- Rust Tauri host unit tests:
+  ```bash
+  cargo test --manifest-path App/src-tauri/Cargo.toml --release --locked
+  ```
+
+## Build and Packaging
+
+- Build portable Windows app (`artifacts/win-x64/`):
+  ```powershell
+  ./scripts/build.ps1
+  ```
+- Build portable app and NSIS setup installer (`artifacts/*-setup.exe`):
+  ```powershell
+  ./scripts/build.ps1 -Installer
+  ```
+- Do not report Windows runtime, installer, or benchmark results from a Mac or non-Windows environment.
+
+## Ownership and Constraints
 
 - Rust owns decoded previews until binary IPC serialization finishes. The WebView
   uploads typed-array views to WebGL and releases superseded CPU/GPU resources.

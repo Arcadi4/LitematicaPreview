@@ -1,0 +1,58 @@
+version: 2
+updates:
+  # Nucleation decoder/mesher library.
+  - package-ecosystem: "cargo"
+    directory: "/Native"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      backend:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "nucleation"
+      - dependency-name: "schematic-mesher"
+
+  # Tauri host and its Windows dependencies.
+  - package-ecosystem: "cargo"
+    directory: "/App/src-tauri"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      tauri:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "nucleation"
+
+  # Fluent UI React frontend.
+  - package-ecosystem: "npm"
+    directory: "/App"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      frontend:
+        patterns:
+          - "*"
+
+  # Actions used by the Windows and release workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      actions:
+        patterns:
+          - "*"

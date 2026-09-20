@@ -1,0 +1,208 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: windows-latest
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release tag
+        id: check_tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if [[ -z "$tag" ]]; then
+            echo "::error::GITHUB_REF_NAME is empty"
+            exit 1
+          fi
+
+          # Ensure tag follows semantic versioning with 'v' prefix
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag '$tag' is malformed. Expected format: vMAJOR.MINOR.PATCH[-PRERELEASE] (e.g. v0.1.0 or v0.1.0-rc.1)"
+            exit 1
+          fi
+
+          # Read app version from tauri.conf.json
+          app_version="$(node -p 'require("./App/src-tauri/tauri.conf.json").version')"
+          tag_version="${tag#v}"
+          tag_base="${tag_version%%-*}"
+
+          if [[ "$tag_version" != "$app_version" && "$tag_base" != "$app_version" ]]; then
+            echo "::error::Version mismatch: git tag is '$tag' but App/src-tauri/tauri.conf.json defines '$app_version'"
+            exit 1
+          fi
+
+          # Check if release already exists on GitHub
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release '$tag' already exists on GitHub. Skipping build and release publication."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Record whether tag is a prerelease
+          if [[ "$tag" =~ - ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.check_tag.outputs.exists != 'true'
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: App/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.check_tag.outputs.exists != 'true'
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.check_tag.outputs.exists != 'true'
+        with:
+          workspaces: |
+            Native -> target
+            App/src-tauri -> target
+
+      - name: Check Rust formatting
+        if: steps.check_tag.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          cargo fmt --manifest-path Native/Cargo.toml -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo fmt --manifest-path App/src-tauri/Cargo.toml -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test schematic decoding and meshing
+        if: steps.check_tag.outputs.exists != 'true'
+        run: cargo test --manifest-path Native/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
+
+      - name: Build the app and installer
+        if: steps.check_tag.outputs.exists != 'true'
+        shell: pwsh
+        run: ./scripts/build.ps1 -Installer
+
+      - name: Check frontend formatting
+        if: steps.check_tag.outputs.exists != 'true'
+        working-directory: App
+        run: npm exec -- prettier --check src index.html package.json tsconfig.json vite.config.ts
+
+      - name: Test the Tauri host
+        if: steps.check_tag.outputs.exists != 'true'
+        run: cargo test --manifest-path App/src-tauri/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
+
+      - name: Package portable app and generate checksums
+        if: steps.check_tag.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+
+          $tag = $env:GITHUB_REF_NAME
+          $artifactsDir = Join-Path (Get-Location) 'artifacts'
+          $portableDir = Join-Path $artifactsDir 'win-x64'
+
+          if (-not (Test-Path -LiteralPath $portableDir -PathType Container)) {
+              throw "Portable directory not found at $portableDir"
+          }
+
+          $portableZip = Join-Path $artifactsDir "LitematicaPreview-$tag-win-x64.zip"
+          $portableContents = Join-Path $portableDir '*'
+          Write-Host "Creating portable archive $portableZip..."
+          Compress-Archive -Path $portableContents -DestinationPath $portableZip -Force
+
+          $setups = @(Get-ChildItem -LiteralPath $artifactsDir -Filter '*-setup.exe' -File)
+          if ($setups.Count -eq 0) {
+              throw "NSIS installer not found in $artifactsDir"
+          }
+
+          $releaseAssets = @($setups[0].FullName, $portableZip)
+          Write-Host "Generating SHA256SUMS.txt for release assets..."
+          $checksumLines = foreach ($filePath in $releaseAssets) {
+              $hash = (Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant()
+              $fileName = Split-Path $filePath -Leaf
+              "$hash  $fileName"
+          }
+          $checksumPath = Join-Path $artifactsDir 'SHA256SUMS.txt'
+          $checksumLines | Set-Content -LiteralPath $checksumPath -Encoding utf8
+          Get-Content -LiteralPath $checksumPath | Write-Host
+
+      - uses: actions/upload-artifact@v4
+        if: steps.check_tag.outputs.exists != 'true'
+        with:
+          name: LitematicaPreview-${{ github.ref_name }}-win-x64
+          path: |
+            artifacts/*-setup.exe
+            artifacts/*.zip
+            artifacts/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: steps.check_tag.outputs.exists != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IS_PRERELEASE: ${{ steps.check_tag.outputs.prerelease }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+
+          setup_files=(artifacts/*-setup.exe)
+          setup_file="${setup_files[0]}"
+          zip_file="artifacts/LitematicaPreview-${tag}-win-x64.zip"
+          checksum_file="artifacts/SHA256SUMS.txt"
+
+          if [[ ! -f "$setup_file" ]]; then
+            echo "::error::Installer file not found"
+            exit 1
+          fi
+          if [[ ! -f "$zip_file" ]]; then
+            echo "::error::Portable zip file not found: $zip_file"
+            exit 1
+          fi
+          if [[ ! -f "$checksum_file" ]]; then
+            echo "::error::Checksum file not found: $checksum_file"
+            exit 1
+          fi
+
+          extra_flags=()
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            extra_flags+=(--prerelease)
+          fi
+
+          tag_notes="$(git tag -l --format='%(contents)' "$tag" 2>/dev/null || true)"
+          if [[ -n "$tag_notes" ]]; then
+            extra_flags+=(--notes "$tag_notes")
+          fi
+
+          echo "Publishing release for $tag..."
+          gh release create "$tag" \
+            "$setup_file" \
+            "$zip_file" \
+            "$checksum_file" \
+            --title "Litematica Preview $tag" \
+            --generate-notes \
+            --verify-tag \
+            "${extra_flags[@]}"

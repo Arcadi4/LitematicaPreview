@@ -444,6 +444,8 @@ export default function App() {
   return (
     <FluentProvider
       theme={dark ? webDarkTheme : webLightTheme}
+      // Portals inherit theme tokens, not the full-window app-shell layout.
+      applyStylesToPortals={false}
       className={`app-shell ${dark ? "theme-dark" : "theme-light"}`}
     >
       <header className="app-header">

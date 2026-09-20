@@ -1,8 +1,17 @@
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite-plus"
+import react from "@vitejs/plugin-react"
+import { lazyPlugins } from "vite-plus"
 
 export default defineConfig({
-  plugins: [react()],
+  fmt: {
+    semi: false,
+  },
+  lint: {
+    jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
+    rules: { "vite-plus/prefer-vite-plus-imports": "error" },
+    options: { typeAware: true, typeCheck: true },
+  },
+  plugins: lazyPlugins(() => [react()]),
   clearScreen: false,
   server: {
     port: 1420,
@@ -11,4 +20,4 @@ export default defineConfig({
     watch: { ignored: ["**/src-tauri/**"] },
   },
   build: { target: "es2022", reportCompressedSize: false },
-});
+})

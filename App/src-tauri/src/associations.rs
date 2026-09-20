@@ -1,6 +1,6 @@
 #[cfg(windows)]
 mod platform {
-    use std::{io, ptr};
+    use std::{borrow::Cow, io, ptr};
 
     use windows_sys::Win32::UI::{
         Shell::{SHChangeNotify, ShellExecuteW, SHCNE_ASSOCCHANGED, SHCNF_IDLIST},
@@ -144,7 +144,7 @@ mod platform {
                 .set_raw_value(
                     PROG_ID,
                     &RegValue {
-                        bytes: Vec::new(),
+                        bytes: Cow::Borrowed(&[]),
                         vtype: REG_NONE,
                     },
                 )

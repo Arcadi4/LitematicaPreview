@@ -105,7 +105,7 @@ The application can register as a Windows handler for supported schematic format
 
 ### Prerequisites
 
-- [Node.js 24 LTS](https://nodejs.org/) and npm
+- [Node.js 24 LTS](https://nodejs.org/) and pnpm 12.5.1
 - Current stable [Rust](https://www.rust-lang.org/) toolchain with the `x86_64-pc-windows-msvc` target installed
 - Visual Studio 2022 Build Tools with **Desktop development with C++**, x64 MSVC tools, and Windows SDK
 - Microsoft Edge WebView2 Evergreen Runtime
@@ -130,15 +130,15 @@ rustup target add x86_64-pc-windows-msvc
 Run the full desktop app with hot-reloading:
 
 ```powershell
-npm --prefix App ci
-npm --prefix App run tauri -- dev
+pnpm --dir App install --frozen-lockfile
+pnpm --dir App run tauri dev
 ```
 
 Run frontend-only development:
 
 ```powershell
-npm --prefix App run dev
-npm --prefix App run build
+pnpm --dir App run dev
+pnpm --dir App run build
 ```
 
 Run test suites and code validation:
@@ -148,6 +148,7 @@ Run test suites and code validation:
 cargo test --manifest-path Native/Cargo.toml --release --locked
 
 # Host compile and unit tests
+pnpm --dir App run build
 cargo check --manifest-path App/src-tauri/Cargo.toml --all-targets --locked
 cargo test --manifest-path App/src-tauri/Cargo.toml --release --locked
 

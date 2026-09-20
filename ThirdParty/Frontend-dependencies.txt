@@ -1,4 +1,4 @@
-Runtime npm dependencies resolved by App/package-lock.json. Some exports are removed by production tree-shaking. License texts below are copied from installed packages or the upstream sources identified below.
+Runtime npm dependencies resolved by App/pnpm-lock.yaml. Some exports are removed by production tree-shaking. License texts below are copied from installed packages or the upstream sources identified below.
 
 @babel/runtime 7.29.7 (MIT)
 https://github.com/babel/babel.git

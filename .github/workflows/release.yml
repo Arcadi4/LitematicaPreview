@@ -42,13 +42,8 @@ jobs:
             exit 1
           fi
 
-          # Read app version from tauri.conf.json
-          app_version="$(node -p 'require("./App/src-tauri/tauri.conf.json").version')"
-          tag_version="${tag#v}"
-          tag_base="${tag_version%%-*}"
-
-          if [[ "$tag_version" != "$app_version" && "$tag_base" != "$app_version" ]]; then
-            echo "::error::Version mismatch: git tag is '$tag' but App/src-tauri/tauri.conf.json defines '$app_version'"
+          # Verify that all version numbers match across project files and the release tag
+          if ! node scripts/bump-version.ts --check "$tag"; then
             exit 1
           fi
 

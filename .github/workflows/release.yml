@@ -190,11 +190,6 @@ jobs:
             extra_flags+=(--prerelease)
           fi
 
-          tag_notes="$(git tag -l --format='%(contents)' "$tag" 2>/dev/null || true)"
-          if [[ -n "$tag_notes" ]]; then
-            extra_flags+=(--notes "$tag_notes")
-          fi
-
           echo "Publishing release for $tag..."
           gh release create "$tag" \
             "$setup_file" \

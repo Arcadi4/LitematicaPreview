@@ -3,7 +3,7 @@
   <h1>Litematica Preview</h1>
   <p><strong>Fast, offline Minecraft schematic viewer for Windows</strong></p>
 
-  [![Windows Build](https://img.shields.io/github/actions/workflow/status/Arcadi4/LitematicaPreview/windows.yml?style=flat-square&label=Windows)](https://github.com/Arcadi4/LitematicaPreview/actions)
+  [![CI](https://img.shields.io/github/actions/workflow/status/Arcadi4/LitematicaPreview/ci.yml?style=flat-square&label=CI)](https://github.com/Arcadi4/LitematicaPreview/actions)
   [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-0078d4?style=flat-square&logo=windows)](https://github.com/Arcadi4/LitematicaPreview)
   [![Tauri 2](https://img.shields.io/badge/Tauri-v2-24c8db?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
   [![Fluent UI](https://img.shields.io/badge/Fluent%20UI-React%20v9-0078d4?style=flat-square&logo=react)](https://react.fluentui.dev)

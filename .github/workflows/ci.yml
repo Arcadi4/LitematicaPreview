@@ -1,4 +1,4 @@
-name: Windows
+name: CI
 on:
   push:
     branches:
@@ -34,21 +34,21 @@ jobs:
           workspaces: |
             Native -> target
             App/src-tauri -> target
-      - name: Check Rust formatting
+      - name: Check Rust format
         shell: pwsh
         run: |
           cargo fmt --manifest-path Native/Cargo.toml -- --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo fmt --manifest-path App/src-tauri/Cargo.toml -- --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Test schematic decoding and meshing
+      - name: Test Native
         run: cargo test --manifest-path Native/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
-      - name: Build setup and portable packages
+      - name: Build packages
         shell: pwsh
         run: ./scripts/build.ps1 -NonInteractive
-      - name: Check frontend formatting
+      - name: Check frontend format
         run: pnpm --prefix App run format -- --check
-      - name: Test the Tauri host
+      - name: Test App
         run: cargo test --manifest-path App/src-tauri/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
       - uses: actions/upload-artifact@v7
         with:

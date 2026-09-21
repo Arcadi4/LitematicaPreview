@@ -845,7 +845,9 @@ export default function App({ initialError }: { initialError?: string }) {
               {dialog === "error" ? (
                 <>
                   <p>The preview was closed. You are back on the home screen.</p>
-                  <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] max-h-[45vh] overflow-auto select-text text-xs">{errorDetails}</pre>
+                  <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] max-h-[45vh] overflow-auto select-text text-xs">
+                    {errorDetails}
+                  </pre>
                 </>
               ) : dialog === "controls" ? (
                 <>

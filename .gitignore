@@ -9,6 +9,7 @@ Native/target/
 artifacts/
 .vs/
 .idea/
+/test/
 .DS_Store
 *.user
 *.tsbuildinfo

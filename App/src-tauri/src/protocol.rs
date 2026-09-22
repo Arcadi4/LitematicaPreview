@@ -552,3 +552,227 @@ fn add_buffer(buffers: &mut Vec<Buffer>, total: &mut usize, length: usize) -> io
     });
     Ok(id)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn range_reads_cross_segments_without_flattening_and_reject_overflow() {
+        let payload = Payload {
+            metadata: Metadata {
+                block_count: 1,
+                block_entity_count: 0,
+                triangle_count: 1,
+                min: [0.0; 3],
+                max: [1.0; 3],
+                byte_length: FRAME_BYTES + 3,
+                textures: vec![],
+                parts: vec![],
+            },
+            buffers: vec![Buffer {
+                segments: vec![vec![7; FRAME_BYTES], vec![8, 9, 10]],
+                ends: vec![FRAME_BYTES, FRAME_BYTES + 3],
+                length: FRAME_BYTES + 3,
+            }],
+        };
+        assert_eq!(
+            payload.read(0, FRAME_BYTES - 2, 5).unwrap(),
+            [7, 7, 8, 9, 10]
+        );
+        assert!(payload.read(0, usize::MAX, 1).is_err());
+        assert!(payload.read(0, 0, FRAME_BYTES + 1).is_err());
+        assert!(payload.read(1, 0, 1).is_err());
+    }
+
+    #[test]
+    fn merging_chunks_rebases_indices_and_preserves_attribute_boundaries() {
+        let mut buffers = Vec::new();
+        let mut records = Vec::new();
+        for value in [10u8, 20] {
+            let base = buffers.len();
+            for data in [
+                vec![value; 12],
+                vec![value; 3],
+                vec![value; 8],
+                vec![value; 4],
+                vec![0; 12],
+            ] {
+                let length = data.len();
+                buffers.push(Buffer {
+                    segments: vec![data],
+                    ends: vec![length],
+                    length,
+                });
+            }
+            records.push(PartMetadata {
+                vertex_count: 1,
+                index_count: 3,
+                texture_index: 0,
+                alpha_mode: 0,
+                buffers: [base, base + 1, base + 2, base + 3, base + 4],
+            });
+        }
+        let metadata = Metadata {
+            block_count: 2,
+            block_entity_count: 0,
+            triangle_count: 2,
+            min: [0.0; 3],
+            max: [1.0; 3],
+            byte_length: 78,
+            textures: vec![],
+            parts: records,
+        };
+        let payload = Payload::assemble(metadata, buffers, || true).unwrap();
+        let part = &payload.metadata.parts[0];
+        assert_eq!(payload.metadata.parts.len(), 1);
+        assert_eq!((part.vertex_count, part.index_count), (2, 6));
+        assert_eq!(payload.read(part.buffers[1], 2, 3).unwrap(), [10, 20, 20]);
+        let indices = payload.read(part.buffers[4], 0, 24).unwrap();
+        let values: Vec<_> = indices
+            .chunks_exact(4)
+            .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
+            .collect();
+        assert_eq!(values, [0, 0, 0, 1, 1, 1]);
+    }
+
+    struct Wire {
+        incoming: io::Cursor<Vec<u8>>,
+        outgoing: Vec<u8>,
+    }
+
+    impl Read for Wire {
+        fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+            self.incoming.read(out)
+        }
+    }
+
+    impl Write for Wire {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.outgoing.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn wire(bytes: Vec<u8>) -> Wire {
+        Wire {
+            incoming: io::Cursor::new(bytes),
+            outgoing: Vec::new(),
+        }
+    }
+
+    fn part_packets(index: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let texture = TextureRecord {
+            width: 1,
+            height: 1,
+            byte_length: 4,
+            repeat: false,
+        };
+        write_packet(&mut bytes, TEXTURE, &serde_json::to_vec(&texture).unwrap()).unwrap();
+        write_packet(&mut bytes, DATA, &[255; 4]).unwrap();
+        let part = PartRecord {
+            vertex_count: 1,
+            index_count: 3,
+            texture_index: 0,
+            alpha_mode: 0,
+        };
+        write_packet(&mut bytes, PART, &serde_json::to_vec(&part).unwrap()).unwrap();
+        for data in [
+            vec![0; 12],
+            vec![0; 3],
+            vec![0; 8],
+            vec![255; 4],
+            [index.to_le_bytes(); 3].concat(),
+        ] {
+            write_packet(&mut bytes, DATA, &data).unwrap();
+        }
+        finish(
+            &mut bytes,
+            Ok(PreviewInfo {
+                block_count: 1,
+                triangle_count: 1,
+                max: [1.0; 3],
+                ..PreviewInfo::default()
+            }),
+        )
+        .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn malformed_geometry_is_rejected_before_exposing_buffers() {
+        assert!(receive(&mut wire(part_packets(1)), || true).is_err());
+        let mut truncated = part_packets(0);
+        truncated.truncate(truncated.len() - 1);
+        assert!(receive(&mut wire(truncated), || true).is_err());
+        let oversized = [DATA, 1, 0, 16, 0];
+        assert!(receive(&mut wire(oversized.to_vec()), || true).is_err());
+    }
+
+    #[test]
+    fn cancellation_drains_terminator_before_the_next_preview() {
+        let mut bytes = Vec::new();
+        write_packet(&mut bytes, CHECKPOINT, &[]).unwrap();
+        finish(&mut bytes, Err("Cancelled".into())).unwrap();
+        bytes.extend(part_packets(0));
+        let mut connection = wire(bytes);
+        assert!(matches!(receive(&mut connection, || false).unwrap(), Err(e) if e == "Cancelled"));
+        assert_eq!(connection.outgoing, [CANCEL]);
+        let payload = receive(&mut connection, || true).unwrap().unwrap();
+        assert_eq!(
+            payload
+                .read(payload.metadata.parts[0].buffers[4], 0, 12)
+                .unwrap(),
+            [0; 12]
+        );
+    }
+
+    #[test]
+    fn old_upload_release_cannot_free_a_new_request() {
+        let worker = crate::preview::PreviewWorker::default();
+        worker.advance(10);
+        let payload = receive(&mut wire(part_packets(0)), || true)
+            .unwrap()
+            .unwrap();
+        worker.publish(10, payload).unwrap();
+        worker.release(9);
+        assert_eq!(worker.read(10, 0, 0, 4).unwrap(), [255; 4]);
+        worker.advance(11);
+        assert!(worker.read(10, 0, 0, 4).is_err());
+        let payload = receive(&mut wire(part_packets(0)), || true)
+            .unwrap()
+            .unwrap();
+        worker.publish(11, payload).unwrap();
+        worker.release(10);
+        assert_eq!(worker.read(11, 0, 0, 4).unwrap(), [255; 4]);
+        worker.release(11);
+        assert!(worker.read(11, 0, 0, 4).is_err());
+    }
+
+    #[test]
+    fn quantized_attributes_preserve_endpoints_and_rounding_error() {
+        let mut connection = wire(vec![CONTINUE; 2]);
+        let mut encoder = Encoder::new(&mut connection);
+        encoder
+            .quantized([-1.0, 0.0, 1.0, 0.5].into_iter(), true)
+            .unwrap();
+        encoder
+            .quantized([0.0, 0.5, 1.0].into_iter(), false)
+            .unwrap();
+        let mut records = io::Cursor::new(connection.outgoing);
+        assert_eq!(
+            read_packet(&mut records).unwrap(),
+            (DATA, vec![129, 0, 127, 64])
+        );
+        assert_eq!(
+            read_packet(&mut records).unwrap(),
+            (DATA, vec![0, 128, 255])
+        );
+        assert!((64.0f32 / 127.0 - 0.5).abs() <= 0.5 / 127.0 + f32::EPSILON);
+        assert!((128.0f32 / 255.0 - 0.5).abs() <= 0.5 / 255.0 + f32::EPSILON);
+    }
+}

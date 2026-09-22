@@ -80,7 +80,7 @@ async fn load_preview(
     path: String,
     request_id: u64,
     state: State<'_, HostState>,
-) -> Result<tauri::ipc::Response, String> {
+) -> Result<protocol::Metadata, String> {
     let worker = Arc::clone(&state.worker);
     worker.advance(request_id);
     worker.ensure_current(request_id)?;
@@ -103,12 +103,31 @@ async fn load_preview(
     tauri::async_runtime::spawn_blocking(move || {
         worker.ensure_current(request_id)?;
         let pack_path = resources.pack()?;
-        let bytes = worker.load(&path, &pack_path, request_id)?;
+        let metadata = worker.load(&path, &pack_path, request_id)?;
         worker.ensure_current(request_id)?;
-        Ok(tauri::ipc::Response::new(bytes))
+        Ok(metadata)
     })
     .await
     .map_err(|e| format!("The preview worker stopped unexpectedly: {e}"))?
+}
+
+#[tauri::command]
+fn read_preview(
+    request_id: u64,
+    buffer_id: usize,
+    offset: usize,
+    length: usize,
+    state: State<'_, HostState>,
+) -> Result<tauri::ipc::Response, String> {
+    state
+        .worker
+        .read(request_id, buffer_id, offset, length)
+        .map(tauri::ipc::Response::new)
+}
+
+#[tauri::command]
+fn release_preview(request_id: u64, state: State<'_, HostState>) {
+    state.worker.release(request_id);
 }
 
 #[tauri::command]
@@ -216,6 +235,8 @@ fn run() -> Result<(), String> {
             bootstrap,
             choose_file,
             load_preview,
+            read_preview,
+            release_preview,
             cancel_load,
             register_associations,
             unregister_associations,

@@ -12,6 +12,8 @@
     "allow-bootstrap",
     "allow-choose-file",
     "allow-load-preview",
+    "allow-read-preview",
+    "allow-release-preview",
     "allow-cancel-load",
     "allow-register-associations",
     "allow-unregister-associations",

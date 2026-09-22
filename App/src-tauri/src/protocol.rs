@@ -1,122 +1,534 @@
-use litematica_preview_native::{parts, Preview};
-use serde::Serialize;
-use std::mem::size_of_val;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::io::{self, Read, Write};
 
-#[cfg(not(target_endian = "little"))]
-compile_error!("The LPV1 renderer protocol requires a little-endian target.");
+use litematica_preview_native::{parts, Preview, PreviewInfo};
+use serde::{Deserialize, Serialize};
 
-const MAGIC: u32 = 0x3156_504c;
+pub const FRAME_BYTES: usize = 1024 * 1024;
+const MAX_PAYLOAD_BYTES: usize = 2 * 1024 * 1024 * 1024;
+const MAX_RECORDS: usize = 100_000;
+const END: u8 = 0;
+const ERROR: u8 = 1;
+const TEXTURE: u8 = 2;
+const CHECKPOINT: u8 = 5;
+const PART: u8 = 3;
+const DATA: u8 = 4;
+const CONTINUE: u8 = 1;
+const CANCEL: u8 = 0;
 const TOO_LARGE: &str = "The preview is too large to transfer to the graphics device.";
 
-#[derive(Serialize)]
+#[cfg(not(target_endian = "little"))]
+compile_error!("The preview buffers require a little-endian target.");
+
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Metadata {
-    block_count: i64,
-    block_entity_count: i64,
-    triangle_count: u64,
-    min: [f32; 3],
-    max: [f32; 3],
-    textures: Vec<TextureMetadata>,
-    parts: Vec<PartMetadata>,
+pub struct Metadata {
+    pub block_count: i64,
+    pub block_entity_count: i64,
+    pub triangle_count: u64,
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+    pub byte_length: usize,
+    pub textures: Vec<TextureMetadata>,
+    pub parts: Vec<PartMetadata>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TextureMetadata {
+pub struct TextureMetadata {
+    pub width: u32,
+    pub height: u32,
+    pub byte_length: usize,
+    pub buffer_id: usize,
+    pub repeat: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartMetadata {
+    pub vertex_count: u32,
+    pub index_count: u32,
+    pub texture_index: u32,
+    pub alpha_mode: u32,
+    pub buffers: [usize; 5],
+}
+
+#[derive(Serialize, Deserialize)]
+struct TextureRecord {
     width: u32,
     height: u32,
     byte_length: usize,
+    repeat: bool,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PartMetadata {
+#[derive(Serialize, Deserialize)]
+struct PartRecord {
     vertex_count: u32,
     index_count: u32,
     texture_index: u32,
     alpha_mode: u32,
 }
 
-pub fn serialize(
-    preview: &Preview,
-    current: impl Fn() -> Result<(), String>,
-) -> Result<Vec<u8>, String> {
-    current()?;
-    let atlas = &preview.mesh.atlas;
-    let mut textures = Vec::with_capacity(preview.textures.len() + 1);
-    let mut body_length = atlas.pixels.len();
-    textures.push(TextureMetadata {
-        width: atlas.width,
-        height: atlas.height,
-        byte_length: atlas.pixels.len(),
-    });
-    for texture in &preview.textures {
-        body_length = body_length
-            .checked_add(texture.pixels.len())
-            .ok_or(TOO_LARGE)?;
-        textures.push(TextureMetadata {
-            width: texture.width,
-            height: texture.height,
-            byte_length: texture.pixels.len(),
-        });
+#[derive(Serialize, Deserialize)]
+struct Summary {
+    block_count: i64,
+    block_entity_count: i64,
+    triangle_count: u64,
+    min: [f32; 3],
+    max: [f32; 3],
+}
+
+// One logical renderer payload; allocation-sized segments never flatten into
+// another full model. Only a requested IPC range is copied (at most 1 MiB).
+pub struct Payload {
+    pub metadata: Metadata,
+    buffers: Vec<Buffer>,
+}
+
+#[derive(Default)]
+struct Buffer {
+    segments: Vec<Vec<u8>>,
+    ends: Vec<usize>,
+    length: usize,
+}
+
+impl Payload {
+    pub fn read(&self, id: usize, offset: usize, length: usize) -> Result<Vec<u8>, String> {
+        let buffer = self
+            .buffers
+            .get(id)
+            .ok_or("The preview buffer is unavailable.")?;
+        let end = offset.checked_add(length).ok_or("Invalid preview range.")?;
+        if length == 0 || length > FRAME_BYTES || end > buffer.length {
+            return Err("Invalid preview range.".into());
+        }
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(length)
+            .map_err(|_| "There is not enough memory to upload this preview.")?;
+        let mut cursor = offset;
+        let mut index = buffer.ends.partition_point(|end| *end <= offset);
+        while cursor < end {
+            let base = if index == 0 {
+                0
+            } else {
+                buffer.ends[index - 1]
+            };
+            let segment = &buffer.segments[index];
+            let start = cursor - base;
+            let count = (segment.len() - start).min(end - cursor);
+            bytes.extend_from_slice(&segment[start..start + count]);
+            cursor += count;
+            index += 1;
+        }
+        Ok(bytes)
     }
-    let mut mesh_parts = Vec::with_capacity(preview.info.part_count as usize);
-    for (part, texture_index, alpha_mode) in parts(&preview.mesh) {
-        current()?;
-        mesh_parts.push(PartMetadata {
-            vertex_count: u32::try_from(part.positions.len()).map_err(|_| TOO_LARGE)?,
-            index_count: u32::try_from(part.indices.len()).map_err(|_| TOO_LARGE)?,
-            texture_index,
-            alpha_mode,
-        });
-        for length in [
-            size_of_val(part.positions.as_slice()),
-            size_of_val(part.normals.as_slice()),
-            size_of_val(part.uvs.as_slice()),
-            size_of_val(part.colors.as_slice()),
-            size_of_val(part.indices.as_slice()),
-        ] {
-            body_length = body_length.checked_add(length).ok_or(TOO_LARGE)?;
+
+    fn assemble(
+        mut metadata: Metadata,
+        mut source: Vec<Buffer>,
+        current: impl Fn() -> bool,
+    ) -> io::Result<Self> {
+        let mut buffers = Vec::new();
+        for texture in &mut metadata.textures {
+            let buffer = std::mem::take(&mut source[texture.buffer_id]);
+            texture.buffer_id = buffers.len();
+            buffers.push(buffer);
+        }
+        let mut merged: Vec<PartMetadata> = Vec::new();
+        let mut groups = std::collections::HashMap::new();
+        for part in metadata.parts {
+            if !current() {
+                return Err(io::Error::new(io::ErrorKind::Interrupted, "Cancelled"));
+            }
+            let key = (part.texture_index, part.alpha_mode);
+            let group = if let Some(&index) = groups.get(&key) {
+                index
+            } else {
+                let index = merged.len();
+                let base = buffers.len();
+                buffers.extend((0..5).map(|_| Buffer::default()));
+                merged.push(PartMetadata {
+                    vertex_count: 0,
+                    index_count: 0,
+                    texture_index: part.texture_index,
+                    alpha_mode: part.alpha_mode,
+                    buffers: [base, base + 1, base + 2, base + 3, base + 4],
+                });
+                groups.insert(key, index);
+                index
+            };
+            let target = &mut merged[group];
+            let vertex_offset = target.vertex_count;
+            target.vertex_count = target
+                .vertex_count
+                .checked_add(part.vertex_count)
+                .filter(|n| *n <= i32::MAX as u32)
+                .ok_or_else(|| invalid(TOO_LARGE))?;
+            target.index_count = target
+                .index_count
+                .checked_add(part.index_count)
+                .filter(|n| *n <= i32::MAX as u32)
+                .ok_or_else(|| invalid(TOO_LARGE))?;
+            for attribute in 0..5 {
+                let mut buffer = std::mem::take(&mut source[part.buffers[attribute]]);
+                if attribute == 4 && vertex_offset != 0 {
+                    for segment in &mut buffer.segments {
+                        for bytes in segment.chunks_exact_mut(4) {
+                            let index =
+                                u32::from_le_bytes(bytes.try_into().unwrap()) + vertex_offset;
+                            bytes.copy_from_slice(&index.to_le_bytes());
+                        }
+                    }
+                }
+                let destination = &mut buffers[target.buffers[attribute]];
+                let base = destination.length;
+                destination
+                    .ends
+                    .extend(buffer.ends.into_iter().map(|end| base + end));
+                destination.length += buffer.length;
+                destination.segments.extend(buffer.segments);
+            }
+        }
+        metadata.parts = merged;
+        Ok(Self { metadata, buffers })
+    }
+}
+
+fn invalid(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+fn write_packet(stream: &mut impl Write, kind: u8, bytes: &[u8]) -> io::Result<()> {
+    if bytes.len() > FRAME_BYTES {
+        return Err(invalid("The decoder packet is too large."));
+    }
+    stream.write_all(&[kind])?;
+    stream.write_all(&(bytes.len() as u32).to_le_bytes())?;
+    stream.write_all(bytes)
+}
+
+fn read_packet(stream: &mut impl Read) -> io::Result<(u8, Vec<u8>)> {
+    let mut header = [0; 5];
+    stream.read_exact(&mut header)?;
+    let length = u32::from_le_bytes(header[1..].try_into().unwrap()) as usize;
+    if length > FRAME_BYTES {
+        return Err(invalid("The decoder packet is too large."));
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| invalid("There is not enough memory to receive this preview."))?;
+    bytes.resize(length, 0);
+    stream.read_exact(&mut bytes)?;
+    Ok((header[0], bytes))
+}
+
+pub struct Encoder<'a, S> {
+    stream: &'a mut S,
+    textures: Vec<(u64, TextureRecord, Vec<u8>)>,
+}
+
+impl<'a, S: Read + Write> Encoder<'a, S> {
+    pub fn new(stream: &'a mut S) -> Self {
+        Self {
+            stream,
+            textures: Vec::new(),
         }
     }
-    let metadata = Metadata {
-        block_count: preview.info.block_count,
-        block_entity_count: preview.info.block_entity_count,
-        triangle_count: preview.info.triangle_count,
-        min: preview.info.min,
-        max: preview.info.max,
-        textures,
-        parts: mesh_parts,
-    };
-    let json = serde_json::to_vec(&metadata)
-        .map_err(|e| format!("Unable to describe the preview: {e}"))?;
-    let json_length = u32::try_from(json.len()).map_err(|_| TOO_LARGE)?;
-    let header_length = json.len().checked_add(11).ok_or(TOO_LARGE)? & !3;
-    let payload_length = header_length.checked_add(body_length).ok_or(TOO_LARGE)?;
-    current()?;
-    // Reserve the final IPC payload once. Cast POD slices directly instead of
-    // expanding geometry into JSON numbers or an intermediate flattened copy.
-    let mut payload = Vec::new();
-    payload
-        .try_reserve_exact(payload_length)
-        .map_err(|_| "There is not enough memory to upload this preview.".to_string())?;
-    payload.extend_from_slice(&MAGIC.to_le_bytes());
-    payload.extend_from_slice(&json_length.to_le_bytes());
-    payload.extend_from_slice(&json);
-    payload.resize(header_length, 0);
-    payload.extend_from_slice(&atlas.pixels);
-    for texture in &preview.textures {
-        current()?;
-        payload.extend_from_slice(&texture.pixels);
+
+    pub fn checkpoint(&mut self) -> Result<(), String> {
+        self.send(CHECKPOINT, &[])
     }
-    for (part, _, _) in parts(&preview.mesh) {
-        current()?;
-        payload.extend_from_slice(bytemuck::cast_slice(&part.positions));
-        payload.extend_from_slice(bytemuck::cast_slice(&part.normals));
-        payload.extend_from_slice(bytemuck::cast_slice(&part.uvs));
-        payload.extend_from_slice(bytemuck::cast_slice(&part.colors));
-        payload.extend_from_slice(bytemuck::cast_slice(&part.indices));
+
+    fn send(&mut self, kind: u8, bytes: &[u8]) -> Result<(), String> {
+        write_packet(self.stream, kind, bytes).map_err(|e| e.to_string())?;
+        let mut ack = [0];
+        self.stream
+            .read_exact(&mut ack)
+            .map_err(|e| e.to_string())?;
+        match ack[0] {
+            CONTINUE => Ok(()),
+            CANCEL => Err("Cancelled".into()),
+            _ => Err("Invalid decoder acknowledgement.".into()),
+        }
     }
-    current()?;
-    Ok(payload)
+
+    fn record(&mut self, kind: u8, value: &impl Serialize) -> Result<(), String> {
+        let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
+        self.send(kind, &bytes)
+    }
+
+    fn bytes(&mut self, bytes: &[u8]) -> Result<(), String> {
+        for segment in bytes.chunks(FRAME_BYTES) {
+            self.send(DATA, segment)?;
+        }
+        Ok(())
+    }
+
+    fn texture(
+        &mut self,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+        repeat: bool,
+    ) -> Result<u32, String> {
+        let mut hash = DefaultHasher::new();
+        (width, height, repeat, pixels).hash(&mut hash);
+        let key = hash.finish();
+        if let Some(index) = self.textures.iter().position(|(h, record, prior)| {
+            *h == key
+                && record.width == width
+                && record.height == height
+                && record.repeat == repeat
+                && prior == pixels
+        }) {
+            return Ok(index as u32);
+        }
+        if self.textures.len() >= MAX_RECORDS {
+            return Err(TOO_LARGE.into());
+        }
+        let record = TextureRecord {
+            width,
+            height,
+            byte_length: pixels.len(),
+            repeat,
+        };
+        self.record(TEXTURE, &record)?;
+        self.bytes(pixels)?;
+        let index = self.textures.len() as u32;
+        self.textures.push((key, record, pixels.to_vec()));
+        Ok(index)
+    }
+
+    pub fn chunk(&mut self, preview: Preview) -> Result<(), String> {
+        let atlas = &preview.mesh.atlas;
+        let mut textures = Vec::with_capacity(preview.textures.len() + 1);
+        textures.push(self.texture(atlas.width, atlas.height, &atlas.pixels, false)?);
+        for texture in &preview.textures {
+            textures.push(self.texture(texture.width, texture.height, &texture.pixels, true)?);
+        }
+        for (part, texture, alpha_mode) in parts(&preview.mesh) {
+            let record = PartRecord {
+                vertex_count: u32::try_from(part.positions.len()).map_err(|_| TOO_LARGE)?,
+                index_count: u32::try_from(part.indices.len()).map_err(|_| TOO_LARGE)?,
+                texture_index: textures[texture as usize],
+                alpha_mode,
+            };
+            self.record(PART, &record)?;
+            self.bytes(bytemuck::cast_slice(&part.positions))?;
+            self.bytes(bytemuck::cast_slice(&part.normals))?;
+            self.bytes(bytemuck::cast_slice(&part.uvs))?;
+            self.bytes(bytemuck::cast_slice(&part.colors))?;
+            self.bytes(bytemuck::cast_slice(&part.indices))?;
+        }
+        Ok(())
+    }
+
+
+}
+
+pub fn finish(stream: &mut impl Write, result: Result<PreviewInfo, String>) -> io::Result<()> {
+    match result {
+        Ok(info) => {
+            let summary = Summary {
+                block_count: info.block_count,
+                block_entity_count: info.block_entity_count,
+                triangle_count: info.triangle_count,
+                min: info.min,
+                max: info.max,
+            };
+            write_packet(
+                stream,
+                END,
+                &serde_json::to_vec(&summary).map_err(|e| invalid(e.to_string()))?,
+            )
+        }
+        Err(error) => {
+            let message = if error.len() <= FRAME_BYTES {
+                error.as_bytes()
+            } else {
+                b"The decoder returned an oversized error."
+            };
+            write_packet(stream, ERROR, message)
+        }
+    }
+}
+
+// Non-terminal packets require an acknowledgement. Cancellation is observed at
+// the next packet, and the decoder emits an ERROR terminator before accepting
+// another request. Malformed streams instead invalidate the worker connection.
+pub fn receive(
+    stream: &mut (impl Read + Write),
+    current: impl Fn() -> bool,
+) -> io::Result<Result<Payload, String>> {
+    let mut textures = Vec::new();
+    let mut parts = Vec::new();
+    let mut buffers: Vec<Buffer> = Vec::new();
+    let mut pending = std::collections::VecDeque::new();
+    let mut total = 0usize;
+    let mut cancelled = false;
+    loop {
+        let (kind, bytes) = read_packet(stream)?;
+        cancelled |= !current();
+        if kind == ERROR {
+            return Ok(Err(if cancelled {
+                "Cancelled".into()
+            } else {
+                String::from_utf8(bytes).map_err(|_| invalid("Invalid decoder error text."))?
+            }));
+        }
+        if kind == END {
+            if cancelled {
+                return Ok(Err("Cancelled".into()));
+            }
+            if !pending.is_empty() {
+                return Err(invalid("The decoder preview is truncated."));
+            }
+            let summary: Summary =
+                serde_json::from_slice(&bytes).map_err(|e| invalid(e.to_string()))?;
+            let counted: u64 = parts
+                .iter()
+                .map(|p: &PartMetadata| u64::from(p.index_count / 3))
+                .sum();
+            if summary.block_count <= 0
+                || summary.block_entity_count < 0
+                || counted == 0
+                || summary.triangle_count != counted
+                || !summary
+                    .min
+                    .iter()
+                    .chain(&summary.max)
+                    .all(|v| v.is_finite())
+                || (0..3).any(|i| summary.min[i] > summary.max[i])
+            {
+                return Err(invalid("The decoder returned invalid preview metadata."));
+            }
+            let metadata = Metadata {
+                block_count: summary.block_count,
+                block_entity_count: summary.block_entity_count,
+                triangle_count: counted,
+                min: summary.min,
+                max: summary.max,
+                byte_length: total,
+                textures,
+                parts,
+            };
+            return Payload::assemble(metadata, buffers, current).map(Ok);
+        }
+        if cancelled {
+            buffers.clear();
+            textures.clear();
+            parts.clear();
+            pending.clear();
+            stream.write_all(&[CANCEL])?;
+            continue;
+        }
+        match kind {
+            TEXTURE if pending.is_empty() => {
+                let record: TextureRecord =
+                    serde_json::from_slice(&bytes).map_err(|e| invalid(e.to_string()))?;
+                let size = (record.width as usize)
+                    .checked_mul(record.height as usize)
+                    .and_then(|n| n.checked_mul(4));
+                if record.width == 0
+                    || record.height == 0
+                    || size != Some(record.byte_length)
+                    || textures.len() >= MAX_RECORDS
+                {
+                    return Err(invalid("The decoder returned an invalid texture."));
+                }
+                let id = add_buffer(&mut buffers, &mut total, record.byte_length)?;
+                pending.push_back((id, None));
+                textures.push(TextureMetadata {
+                    width: record.width,
+                    height: record.height,
+                    byte_length: record.byte_length,
+                    buffer_id: id,
+                    repeat: record.repeat,
+                });
+            }
+            PART if pending.is_empty() => {
+                let record: PartRecord =
+                    serde_json::from_slice(&bytes).map_err(|e| invalid(e.to_string()))?;
+                if record.vertex_count == 0
+                    || record.vertex_count > i32::MAX as u32
+                    || record.index_count == 0
+                    || record.index_count > i32::MAX as u32
+                    || record.index_count % 3 != 0
+                    || record.texture_index as usize >= textures.len()
+                    || record.alpha_mode > 2
+                    || parts.len() >= MAX_RECORDS
+                {
+                    return Err(invalid("The decoder returned an invalid mesh part."));
+                }
+                let v = record.vertex_count as usize;
+                let lengths = [v * 12, v * 12, v * 8, v * 16, record.index_count as usize * 4];
+                let mut ids = [0; 5];
+                for (i, length) in lengths.into_iter().enumerate() {
+                    ids[i] = add_buffer(&mut buffers, &mut total, length)?;
+                    pending.push_back((
+                        ids[i],
+                        if i == 4 {
+                            Some(record.vertex_count)
+                        } else {
+                            None
+                        },
+                    ));
+                }
+                parts.push(PartMetadata {
+                    vertex_count: record.vertex_count,
+                    index_count: record.index_count,
+                    texture_index: record.texture_index,
+                    alpha_mode: record.alpha_mode,
+                    buffers: ids,
+                });
+            }
+            DATA => {
+                let &(id, index_limit) = pending
+                    .front()
+                    .ok_or_else(|| invalid("Unexpected preview buffer."))?;
+                let buffer = &mut buffers[id];
+                let received = buffer.segments.len() * FRAME_BYTES;
+                let expected = (buffer.length - received).min(FRAME_BYTES);
+                if bytes.len() != expected {
+                    return Err(invalid("The decoder buffer is truncated or oversized."));
+                }
+                if let Some(limit) = index_limit {
+                    if bytes
+                        .chunks_exact(4)
+                        .any(|value| u32::from_le_bytes(value.try_into().unwrap()) >= limit)
+                    {
+                        return Err(invalid("The decoder returned an out-of-range mesh index."));
+                    }
+                }
+                buffer.segments.push(bytes);
+                buffer.ends.push(received + expected);
+                if received + expected == buffer.length {
+                    pending.pop_front();
+                }
+            }
+            CHECKPOINT if pending.is_empty() && bytes.is_empty() => {}
+            _ => return Err(invalid("Unexpected decoder record.")),
+        }
+        stream.write_all(&[CONTINUE])?;
+    }
+}
+
+fn add_buffer(buffers: &mut Vec<Buffer>, total: &mut usize, length: usize) -> io::Result<usize> {
+    *total = total
+        .checked_add(length)
+        .filter(|n| *n <= MAX_PAYLOAD_BYTES)
+        .ok_or_else(|| invalid(TOO_LARGE))?;
+    if length == 0 {
+        return Err(invalid("The decoder returned an empty buffer."));
+    }
+    let id = buffers.len();
+    buffers.push(Buffer {
+        segments: Vec::with_capacity(length.div_ceil(FRAME_BYTES)),
+        ends: Vec::with_capacity(length.div_ceil(FRAME_BYTES)),
+        length,
+    });
+    Ok(id)
 }

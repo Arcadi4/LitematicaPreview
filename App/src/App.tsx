@@ -108,6 +108,7 @@ export default function App({ initialError }: { initialError?: string }) {
   const choosingRef = useRef(false)
   const actionBusyRef = useRef(false)
   const titleQueue = useRef<Promise<void>>(Promise.resolve())
+  const previewReadQueue = useRef<Promise<void>>(Promise.resolve())
 
   const isCurrent = useCallback((id: number) => mounted.current && generation.current === id, [])
 
@@ -241,7 +242,7 @@ export default function App({ initialError }: { initialError?: string }) {
       const started = performance.now()
       try {
         // load_preview advances the native generation itself; an older IPC call can never supersede it.
-        const buffer = await invoke<ArrayBuffer>("load_preview", {
+        const descriptor = await invoke<PreviewMetadata>("load_preview", {
           path,
           requestId: id,
         })
@@ -258,7 +259,27 @@ export default function App({ initialError }: { initialError?: string }) {
           rendererRef.current = renderer
           renderer.setGrid(gridRef.current)
         }
-        const metadata = await renderer.load(buffer, () => isCurrent(id))
+        const metadata = await renderer.load(
+          descriptor,
+          (bufferId, offset, length) => {
+            // Keep a single read in flight even while an older load is being cancelled.
+            const read = previewReadQueue.current.then(() => {
+              if (!isCurrent(id)) throw new Error("Cancelled")
+              return invoke<ArrayBuffer>("read_preview", {
+                requestId: id,
+                bufferId,
+                offset,
+                length,
+              })
+            })
+            previewReadQueue.current = read.then(
+              () => {},
+              () => {},
+            )
+            return read
+          },
+          () => isCurrent(id),
+        )
         if (!isCurrent(id)) return
         setLoaded({
           path,
@@ -275,6 +296,16 @@ export default function App({ initialError }: { initialError?: string }) {
         setLoading(null)
         if (errorMessage(error) !== "Cancelled")
           setNotice({ intent: "error", message: `${path}\n\n${errorMessage(error)}` })
+      } finally {
+        try {
+          await invoke("release_preview", { requestId: id })
+        } catch (error) {
+          if (isCurrent(id))
+            setNotice({
+              intent: "error",
+              message: `Could not finish loading the preview: ${errorMessage(error)}`,
+            })
+        }
       }
     },
     [cancelNative, clearView, graphicsFailed, isCurrent, updateTitle],

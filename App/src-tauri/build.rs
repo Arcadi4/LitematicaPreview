@@ -25,6 +25,8 @@ fn main() {
                 "bootstrap",
                 "choose_file",
                 "load_preview",
+                "read_preview",
+                "release_preview",
                 "cancel_load",
                 "register_associations",
                 "unregister_associations",

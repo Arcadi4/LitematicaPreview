@@ -6,12 +6,20 @@ export type PreviewMetadata = {
   triangleCount: number
   min: [number, number, number]
   max: [number, number, number]
-  textures: { width: number; height: number; byteLength: number }[]
+  byteLength: number
+  textures: {
+    width: number
+    height: number
+    byteLength: number
+    bufferId: number
+    repeat: boolean
+  }[]
   parts: {
     vertexCount: number
     indexCount: number
     textureIndex: number
     alphaMode: 0 | 1 | 2
+    buffers: [number, number, number, number, number]
   }[]
 }
 
@@ -53,10 +61,17 @@ type Targets = {
 }
 
 type UploadBudget = { bytes: number; started: number }
+type ReadBuffer = (bufferId: number, offset: number, length: number) => Promise<ArrayBuffer>
 
 const FOV = (28 * Math.PI) / 180
 const HALF_FOV_TAN = Math.tan(FOV / 2)
-const ATTRIBUTE_SIZES = [3, 3, 2, 4] as const
+const BUFFER_FORMATS = [
+  { size: 3, array: Float32Array, normalized: false },
+  { size: 3, array: Float32Array, normalized: false },
+  { size: 2, array: Float32Array, normalized: false },
+  { size: 4, array: Float32Array, normalized: false },
+  { size: 1, array: Uint32Array, normalized: false },
+] as const
 const UPLOAD_CHUNK = 1024 * 1024
 const MAX_METADATA_BYTES = 16 * 1024 * 1024
 const MAX_RENDER_PIXELS = 16 * 1024 * 1024
@@ -97,25 +112,9 @@ function record(value: unknown, name: string): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
-// Only the small metadata is decoded. All pixel/vertex/index payloads stay in
-// the original binary buffer until their synchronous WebGL upload completes.
-function parsePreview(
-  buffer: ArrayBuffer,
-  maxTextureSize: number,
-): { metadata: PreviewMetadata; offset: number } {
-  if (buffer.byteLength < 8 || buffer.byteLength % 4 !== 0)
-    throw new Error("The preview binary is truncated.")
-  const header = new DataView(buffer, 0, 8)
-  if (header.getUint32(0, true) !== 0x3156504c)
-    throw new Error("The preview binary has an unsupported version.")
-  const length = header.getUint32(4, true)
-  if (length === 0 || length > MAX_METADATA_BYTES || length > buffer.byteLength - 8) {
-    throw new Error("The preview metadata length is invalid.")
-  }
-  const metadata: unknown = JSON.parse(
-    new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(buffer, 8, length)),
-  )
+function validateMetadata(metadata: PreviewMetadata, maxTextureSize: number): void {
   const root = record(metadata, "metadata")
+  const byteLength = integer(root.byteLength, "payload byte length", Number.MAX_SAFE_INTEGER, 1)
   integer(root.blockCount, "block count", Number.MAX_SAFE_INTEGER, 1)
   integer(root.blockEntityCount, "block entity count")
   integer(root.triangleCount, "triangle count", Number.MAX_SAFE_INTEGER, 1)
@@ -136,20 +135,29 @@ function parsePreview(
   if (
     !Array.isArray(root.textures) ||
     root.textures.length === 0 ||
-    root.textures.length > length / 2 ||
+    root.textures.length > MAX_METADATA_BYTES / 2 ||
     !Array.isArray(root.parts) ||
     root.parts.length === 0 ||
-    root.parts.length > length / 2
+    root.parts.length > MAX_METADATA_BYTES / 2
   ) {
     throw new Error("The preview must contain textures and renderable mesh parts.")
   }
-  const offset = Math.ceil((8 + length) / 4) * 4
-  let end = offset
-  const consume = (bytes: number) => {
-    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > buffer.byteLength - end) {
-      throw new Error("The preview binary contains truncated or oversized geometry.")
+  const bufferCount = integer(
+    root.textures.length + root.parts.length * 5,
+    "buffer count",
+    0xffffffff,
+    1,
+  )
+  const bufferIds = new Set<number>()
+  let totalBytes = 0
+  const consume = (id: unknown, bytes: number) => {
+    const bufferId = integer(id, "buffer ID", bufferCount - 1)
+    if (bufferIds.has(bufferId)) throw new Error("The preview contains a duplicate buffer ID.")
+    if (!Number.isSafeInteger(bytes) || bytes <= 0 || bytes > byteLength - totalBytes) {
+      throw new Error("The preview contains truncated or oversized geometry.")
     }
-    end += bytes
+    bufferIds.add(bufferId)
+    totalBytes += bytes
   }
   for (const value of root.textures) {
     const texture = record(value, "texture")
@@ -163,7 +171,9 @@ function parsePreview(
     const bytes = integer(texture.byteLength, "texture byte length")
     if (bytes !== width * height * 4)
       throw new Error("A block texture has an invalid RGBA byte length.")
-    consume(bytes)
+    if (typeof texture.repeat !== "boolean")
+      throw new Error("A block texture has an invalid repeat mode.")
+    consume(texture.bufferId, bytes)
   }
   let triangles = 0
   for (const value of root.parts) {
@@ -173,14 +183,18 @@ function parsePreview(
     integer(part.textureIndex, "texture index", root.textures.length - 1)
     integer(part.alphaMode, "alpha mode", 2)
     if (indices % 3 !== 0) throw new Error("A preview mesh contains an incomplete triangle.")
-    consume(vertices * 12 * 4 + indices * 4)
-    triangles += indices / 3
+    if (!Array.isArray(part.buffers) || part.buffers.length !== BUFFER_FORMATS.length)
+      throw new Error("A preview mesh has an invalid buffer list.")
+    for (let attribute = 0; attribute < BUFFER_FORMATS.length; attribute++) {
+      const format = BUFFER_FORMATS[attribute]
+      const count = attribute === 4 ? indices : vertices
+      consume(part.buffers[attribute], count * format.size * format.array.BYTES_PER_ELEMENT)
+    }
+    triangles = integer(triangles + indices / 3, "accumulated triangle count")
   }
   if (triangles !== root.triangleCount)
     throw new Error("The preview triangle count does not match its mesh parts.")
-  if (end !== buffer.byteLength)
-    throw new Error("The preview binary has an unexpected payload length.")
-  return { metadata: metadata as PreviewMetadata, offset }
+  if (totalBytes !== byteLength) throw new Error("The preview has an unexpected payload length.")
 }
 
 const VERTEX_SOURCE = `#version 300 es
@@ -385,7 +399,11 @@ export class SchematicRenderer {
     this.invalidate()
   }
 
-  async load(buffer: ArrayBuffer, isCurrent: () => boolean): Promise<PreviewMetadata> {
+  async load(
+    metadata: PreviewMetadata,
+    readBuffer: ReadBuffer,
+    isCurrent: () => boolean,
+  ): Promise<PreviewMetadata> {
     if (this.disposed || !isCurrent()) throw new Error("Cancelled")
     const generation = ++this.generation
     this.cancelStaged()
@@ -409,17 +427,22 @@ export class SchematicRenderer {
           "The graphics renderer is unavailable. Reopen the application to initialize the graphics device.",
         )
     }
+    const read: ReadBuffer = async (bufferId, offset, length) => {
+      guard()
+      const chunk = await readBuffer(bufferId, offset, length)
+      guard()
+      if (!(chunk instanceof ArrayBuffer) || chunk.byteLength !== length)
+        throw new Error("The preview contains an incomplete data segment.")
+      return chunk
+    }
     this.staged.add(model)
     const gl = this.gl
     const budget: UploadBudget = { bytes: 0, started: performance.now() }
     try {
       guard()
-      const parsed = parsePreview(buffer, this.maxTextureSize)
-      const metadata = parsed.metadata
-      let offset = parsed.offset
-      for (let i = 0; i < metadata.textures.length; i++) {
+      validateMetadata(metadata, this.maxTextureSize)
+      for (const source of metadata.textures) {
         guard()
-        const source = metadata.textures[i]
         const texture = required(gl.createTexture(), "a block texture")
         model.textures.push(texture)
         gl.activeTexture(gl.TEXTURE0)
@@ -427,7 +450,7 @@ export class SchematicRenderer {
         gl.texStorage2D(gl.TEXTURE_2D, 1, gl.SRGB8_ALPHA8, source.width, source.height)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
-        const wrap = i === 0 ? gl.CLAMP_TO_EDGE : gl.REPEAT
+        const wrap = source.repeat ? gl.REPEAT : gl.CLAMP_TO_EDGE
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap)
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap)
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4)
@@ -438,29 +461,34 @@ export class SchematicRenderer {
         await this.checkpoint(budget, 0, guard)
         guard()
         const rowBytes = source.width * 4
+        const tileWidth = Math.min(source.width, UPLOAD_CHUNK / 4)
         const rowsPerChunk = Math.max(1, Math.floor(UPLOAD_CHUNK / rowBytes))
         for (let row = 0; row < source.height; row += rowsPerChunk) {
-          guard()
           const rows = Math.min(rowsPerChunk, source.height - row)
-          const pixels = new Uint8Array(buffer, offset + row * rowBytes, rows * rowBytes)
-          gl.activeTexture(gl.TEXTURE0)
-          gl.bindTexture(gl.TEXTURE_2D, texture)
-          gl.texSubImage2D(
-            gl.TEXTURE_2D,
-            0,
-            0,
-            row,
-            source.width,
-            rows,
-            gl.RGBA,
-            gl.UNSIGNED_BYTE,
-            pixels,
-          )
-          await this.checkpoint(budget, pixels.byteLength, guard)
-          guard()
+          for (let column = 0; column < source.width; column += tileWidth) {
+            const width = Math.min(tileWidth, source.width - column)
+            const length = width * rows * 4
+            const pixels = new Uint8Array(
+              await read(source.bufferId, row * rowBytes + column * 4, length),
+            )
+            guard()
+            gl.activeTexture(gl.TEXTURE0)
+            gl.bindTexture(gl.TEXTURE_2D, texture)
+            gl.texSubImage2D(
+              gl.TEXTURE_2D,
+              0,
+              column,
+              row,
+              width,
+              rows,
+              gl.RGBA,
+              gl.UNSIGNED_BYTE,
+              pixels,
+            )
+            await this.checkpoint(budget, length, guard)
+          }
         }
         this.checkGraphics("upload a block texture")
-        offset += source.byteLength
       }
       for (const source of metadata.parts) {
         guard()
@@ -472,25 +500,34 @@ export class SchematicRenderer {
           alphaMode: source.alphaMode,
         }
         model.parts.push(part)
-        for (let attribute = 0; attribute < ATTRIBUTE_SIZES.length; attribute++) {
-          const size = ATTRIBUTE_SIZES[attribute]
-          const values = new Float32Array(buffer, offset, source.vertexCount * size)
-          const gpu = required(gl.createBuffer(), "a mesh attribute buffer")
+        for (let attribute = 0; attribute < BUFFER_FORMATS.length; attribute++) {
+          const format = BUFFER_FORMATS[attribute]
+          const isIndex = attribute === 4
+          const count = isIndex ? source.indexCount : source.vertexCount
+          const target = isIndex ? gl.ELEMENT_ARRAY_BUFFER : gl.ARRAY_BUFFER
+          const gpu = required(gl.createBuffer(), "a mesh buffer")
           part.buffers.push(gpu)
-          await this.uploadBuffer(part.vao, gpu, gl.ARRAY_BUFFER, values, budget, guard)
+          await this.uploadBuffer(
+            part.vao,
+            gpu,
+            target,
+            source.buffers[attribute],
+            count,
+            format,
+            source.vertexCount,
+            read,
+            budget,
+            guard,
+          )
           guard()
-          gl.bindVertexArray(part.vao)
-          gl.bindBuffer(gl.ARRAY_BUFFER, gpu)
-          gl.enableVertexAttribArray(attribute)
-          gl.vertexAttribPointer(attribute, size, gl.FLOAT, false, 0, 0)
-          offset += values.byteLength
+          if (!isIndex) {
+            const type = gl.FLOAT
+            gl.bindVertexArray(part.vao)
+            gl.bindBuffer(gl.ARRAY_BUFFER, gpu)
+            gl.enableVertexAttribArray(attribute)
+            gl.vertexAttribPointer(attribute, format.size, type, format.normalized, 0, 0)
+          }
         }
-        const indices = new Uint32Array(buffer, offset, source.indexCount)
-        const gpu = required(gl.createBuffer(), "a mesh index buffer")
-        part.buffers.push(gpu)
-        await this.uploadBuffer(part.vao, gpu, gl.ELEMENT_ARRAY_BUFFER, indices, budget, guard)
-        guard()
-        offset += indices.byteLength
       }
       guard()
       this.buildGrid(model, metadata)
@@ -653,29 +690,46 @@ export class SchematicRenderer {
     vao: WebGLVertexArrayObject,
     gpu: WebGLBuffer,
     target: number,
-    values: Float32Array<ArrayBuffer> | Uint32Array<ArrayBuffer>,
+    bufferId: number,
+    count: number,
+    format: (typeof BUFFER_FORMATS)[number],
+    vertexCount: number,
+    read: ReadBuffer,
     budget: UploadBudget,
     guard: () => void,
   ): Promise<void> {
     guard()
     const gl = this.gl
+    const stride = format.size * format.array.BYTES_PER_ELEMENT
+    const byteLength = count * stride
     gl.bindVertexArray(vao)
     gl.bindBuffer(target, gpu)
-    gl.bufferData(target, values.byteLength, gl.STATIC_DRAW)
+    gl.bufferData(target, byteLength, gl.STATIC_DRAW)
     this.checkGraphics("allocate a mesh buffer")
     await this.checkpoint(budget, 0, guard)
-    guard()
-    const elementsPerChunk = UPLOAD_CHUNK / 4
-    for (let element = 0; element < values.length; element += elementsPerChunk) {
+    const chunkSize = Math.floor(UPLOAD_CHUNK / stride) * stride
+    for (let offset = 0; offset < byteLength; offset += chunkSize) {
+      const length = Math.min(chunkSize, byteLength - offset)
+      const values = new format.array(await read(bufferId, offset, length))
       guard()
-      const count = Math.min(elementsPerChunk, values.length - element)
+      if (values instanceof Uint32Array) {
+        for (const index of values) {
+          if (index >= vertexCount)
+            throw new Error("A preview mesh contains an invalid vertex index.")
+        }
+      } else if (values instanceof Float32Array) {
+        for (const value of values) {
+          if (!Number.isFinite(value))
+            throw new Error("A preview mesh contains invalid coordinates.")
+        }
+      }
       // A frame or another load may have rebound every GL target while yielding.
       gl.bindVertexArray(vao)
       gl.bindBuffer(target, gpu)
-      gl.bufferSubData(target, element * 4, values, element, count)
-      await this.checkpoint(budget, count * 4, guard)
-      guard()
+      gl.bufferSubData(target, offset, values)
+      await this.checkpoint(budget, length, guard)
     }
+    guard()
     this.checkGraphics("upload a mesh buffer")
   }
 

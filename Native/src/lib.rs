@@ -4,6 +4,7 @@ use nucleation::meshing::{MeshConfig, MeshLayer, MeshOutput, ResourcePackSource}
 use schematic_mesher::BoundingBox;
 
 mod decode;
+mod meshing;
 pub use decode::{decode, DecodeFailure};
 
 pub struct Preview {
@@ -54,24 +55,74 @@ pub fn parts(mesh: &MeshOutput) -> impl Iterator<Item = (&MeshLayer, u32, u32)> 
     .filter(|(layer, _, _)| !layer.indices.is_empty())
 }
 
-pub fn load(data: &[u8], pack: &ResourcePackSource) -> Result<Preview, String> {
+/// Generate and synchronously hand off one spatial chunk at a time. The callback
+/// owns that chunk; callers must release it before accepting the next one.
+pub fn load_chunks(
+    data: &[u8],
+    pack: &ResourcePackSource,
+    mut consume: impl FnMut(Preview) -> Result<(), String>,
+    current: impl Fn() -> Result<(), String>,
+) -> Result<PreviewInfo, String> {
+    current()?;
     if data.is_empty() || data.len() > 1_024 * 1_024 * 1_024 {
         return Err("Choose a nonempty schematic smaller than 1 GiB.".into());
     }
     let schematic = decode(data).map_err(|e| match e {
         DecodeFailure::Format(m) | DecodeFailure::Limit(m) => m,
     })?;
+    current()?;
     let block_count = i64::from(schematic.total_blocks());
     if block_count == 0 || block_count > 33_554_432 {
         return Err("The schematic must contain between 1 and 33,554,432 blocks.".into());
     }
-    let block_entity_count = schematic.get_block_entities_as_list().len() as i64;
-    let mesh = schematic
-        .to_mesh(pack, &mesh_config())
-        .map_err(|e| format!("This schematic is too detailed to preview: {e}"))?;
-    // Release the decoded block volume before retaining GPU input buffers.
-    drop(schematic);
-    prepare(mesh, block_count, block_entity_count)
+    let block_entity_count = std::iter::once(&schematic.default_region)
+        .chain(schematic.other_regions.values())
+        .map(|region| region.block_entities.len() as i64)
+        .sum();
+    let mut chunks = meshing::ChunkMeshes::new(schematic, pack, &mesh_config(), 64, &current)?;
+    current()?;
+    let mut info = PreviewInfo {
+        block_count,
+        block_entity_count,
+        texture_count: 1,
+        min: [f32::INFINITY; 3],
+        max: [f32::NEG_INFINITY; 3],
+        ..PreviewInfo::default()
+    };
+    loop {
+        current()?;
+        let Some(mesh) = chunks.next() else {
+            break;
+        };
+        let mesh = mesh.map_err(|e| format!("This schematic is too detailed to preview: {e}"))?;
+        current()?;
+        if parts(&mesh).next().is_none() {
+            continue;
+        }
+        let preview = prepare(mesh, block_count, block_entity_count)?;
+        info.triangle_count = info
+            .triangle_count
+            .checked_add(preview.info.triangle_count)
+            .ok_or("The schematic has too many triangles.")?;
+        info.part_count = info
+            .part_count
+            .checked_add(preview.info.part_count)
+            .ok_or("The schematic has too many mesh parts.")?;
+        info.texture_count = info
+            .texture_count
+            .checked_add(preview.info.texture_count - 1)
+            .ok_or("The schematic has too many textures.")?;
+        for axis in 0..3 {
+            info.min[axis] = info.min[axis].min(preview.info.min[axis]);
+            info.max[axis] = info.max[axis].max(preview.info.max[axis]);
+        }
+        consume(preview)?;
+        current()?;
+    }
+    if info.part_count == 0 {
+        return Err("The schematic contains no visible geometry.".into());
+    }
+    Ok(info)
 }
 
 pub fn prepare(
@@ -96,8 +147,7 @@ pub fn prepare(
         triangle_count += (layer.indices.len() / 3) as u64;
         part_count += 1;
     }
-    // Nucleation's total_triangles/is_empty omit greedy materials. Count all
-    // parts, and derive visible bounds from vertices rather than region padding.
+    // Include greedy materials and derive visible bounds from emitted vertices.
     let bounds =
         BoundingBox::from_points(parts(&mesh).flat_map(|(p, _, _)| p.positions.iter().copied()))
             .ok_or("The schematic contains no visible geometry.")?;

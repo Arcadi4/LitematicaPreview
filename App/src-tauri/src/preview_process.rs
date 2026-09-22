@@ -6,10 +6,7 @@ use std::time::{Duration, Instant};
 
 const TOKEN_BYTES: usize = 32;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
-const MAX_ERROR_BYTES: usize = 1024 * 1024;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
-const PREVIEW: u8 = 0;
-const ERROR: u8 = 1;
 
 pub struct DecoderProcess {
     child: Child,
@@ -118,28 +115,19 @@ impl DecoderProcess {
         &mut self,
         path: &Path,
         pack_path: &Path,
-    ) -> Result<Result<Vec<u8>, String>, String> {
+        current: impl Fn() -> bool,
+    ) -> Result<Result<crate::protocol::Payload, String>, String> {
         let request = serde_json::to_vec(&(path, pack_path))
             .map_err(|e| format!("Unable to describe the decoder request: {e}"))?;
         if request.len() > MAX_REQUEST_BYTES {
             return Ok(Err("The schematic or resource path is too long.".into()));
         }
-        let result = (|| -> io::Result<Result<Vec<u8>, String>> {
+        let result = (|| {
             let stream = self.stream.as_mut().ok_or_else(|| {
                 io::Error::new(io::ErrorKind::NotConnected, "The decoder is not connected")
             })?;
             write_frame(stream, &request)?;
-            let mut status = [0];
-            stream.read_exact(&mut status)?;
-            match status[0] {
-                PREVIEW => Ok(Ok(read_frame(stream, u32::MAX as usize)?)),
-                ERROR => {
-                    let bytes = read_frame(stream, MAX_ERROR_BYTES)?;
-                    let error = String::from_utf8(bytes).map_err(invalid_data)?;
-                    Ok(Err(error))
-                }
-                _ => Err(invalid_data("The decoder returned an invalid response")),
-            }
+            crate::protocol::receive(stream, current)
         })();
         result.map_err(|error| self.failure(error))
     }
@@ -227,23 +215,8 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
             .map_err(|e| format!("Unable to read the decoder request: {e}"))?;
         let (path, pack_path): (PathBuf, PathBuf) = serde_json::from_slice(&request)
             .map_err(|e| format!("Invalid decoder request: {e}"))?;
-        let result = crate::preview::decode(&path, &pack_path, &mut pack);
-        let (status, bytes) = match &result {
-            Ok(bytes) if bytes.len() <= u32::MAX as usize => (PREVIEW, bytes.as_slice()),
-            Ok(_) => (
-                ERROR,
-                b"The preview is too large to transfer to the graphics device.".as_slice(),
-            ),
-            Err(error) if error.len() <= MAX_ERROR_BYTES => (ERROR, error.as_bytes()),
-            Err(_) => (
-                ERROR,
-                b"The decoder encountered an internal error with an oversized diagnostic."
-                    .as_slice(),
-            ),
-        };
-        stream
-            .write_all(&[status])
-            .and_then(|()| write_frame(&mut stream, bytes))
+        let result = crate::preview::decode(&path, &pack_path, &mut pack, &mut stream);
+        crate::protocol::finish(&mut stream, result)
             .map_err(|e| format!("Unable to send the decoder response: {e}"))?;
     }
 }

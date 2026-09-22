@@ -55,7 +55,7 @@ fn adjacent_core_blocks_have_no_hidden_boundary_faces_with_greedy() {
     let pack = test_pack();
     let schematic = schematic(&[(-1, 0, 0, "minecraft:stone"), (0, 0, 0, "minecraft:stone")]);
     let config = MeshConfig::new().with_greedy_meshing(true);
-    let chunks = ChunkMeshes::new(schematic, &pack, &config, 1, || Ok(())).unwrap();
+    let chunks = ChunkMeshes::new(schematic, &pack, &config, Some(1), || Ok(())).unwrap();
     let mut visible_area = 0.0;
     for chunk in chunks {
         let mesh = chunk.unwrap();
@@ -98,7 +98,7 @@ fn corner_halo_preserves_boundary_ambient_occlusion() {
         "fixture must exercise AO"
     );
     let mut actual = Vec::new();
-    for mesh in ChunkMeshes::new(schematic, &pack, &config, 1, || Ok(())).unwrap() {
+    for mesh in ChunkMeshes::new(schematic, &pack, &config, Some(1), || Ok(())).unwrap() {
         actual.extend(triangles(&mesh.unwrap()));
     }
     actual.sort_unstable();
@@ -129,7 +129,7 @@ fn liquid_diagonal_above_and_transparency_match_whole_geometry() {
     assert!(parts(&whole).any(|(_, _, alpha)| alpha == 1));
     assert!(parts(&whole).any(|(_, _, alpha)| alpha == 2));
     let mut actual = Vec::new();
-    for mesh in ChunkMeshes::new(schematic, &pack, &config, 1, || Ok(())).unwrap() {
+    for mesh in ChunkMeshes::new(schematic, &pack, &config, Some(1), || Ok(())).unwrap() {
         actual.extend(triangles(&mesh.unwrap()));
     }
     actual.sort_unstable();
@@ -151,7 +151,7 @@ fn dynamic_particles_entities_and_position_keys_keep_one_atlas_layout() {
         (256.0, 0.0, 0.0),
     ));
     let config = MeshConfig::new().with_greedy_meshing(false);
-    let chunks = ChunkMeshes::new(schematic, &pack, &config, 64, || Ok(())).unwrap();
+    let chunks = ChunkMeshes::new(schematic, &pack, &config, Some(64), || Ok(())).unwrap();
     let atlas = chunks.atlas.clone();
     for path in [
         "_particle/flame",
@@ -202,7 +202,7 @@ fn greedy_mode_keeps_cutouts_and_repeat_uvs() {
         (1, 5, 0, "minecraft:glass"),
     ]);
     let config = MeshConfig::new().with_greedy_meshing(true);
-    let mesh = ChunkMeshes::new(schematic, &pack, &config, 64, || Ok(()))
+    let mesh = ChunkMeshes::new(schematic, &pack, &config, Some(64), || Ok(()))
         .unwrap()
         .next()
         .unwrap()
@@ -232,7 +232,7 @@ fn overlapping_regions_and_colocated_entities_keep_all_geometry() {
     let config = MeshConfig::new().with_greedy_meshing(false);
     let expected = schematic.to_mesh(&pack, &config).unwrap();
     let mut actual = Vec::new();
-    for mesh in ChunkMeshes::new(schematic, &pack, &config, 1, || Ok(())).unwrap() {
+    for mesh in ChunkMeshes::new(schematic, &pack, &config, Some(1), || Ok(())).unwrap() {
         actual.extend(triangles(&mesh.unwrap()));
     }
     actual.sort_unstable();
@@ -258,7 +258,7 @@ fn halo_handles_negative_division_and_extreme_coordinate_boundaries() {
         schematic.other_regions.insert(name, region);
     }
     for size in [1, 64] {
-        let source = CompactBlocks::new(schematic.clone(), size).unwrap();
+        let source = CompactBlocks::from_schematic(schematic.clone(), Some(size)).unwrap();
         for &(coord, _) in &source.chunks {
             let (min, max) = chunk_bounds(coord, size);
             let mut expected: Vec<_> = positions
@@ -271,7 +271,7 @@ fn halo_handles_negative_division_and_extreme_coordinate_boundaries() {
                 })
                 .collect();
             let mut actual: Vec<_> = source
-                .context(coord, size)
+                .context(coord, Some(size))
                 .iter()
                 .map(|(pos, _)| (pos.x, pos.y, pos.z))
                 .collect();
@@ -309,7 +309,7 @@ fn armor_stand_pose_and_equipment_survive_native_meshing() {
         triangles(&plain.to_mesh(&pack, &config).unwrap())
     );
     let mut actual = Vec::new();
-    for mesh in ChunkMeshes::new(posed, &pack, &config, 1, || Ok(())).unwrap() {
+    for mesh in ChunkMeshes::new(posed, &pack, &config, Some(1), || Ok(())).unwrap() {
         actual.extend(triangles(&mesh.unwrap()));
     }
     actual.sort_unstable();
@@ -348,7 +348,7 @@ fn default_block_properties_select_geometry_and_explicit_properties_override() {
     );
     let config = MeshConfig::new().with_greedy_meshing(false);
     let visible_area = |schematic| {
-        ChunkMeshes::new(schematic, &pack, &config, 1, || Ok(()))
+        ChunkMeshes::new(schematic, &pack, &config, Some(1), || Ok(()))
             .unwrap()
             .map(|mesh| area(&mesh.unwrap()))
             .sum::<f64>()
@@ -384,7 +384,7 @@ fn greedy_mode_preserves_mixed_cutout_faces_and_missing_texture_pixels() {
             schematic.clone(),
             &pack,
             &MeshConfig::new().with_greedy_meshing(greedy),
-            64,
+            Some(64),
             || Ok(()),
         )
         .unwrap()
@@ -459,7 +459,7 @@ fn original_builder_keeps_static_and_dynamic_animation_metadata() {
         schematic(&[(0, 0, 0, "minecraft:stone"), (2, 0, 0, "minecraft:torch")]),
         &pack,
         &MeshConfig::new().with_greedy_meshing(false),
-        64,
+        Some(64),
         || Ok(()),
     )
     .unwrap()
@@ -486,5 +486,63 @@ fn original_builder_keeps_static_and_dynamic_animation_metadata() {
             assert_eq!(animation.frametime, 3);
             assert!(animation.interpolate);
         }
+    }
+}
+
+#[test]
+fn unseparated_mesh_preserves_full_context_materials_and_shared_atlas() {
+    let pack = test_pack();
+    let schematic = schematic(&[
+        (63, 0, 0, "minecraft:water"),
+        (64, 1, 1, "minecraft:water"),
+        (64, 0, 0, "minecraft:stone"),
+        (63, 2, 1, "minecraft:oak_leaves"),
+        (64, 3, 0, "minecraft:glass"),
+        (63, 3, 0, "minecraft:glass"),
+    ]);
+    let config = MeshConfig::new().with_greedy_meshing(false);
+    let expected = schematic.to_mesh(&pack, &config).unwrap();
+    let mut chunks = ChunkMeshes::new(schematic, &pack, &config, None, || Ok(())).unwrap();
+    let atlas = chunks.atlas.clone();
+    let actual = chunks.next().unwrap().unwrap();
+    assert!(chunks.next().is_none());
+    assert_eq!(actual.chunk_coord, None);
+    assert_eq!(triangles(&actual), triangles(&expected));
+    assert_eq!(actual.atlas.pixels, atlas.pixels);
+    assert!(parts(&actual).any(|(_, _, alpha)| alpha == 1));
+    assert!(parts(&actual).any(|(_, _, alpha)| alpha == 2));
+}
+
+#[test]
+fn unseparated_dense_culler_rejects_unrepresentable_sparse_bounds_before_allocation() {
+    let pack = test_pack();
+    let config = MeshConfig::new();
+    for positions in [
+        vec![(i32::MIN, 0, 0)],
+        vec![(0, 0, 0), (i32::MAX - 1, 0, 0)],
+        vec![
+            (-2_000_000, -2_000_000, -2_000_000),
+            (2_000_000, 2_000_000, 2_000_000),
+        ],
+    ] {
+        let mut schematic = UniversalSchematic::new("sparse".into());
+        for (index, position) in positions.into_iter().enumerate() {
+            let name = format!("region {index}");
+            let mut region = nucleation::Region::new(name.clone(), position, (1, 1, 1));
+            region.set_block(
+                position.0,
+                position.1,
+                position.2,
+                &BlockState::new("minecraft:stone"),
+            );
+            schematic.other_regions.insert(name, region);
+        }
+        let error = ChunkMeshes::new(schematic, &pack, &config, None, || Ok(()))
+            .unwrap()
+            .next()
+            .unwrap()
+            .err()
+            .unwrap();
+        assert!(error.starts_with("Culling"), "{error}");
     }
 }

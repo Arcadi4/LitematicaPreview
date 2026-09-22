@@ -139,7 +139,7 @@ fn pack(values: &[usize], bits: usize) -> Vec<i64> {
 fn litematic_continuous_packed_stream_preserves_states_at_each_bit_width() {
     // Ports the original vendor unpack regression through the real Native decoder.
     // Divisible and crossing-word widths exercise different packing boundaries.
-    for bits in 2..=12 {
+    for bits in 2..=14 {
         let palette_len = 1usize << bits;
         let palette: Vec<_> = (0..palette_len)
             .map(|index| {
@@ -177,20 +177,20 @@ fn litematic_continuous_packed_stream_preserves_states_at_each_bit_width() {
 }
 
 #[test]
-fn litematic_source_palette_limit_allows_implicit_internal_air() {
-    let mut palette: Vec<_> = (0..4096)
+fn litematic_large_source_palette_preserves_states_and_implicit_internal_air() {
+    let palette: Vec<_> = (0..8192)
         .map(|index| format!("minecraft:block_{index}"))
         .collect();
-    let root = litematic(vec![("full palette", region((1, 1, 1), &palette, &[4095]))]);
+    let root = litematic(vec![(
+        "large palette",
+        region((1, 1, 1), &palette, &[8191]),
+    )]);
     let schematic = decode(&gzip_nbt(&root)).unwrap();
     assert_eq!(
         schematic.get_block(0, 0, 0).unwrap().name,
-        "minecraft:block_4095"
+        "minecraft:block_8191"
     );
     assert_eq!(schematic.total_blocks(), 1);
-    palette.push("minecraft:one_too_many".into());
-    let root = litematic(vec![("too many states", region((1, 1, 1), &palette, &[0]))]);
-    assert!(decode(&gzip_nbt(&root)).is_err());
 }
 
 #[test]
@@ -349,7 +349,7 @@ fn litematic_regions_keep_the_first_region_default_and_all_other_blocks() {
 }
 
 #[test]
-fn java_structure_fallback_preserves_raw_and_gzip_and_rejects_oversized_size() {
+fn java_structure_fallback_preserves_raw_and_gzip_and_rejects_unaddressable_size() {
     let bytes = fixture("Structure.nbt");
     let (mut root, _) = quartz_nbt::io::read_nbt(
         &mut std::io::Cursor::new(&bytes),
@@ -364,9 +364,38 @@ fn java_structure_fallback_preserves_raw_and_gzip_and_rejects_oversized_size() {
         assert_eq!(schematic.get_block_entities_as_list().len(), 1);
         assert_eq!(schematic.default_region.entities.len(), 1);
     }
-    root.insert("size", NbtTag::IntArray(vec![4096, 4096, 4096]));
+    root.insert("size", NbtTag::IntArray(vec![i32::MAX, i32::MAX, i32::MAX]));
     assert!(matches!(
         decode(&gzip_nbt(&root)),
         Err(DecodeFailure::Limit(_))
     ));
+}
+
+#[test]
+fn litematic_accepts_long_axes_and_many_small_regions_without_content_quotas() {
+    let palette = ["minecraft:air".into(), "minecraft:stone".into()];
+    let mut values = vec![0; 4097];
+    values[4096] = 1;
+    let names: Vec<_> = (0..65).map(|index| format!("region{index}")).collect();
+    let mut regions = Vec::new();
+    for (index, name) in names.iter().enumerate() {
+        let mut entry = if index == 0 {
+            region((4097, 1, 1), &palette, &pack(&values, 2))
+        } else {
+            region((1, 1, 1), &palette, &[1])
+        };
+        entry.insert("Position", triple((0, index as i32, 0)));
+        regions.push((name.as_str(), entry));
+    }
+    let schematic = decode(&gzip_nbt(&litematic(regions))).unwrap();
+    assert_eq!(schematic.total_blocks(), 65);
+    assert_eq!(
+        schematic.get_block(4096, 0, 0).unwrap().name,
+        "minecraft:stone"
+    );
+    assert_eq!(
+        schematic.get_block(0, 64, 0).unwrap().name,
+        "minecraft:stone"
+    );
+    assert_eq!(schematic.other_regions.len(), 64);
 }

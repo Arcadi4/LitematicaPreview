@@ -67,9 +67,9 @@ const FOV = (28 * Math.PI) / 180
 const HALF_FOV_TAN = Math.tan(FOV / 2)
 const BUFFER_FORMATS = [
   { size: 3, array: Float32Array, normalized: false },
-  { size: 3, array: Float32Array, normalized: false },
+  { size: 3, array: Int8Array, normalized: true },
   { size: 2, array: Float32Array, normalized: false },
-  { size: 4, array: Float32Array, normalized: false },
+  { size: 4, array: Uint8Array, normalized: true },
   { size: 1, array: Uint32Array, normalized: false },
 ] as const
 const UPLOAD_CHUNK = 1024 * 1024
@@ -521,7 +521,7 @@ export class SchematicRenderer {
           )
           guard()
           if (!isIndex) {
-            const type = gl.FLOAT
+            const type = attribute === 1 ? gl.BYTE : attribute === 3 ? gl.UNSIGNED_BYTE : gl.FLOAT
             gl.bindVertexArray(part.vao)
             gl.bindBuffer(gl.ARRAY_BUFFER, gpu)
             gl.enableVertexAttribArray(attribute)

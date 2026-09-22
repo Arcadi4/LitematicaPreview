@@ -318,15 +318,35 @@ impl<'a, S: Read + Write> Encoder<'a, S> {
             };
             self.record(PART, &record)?;
             self.bytes(bytemuck::cast_slice(&part.positions))?;
-            self.bytes(bytemuck::cast_slice(&part.normals))?;
+            self.quantized(part.normals.iter().flatten().copied(), true)?;
             self.bytes(bytemuck::cast_slice(&part.uvs))?;
-            self.bytes(bytemuck::cast_slice(&part.colors))?;
+            self.quantized(part.colors.iter().flatten().copied(), false)?;
             self.bytes(bytemuck::cast_slice(&part.indices))?;
         }
         Ok(())
     }
 
-
+    fn quantized(&mut self, values: impl Iterator<Item = f32>, signed: bool) -> Result<(), String> {
+        let mut bytes = Vec::with_capacity(FRAME_BYTES);
+        for value in values {
+            if !value.is_finite() {
+                return Err("The mesher produced a non-finite attribute.".into());
+            }
+            bytes.push(if signed {
+                (value.clamp(-1.0, 1.0) * 127.0).round() as i8 as u8
+            } else {
+                (value.clamp(0.0, 1.0) * 255.0).round() as u8
+            });
+            if bytes.len() == FRAME_BYTES {
+                self.send(DATA, &bytes)?;
+                bytes.clear();
+            }
+        }
+        if !bytes.is_empty() {
+            self.send(DATA, &bytes)?;
+        }
+        Ok(())
+    }
 }
 
 pub fn finish(stream: &mut impl Write, result: Result<PreviewInfo, String>) -> io::Result<()> {
@@ -464,7 +484,7 @@ pub fn receive(
                     return Err(invalid("The decoder returned an invalid mesh part."));
                 }
                 let v = record.vertex_count as usize;
-                let lengths = [v * 12, v * 12, v * 8, v * 16, record.index_count as usize * 4];
+                let lengths = [v * 12, v * 3, v * 8, v * 4, record.index_count as usize * 4];
                 let mut ids = [0; 5];
                 for (i, length) in lengths.into_iter().enumerate() {
                     ids[i] = add_buffer(&mut buffers, &mut total, length)?;

@@ -173,3 +173,57 @@ fn validate_nbt(bytes: &[u8], limits: &DecodeLimits) -> Result<(), &'static str>
     scan.string()?;
     scan.payload(10, 0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quartz_nbt::{NbtList, NbtTag};
+
+    fn encode(root: &NbtCompound) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        quartz_nbt::io::write_nbt(&mut bytes, None, root, Flavor::Uncompressed).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn structural_limits_reject_before_tree_allocation() {
+        let mut root = NbtCompound::new();
+        root.insert("text", "abc");
+        let mut limits = super::super::preview_limits();
+        limits.max_nbt_string_bytes = 2;
+        assert!(binary_root(&encode(&root), &limits).is_err());
+
+        root = NbtCompound::new();
+        root.insert("list", NbtList::from(vec![NbtTag::Int(1), NbtTag::Int(2)]));
+        limits = super::super::preview_limits();
+        limits.max_nbt_nodes = 3;
+        assert!(binary_root(&encode(&root), &limits).is_err());
+        limits.max_nbt_nodes = 4;
+        assert!(binary_root(&encode(&root), &limits).is_ok());
+        limits.max_nbt_collection_items = 1;
+        assert!(binary_root(&encode(&root), &limits).is_err());
+
+        let mut child = NbtCompound::new();
+        child.insert("nested", root);
+        limits = super::super::preview_limits();
+        limits.max_nbt_depth = 1;
+        assert!(binary_root(&encode(&child), &limits).is_err());
+    }
+
+    #[test]
+    fn gzip_expansion_and_truncated_lengths_fail_recoverably() {
+        let limits = super::super::preview_limits();
+        // ByteArray claiming i32::MAX bytes, with no payload.
+        let bytes = [10, 0, 0, 7, 0, 1, b'a', 0x7f, 0xff, 0xff, 0xff];
+        assert!(binary_root(&bytes, &limits).is_err());
+        let mut root = NbtCompound::new();
+        root.insert("bytes", NbtTag::ByteArray(vec![0; 1024]));
+        let mut bytes = Vec::new();
+        quartz_nbt::io::write_nbt(&mut bytes, None, &root, Flavor::GzCompressed).unwrap();
+        let limits = DecodeLimits {
+            max_decompressed_bytes: 1024,
+            ..limits
+        };
+        assert!(gzip_root(&bytes, &limits).is_err());
+    }
+}

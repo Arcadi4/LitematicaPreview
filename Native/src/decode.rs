@@ -164,3 +164,129 @@ fn validate_with_implicit_air(
         .validate_schematic(schematic)
         .map_err(|error| error.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quartz_nbt::{NbtCompound, NbtList, NbtTag};
+
+    fn fixture(name: &str) -> Vec<u8> {
+        std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../Fixtures/Formats")
+                .join(name),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn native_dispatch_enforces_aggregate_volume_at_the_boundary() {
+        let snbt = normalize_structure_snbt(&fixture("Structure.snbt")).unwrap();
+        let cases = [
+            fixture("Classic.schematic"),
+            fixture("Sponge.schem"),
+            fixture("Bedrock.mcstructure"),
+            fixture("Snapshot.nusn"),
+            snbt,
+        ];
+        for bytes in cases {
+            let schematic = read_bounded(&bytes, &preview_limits()).unwrap();
+            let volume = std::iter::once(&schematic.default_region)
+                .chain(schematic.other_regions.values())
+                .map(|region| region.volume())
+                .sum();
+            let mut limits = DecodeLimits {
+                max_volume: volume,
+                ..preview_limits()
+            };
+            let bounded = read_bounded(&bytes, &limits).unwrap();
+            assert_eq!(bounded.total_blocks(), schematic.total_blocks());
+            limits.max_volume -= 1;
+            assert!(read_bounded(&bytes, &limits).is_err());
+        }
+    }
+
+    #[test]
+    fn litematic_preflight_counts_negative_extents_and_all_region_budgets() {
+        let mut regions = NbtCompound::new();
+        for (index, x) in [-2, 2].into_iter().enumerate() {
+            let mut size = NbtCompound::new();
+            size.insert("x", x);
+            size.insert("y", 2);
+            size.insert("z", 2);
+            let mut position = NbtCompound::new();
+            for key in ["x", "y", "z"] {
+                position.insert(key, 0);
+            }
+            let mut air = NbtCompound::new();
+            air.insert("Name", "minecraft:air");
+            let mut region = NbtCompound::new();
+            region.insert("Size", size);
+            region.insert("Position", position);
+            region.insert(
+                "BlockStatePalette",
+                NbtList::from(vec![NbtTag::Compound(air)]),
+            );
+            region.insert("BlockStates", NbtTag::LongArray(vec![0]));
+            let mut entity = NbtCompound::new();
+            entity.insert("id", "minecraft:pig");
+            entity.insert("Pos", NbtList::from(vec![NbtTag::Double(0.0); 3]));
+            region.insert("Entities", NbtList::from(vec![NbtTag::Compound(entity)]));
+            let mut chest = NbtCompound::new();
+            chest.insert("id", "minecraft:chest");
+            region.insert("TileEntities", NbtList::from(vec![NbtTag::Compound(chest)]));
+            regions.insert(format!("region{index}"), region);
+        }
+        let mut root = NbtCompound::new();
+        root.insert("Version", 6);
+        root.insert("Metadata", NbtCompound::new());
+        root.insert("Regions", regions);
+        let mut bytes = Vec::new();
+        quartz_nbt::io::write_nbt(
+            &mut bytes,
+            None,
+            &root,
+            quartz_nbt::io::Flavor::GzCompressed,
+        )
+        .unwrap();
+        let limits = DecodeLimits {
+            max_volume: 16,
+            max_regions: 2,
+            max_entities: 2,
+            max_block_entities: 2,
+            ..preview_limits()
+        };
+        let schematic = read_bounded(&bytes, &limits).unwrap();
+        assert_eq!(schematic.total_volume(), 16);
+        assert_eq!(
+            schematic.default_region.entities.len()
+                + schematic
+                    .other_regions
+                    .values()
+                    .map(|region| region.entities.len())
+                    .sum::<usize>(),
+            2
+        );
+        assert_eq!(schematic.get_block_entities_as_list().len(), 2);
+        for limits in [
+            DecodeLimits {
+                max_volume: 15,
+                ..limits.clone()
+            },
+            DecodeLimits {
+                max_regions: 1,
+                ..limits.clone()
+            },
+            DecodeLimits {
+                max_entities: 1,
+                ..limits.clone()
+            },
+            DecodeLimits {
+                max_block_entities: 1,
+                ..limits.clone()
+            },
+        ] {
+            assert!(read_bounded(&bytes, &limits).is_err());
+        }
+    }
+}

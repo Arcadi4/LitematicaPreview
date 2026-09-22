@@ -272,3 +272,344 @@ fn parse_entity(compound: &NbtCompound) -> Result<Entity, String> {
         Entity::from_nbt(compound)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nucleation::formats::schematic::from_schematic_bounded;
+    use quartz_nbt::io::{write_nbt, Flavor};
+
+    fn fixture(
+        version: i32,
+        palette: &[(&str, i32)],
+        data: &[i8],
+        size: (i16, i16, i16),
+    ) -> NbtCompound {
+        let mut root = NbtCompound::new();
+        root.insert("Version", version);
+        root.insert("Width", size.0);
+        root.insert("Height", size.1);
+        root.insert("Length", size.2);
+        let mut blocks = NbtCompound::new();
+        let mut entries = NbtCompound::new();
+        for (name, id) in palette {
+            entries.insert(*name, *id);
+        }
+        blocks.insert("Palette", entries);
+        blocks.insert(
+            if version == 2 { "BlockData" } else { "Data" },
+            data.to_vec(),
+        );
+        if version == 2 {
+            root.extend(blocks);
+        } else {
+            root.insert("Blocks", blocks);
+        }
+        root
+    }
+
+    fn encode(root: &NbtCompound) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        write_nbt(&mut bytes, None, root, Flavor::GzCompressed).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn both_layouts_and_wrappers_preserve_numeric_palette_order_and_bounds() {
+        for version in [2, 3] {
+            for wrapped in [false, true] {
+                let schem = fixture(
+                    version,
+                    &[("minecraft:stone", 0), ("minecraft:air", 1)],
+                    &[0, 1, 1, 0, 1, 0, 1, 1],
+                    (2, 2, 2),
+                );
+                let mut root = NbtCompound::new();
+                if wrapped {
+                    root.insert("Schematic", schem);
+                } else {
+                    root = schem;
+                }
+                let bytes = encode(&root);
+                let actual = read(&bytes, &DecodeLimits::default()).unwrap();
+                let expected = from_schematic_bounded(&bytes, &DecodeLimits::default()).unwrap();
+                assert_eq!(actual.default_region.count_blocks(), 3);
+                assert_eq!(actual.get_dimensions(), expected.get_dimensions());
+                for index in 0..8 {
+                    let (x, y, z) = actual.default_region.index_to_coords(index);
+                    assert_eq!(actual.get_block(x, y, z), expected.get_block(x, y, z));
+                }
+                assert_eq!(
+                    actual.default_region.get_tight_bounds(),
+                    expected.default_region.get_tight_bounds()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn multibyte_varint_maps_non_air_zero_and_equivalent_states() {
+        let mut palette: Vec<(String, i32)> = (0..=128)
+            .map(|id| (format!("example:block_{id}"), id))
+            .collect();
+        palette[0].0 = "minecraft:stone".into();
+        palette[128].0 = "minecraft:stone[]".into();
+        let borrowed: Vec<_> = palette
+            .iter()
+            .map(|(name, id)| (name.as_str(), *id))
+            .collect();
+        let bytes = encode(&fixture(3, &borrowed, &[-128, 1, 0], (2, 1, 1)));
+        let actual = read(&bytes, &DecodeLimits::default()).unwrap();
+        assert_eq!(actual.get_block(0, 0, 0), actual.get_block(1, 0, 0));
+        assert_eq!(actual.get_block(0, 0, 0).unwrap().name, "minecraft:stone");
+        assert_eq!(actual.default_region.count_blocks(), 2);
+    }
+
+    #[test]
+    fn malformed_varints_volume_and_palette_references_are_errors() {
+        let palette = [("minecraft:stone", 0)];
+        for data in [
+            vec![-128],
+            vec![-1, -1, -1, -1, 16],
+            vec![-128, -128, -128, -128, -128, 0],
+            vec![0, 0],
+            vec![1],
+        ] {
+            assert!(
+                read(
+                    &encode(&fixture(3, &palette, &data, (1, 1, 1))),
+                    &DecodeLimits::default()
+                )
+                .is_err(),
+                "{data:?}"
+            );
+        }
+        assert!(read(
+            &encode(&fixture(2, &palette, &[0], (2, 1, 1))),
+            &DecodeLimits::default()
+        )
+        .is_err());
+        let mut maximum: &[i8] = &[-1, -1, -1, -1, 15];
+        assert_eq!(read_varint(&mut maximum).unwrap(), u32::MAX);
+        assert!(maximum.is_empty());
+    }
+
+    #[test]
+    fn invalid_palette_declarations_do_not_become_air() {
+        for palette in [
+            vec![("minecraft:stone", -1)],
+            vec![("minecraft:stone", i32::MAX)],
+            vec![("minecraft:stone", 0), ("minecraft:dirt", 0)],
+        ] {
+            assert!(read(
+                &encode(&fixture(2, &palette, &[0], (1, 1, 1))),
+                &DecodeLimits::default()
+            )
+            .is_err());
+        }
+        let mut sparse = fixture(2, &[("minecraft:stone", 2)], &[1], (1, 1, 1));
+        sparse.insert("PaletteMax", 3i32);
+        assert!(read(&encode(&sparse), &DecodeLimits::default()).is_err());
+        sparse.insert("PaletteMax", i32::MAX);
+        assert!(read(&encode(&sparse), &DecodeLimits::default()).is_err());
+    }
+
+    #[test]
+    fn sparse_defined_indices_and_implicit_air_obey_palette_budget() {
+        let mut root = fixture(2, &[("minecraft:stone", 2)], &[2], (1, 1, 1));
+        root.insert("PaletteMax", 2i32);
+        let limits = DecodeLimits {
+            max_palette_entries: 3,
+            ..DecodeLimits::default()
+        };
+        let actual = read(&encode(&root), &limits).unwrap();
+        assert_eq!(actual.get_block(0, 0, 0).unwrap().name, "minecraft:stone");
+        assert_eq!(actual.default_region.count_blocks(), 1);
+        let root = fixture(3, &[("minecraft:stone", 0)], &[0], (1, 1, 1));
+        let limits = DecodeLimits {
+            max_palette_entries: 1,
+            ..DecodeLimits::default()
+        };
+        assert_eq!(
+            read(&encode(&root), &limits)
+                .unwrap()
+                .default_region
+                .count_blocks(),
+            1
+        );
+    }
+
+    #[test]
+    fn full_source_palette_without_air_preserves_every_state() {
+        let limits = DecodeLimits {
+            max_palette_entries: 4,
+            max_dimension: 4,
+            max_volume: 4,
+            ..DecodeLimits::default()
+        };
+        let count = limits.max_palette_entries;
+        let mut palette: Vec<_> = (0..count)
+            .map(|id| (format!("example:block_{id}"), id as i32))
+            .collect();
+        let data: Vec<i8> = (0..count)
+            .flat_map(|id| nucleation::formats::schematic::encode_varint(id as u32))
+            .map(|byte| byte as i8)
+            .collect();
+        let borrowed: Vec<_> = palette
+            .iter()
+            .map(|(name, id)| (name.as_str(), *id))
+            .collect();
+        let bytes = encode(&fixture(3, &borrowed, &data, (count as i16, 1, 1)));
+        let actual = read(&bytes, &limits).unwrap();
+        assert_eq!(actual.default_region.count_blocks(), count);
+        for (index, (name, _)) in palette.iter().enumerate() {
+            assert_eq!(
+                actual.get_block(index as i32, 0, 0).unwrap().name.as_str(),
+                name
+            );
+        }
+        palette.push(("example:excess".into(), count as i32));
+        let borrowed: Vec<_> = palette
+            .iter()
+            .map(|(name, id)| (name.as_str(), *id))
+            .collect();
+        let bytes = encode(&fixture(3, &borrowed, &data, (count as i16, 1, 1)));
+        assert!(read(&bytes, &limits).is_err());
+    }
+
+    #[test]
+    fn metadata_version_fallback_does_not_invent_source_version() {
+        let mut root = fixture(3, &[("minecraft:stone", 0)], &[0], (1, 1, 1));
+        let mut metadata = NbtCompound::new();
+        metadata.insert("mc_version", 3465i32);
+        root.insert("Metadata", metadata);
+        let actual = read(&encode(&root), &DecodeLimits::default()).unwrap();
+        assert_eq!(actual.metadata.mc_version, Some(3465));
+        assert_eq!(actual.metadata.source_data_version, None);
+    }
+
+    #[test]
+    fn metadata_and_entity_shapes_match_original_reader() {
+        for version in [2, 3] {
+            let mut schem = fixture(
+                version,
+                &[("minecraft:chest[facing=east]", 0)],
+                &[0],
+                (1, 1, 1),
+            );
+            schem.insert("DataVersion", 3465i32);
+            schem.insert("Offset", vec![12i32, 34, 56]);
+            let mut metadata = NbtCompound::new();
+            metadata.insert("Name", "metadata fixture");
+            metadata.insert("Author", "builder");
+            metadata.insert("Description", "preserved attribution");
+            metadata.insert("mc_version", 100i32);
+            metadata.insert("TimeCreated", 12345i64);
+            metadata.insert(
+                "NucleationProvenance",
+                r#"{"schema_version":1,"source_id":"fixture"}"#,
+            );
+            metadata.insert(
+                "NucleationDefinitions",
+                r#"{"cell":{"boxes":[{"min":[0,0,0],"max":[0,0,0]}],"metadata":{"role":"test"}}}"#,
+            );
+            metadata.insert("NucleationCellContract", r#"{"name":"cell"}"#);
+            schem.insert("Metadata", metadata);
+            let mut entity = NbtCompound::new();
+            entity.insert("Id", "minecraft:armor_stand");
+            entity.insert("Pos", NbtList::from(vec![0.5f64, 1.0, 0.25]));
+            let mut entity_data = NbtCompound::new();
+            entity_data.insert("Rotation", NbtList::from(vec![90.0f32, 0.0]));
+            entity_data.insert("Invisible", 1i8);
+            if version == 3 {
+                entity_data.insert("Id", "minecraft:pig");
+                entity_data.insert("Pos", NbtList::from(vec![99.0f64, 99.0, 99.0]));
+                entity.insert("Data", entity_data);
+            } else {
+                entity.extend(entity_data);
+            }
+            schem.insert("Entities", NbtList::from(vec![entity]));
+            let mut tile = NbtCompound::new();
+            tile.insert("Id", "minecraft:chest");
+            tile.insert("Pos", vec![0i32, 0, 0]);
+            let mut tile_data = NbtCompound::new();
+            tile_data.insert("CustomName", "contents");
+            tile_data.insert("Items", NbtList::new());
+            if version == 3 {
+                tile.insert("Data", tile_data);
+            } else {
+                tile.extend(tile_data);
+            }
+            let tiles = NbtList::from(vec![tile]);
+            if version == 2 {
+                schem.insert("BlockEntities", tiles);
+            } else {
+                schem
+                    .get_mut::<_, &mut NbtCompound>("Blocks")
+                    .unwrap()
+                    .insert("BlockEntities", tiles);
+            }
+            let mut root = NbtCompound::new();
+            let mut test = NbtCompound::new();
+            test.insert("Format", "future-format");
+            test.insert("Spec", "{\"name\":\"embedded\"}");
+            root.insert("NucleationTest", test);
+            root.insert("Schematic", schem);
+            let bytes = encode(&root);
+            let actual = read(&bytes, &DecodeLimits::default()).unwrap();
+            let expected = from_schematic_bounded(&bytes, &DecodeLimits::default()).unwrap();
+            assert_eq!(actual.metadata, expected.metadata);
+            assert_eq!(actual.metadata.mc_version, Some(3465));
+            assert_eq!(actual.metadata.source_data_version, Some(3465));
+            assert_eq!(
+                actual.metadata.provenance.as_ref().unwrap().source_id,
+                "fixture"
+            );
+            assert_eq!(
+                actual.metadata.embedded_test.as_deref(),
+                Some("{\"name\":\"embedded\"}")
+            );
+            assert_eq!(
+                serde_json::to_value(&actual.definition_regions).unwrap(),
+                serde_json::to_value(&expected.definition_regions).unwrap()
+            );
+            assert_eq!(
+                actual.default_region.entities,
+                expected.default_region.entities
+            );
+            assert_eq!(actual.default_region.entities[0].position, (0.5, 1.0, 0.25));
+            assert_eq!(
+                actual.default_region.entities[0].id,
+                "minecraft:armor_stand"
+            );
+            assert_eq!(
+                actual.default_region.block_entities.get(&(0, 0, 0)),
+                expected.default_region.block_entities.get(&(0, 0, 0))
+            );
+        }
+    }
+
+    #[test]
+    fn declared_dimensions_and_entity_counts_are_bounded() {
+        let base = fixture(2, &[("minecraft:stone", 0)], &[0], (1, 1, 1));
+        let limits = DecodeLimits {
+            max_dimension: 1,
+            max_entities: 0,
+            max_block_entities: 0,
+            ..DecodeLimits::default()
+        };
+        let mut oversized = base.clone();
+        oversized.insert("Width", i16::MAX);
+        assert!(read(&encode(&oversized), &limits).is_err());
+        for key in ["Entities", "BlockEntities"] {
+            let mut root = base.clone();
+            root.insert(key, NbtList::from(vec![NbtCompound::new()]));
+            assert!(read(&encode(&root), &limits).is_err());
+        }
+        let mut root = base;
+        let mut tile = NbtCompound::new();
+        tile.insert("Pos", vec![0i32, 0]);
+        root.insert("BlockEntities", NbtList::from(vec![tile]));
+        assert!(read(&encode(&root), &DecodeLimits::default()).is_err());
+    }
+}

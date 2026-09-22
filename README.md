@@ -1,219 +1,87 @@
 <div align="center">
-  <img src="Assets/icon.png" alt="Litematica Preview icon" width="160" />
+  <img src="Assets/icon.png" alt="Litematica Preview icon" width="200"/>
   <h1>Litematica Preview</h1>
-  <p><strong>Fast, offline Minecraft schematic viewer for Windows</strong></p>
-
-  [![CI](https://img.shields.io/github/actions/workflow/status/Arcadi4/LitematicaPreview/ci.yml?style=flat-square&label=CI)](https://github.com/Arcadi4/LitematicaPreview/actions)
-  [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-0078d4?style=flat-square&logo=windows)](https://github.com/Arcadi4/LitematicaPreview)
-  [![Tauri 2](https://img.shields.io/badge/Tauri-v2-24c8db?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
-  [![Fluent UI](https://img.shields.io/badge/Fluent%20UI-React%20v9-0078d4?style=flat-square&logo=react)](https://react.fluentui.dev)
-  [![Nucleation](https://img.shields.io/badge/Powered%20by-Nucleation-ff8c00?style=flat-square)](https://github.com/Schem-at/Nucleation)
-
-  [Features](#features) • [Installation](#installation) • [Supported Formats](#supported-formats) • [Controls](#controls) • [Development](#development)
+  <p><strong>Offline Minecraft schematic viewer for Windows</strong></p>
 </div>
 
-Litematica Preview is a native Windows desktop application for inspecting and viewing Minecraft schematics and structures in real-time 3D. Adapted from [LitematicaQL](https://github.com/Arcadi4/LitematicaQL) for macOS, it uses [Nucleation](https://github.com/Schem-at/Nucleation) and application-owned bounded readers to decode builds locally, with schematic-mesher generating their geometry. Files are never uploaded to external services.
+Litematica Preview is a Windows desktop viewer for Minecraft schematics and structures, adapted from [LitematicaQL](https://github.com/Arcadi4/LitematicaQL). It previews `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, and `.nusn` files locally in 3D.
 
-The app pairs a Rust host with Fluent UI React v9 and an on-demand WebGL 2 renderer, delivering a responsive desktop experience with native Windows shell integration.
+## Install
 
-## Features
+Download the latest release from the [release page](https://github.com/Arcadi4/LitematicaPreview/releases):
 
-- **Offline & Private**: Decoding and meshing run entirely locally; schematic data is never uploaded.
-- **Seven Format Support**: Inspect `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, and `.nusn` files.
-- **Accurate Material Meshing**: Opaque, cutout, and transparent geometry are rendered in dedicated passes with repeated greedy meshing and high-fidelity textures.
-- **Tight Geometry Framing**: Initial camera framing and **Fit** calculate tight bounding geometry rather than empty chunk boundaries.
-- **On-Demand Rendering**: The WebGL 2 engine redraws only on user input, resize, or file loads instead of running a perpetual animation loop.
-- **Bounded Transfers**: Spatial chunks are generated with complete neighbor context, sent in acknowledged frames, and uploaded to WebGL through binary reads of at most 1 MiB. Normals and colors use normalized 8-bit attributes.
-- **Windows Integration**: Per-user file association management, Fluent UI v9 controls, light/dark/system themes, and drag-and-drop support.
+- **Installer (`LitematicaPreview-<version>-win-x64-setup.exe`)**: Installs per-user without administrator privileges and registers selected file associations.
+- **Portable (`LitematicaPreview-<version>-win-x64-portable.zip`)**: Extract the archive and run `LitematicaPreview.exe`. Keep `Assets`, `Demos`, and `Licenses` next to the executable.
 
-File-open failures and recoverable internal errors display their diagnostic in an
-error dialog and return to the home screen. Decoding runs in an isolated worker:
-even a native decoder crash does not close the viewer, and the next open starts
-a fresh worker. On Windows the worker memory limit defaults to 2 GiB. Open
-**Preview settings** from the application menu to select 2–8 GiB or disable the
-limit. Changing this setting replaces the worker on the next file open; the
-resource pack is cached while the worker remains healthy.
-
-Litematic previews use two fixed-buffer gzip/NBT passes: one collects necessary
-region/palette/entity metadata while skipping packed arrays; the next unpacks
-block states directly into the compact occupied-position index. Neither pass
-retains the full decompressed document, packed arrays or a dense region volume.
-Field order, gzip checksums, malformed-data checks and cancellation are preserved.
-The compressed input and the complete compact index still remain in memory;
-this is not end-to-end streaming into the GPU.
-Other formats retain their bounded dense readers; the explicit Native `decode`
-API also returns a dense schematic for callers that need it. The preview never
-falls back to dense Litematic decoding after a recognized malformed file.
-Chunk separation defaults to 64 blocks per axis; Preview settings can
-select 16, 32, 64, 128 or 256, or disable separation for a single whole-model mesh.
-Settings are saved locally and apply to the next file open, not an active load.
-Chunked mode retains compact neighbor data and releases each generated mesh. The
-host stores a segmented upload payload and releases it after upload or cancellation;
-the WebView uploads bounded segments directly to GPU buffers.
-
-There are no application preview quotas for file size, model volume, block count
-or total upload size. Malformed-data, recursion, integer/addressability and GPU
-capability checks remain. The optional memory cap applies only to the decoder,
-not combined host, WebView2 and GPU memory. Disabling the cap can exhaust system
-memory; disabling chunk separation increases peak memory and cancellation latency.
-
-## Installation
-
-### Requirements
-
-- Windows 10 or 11 (x64)
-- A graphics driver with WebGL 2 support
-- [Microsoft Edge WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
+Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (pre-installed on Windows 11 and current Windows 10 builds; the setup installer downloads it automatically if missing).
 
 > [!NOTE]
-> WebView2 is pre-installed on Windows 11 and recent Windows 10 builds. Neither .NET nor Node.js is required at runtime. Once WebView2 is present, previewing works completely offline.
+> To change file associations after installation, open the top-right menu and select **Set as default app…** or **Remove file associations**. Portable copies can also register or unregister from PowerShell with `.\LitematicaPreview.exe --register` and `.\LitematicaPreview.exe --unregister`.
 
-### Options
+## Usage & Controls
 
-- **Installer (`LitematicaPreview-<version>-win-x64-setup.exe`)**: Download the setup executable from [Releases](https://github.com/Arcadi4/LitematicaPreview/releases). Installs per-user without requiring administrator privileges. If WebView2 is missing, setup automatically downloads and installs Microsoft's bootstrapper. After Welcome, the file-associations page lets you choose individual extensions; registration and all supported extensions are checked by default.
-- **Portable Package (`LitematicaPreview-<version>-win-x64-portable.zip`)**: Download and extract the portable archive and run `LitematicaPreview.exe`. Keep `Assets`, `Demos`, and `Licenses` alongside the executable. Extracting or running the portable package does not register file associations.
-
-## Usage
-
-Open a schematic in any of the following ways:
-
-- Click **Open** (or press `Ctrl+O`) to choose a file.
-- Drag and drop a supported file directly into the window.
-- Select any of the bundled sample builds on the welcome screen.
-- Launch from the command line:
+Open a schematic by double-clicking an associated file in Explorer, dragging a file into the window, pressing `Ctrl+O`, or passing a file path on the command line:
 
 ```powershell
 .\LitematicaPreview.exe "C:\Schematics\Cottage.litematic"
 ```
 
-### File Associations
+| Action | Input |
+| --- | --- |
+| Orbit camera | Left-click + drag, or Arrow keys |
+| Pan camera | Right-click / Middle-click + drag, or `Shift` + Arrow keys |
+| Zoom | Scroll wheel, `+` / `-`, or toolbar buttons |
+| Fit to screen | Click **Fit**, or press `F` / `Home` |
+| Toggle ground grid | Click **Ground grid** in the toolbar |
+| Cancel load | Click **Cancel** or press `Esc` |
 
-The application can register as a Windows handler for supported schematic formats. Choosing the default handler remains under Windows' control:
-
-- **During setup**: The file-associations page follows Welcome. Registration and all supported extensions start checked; uncheck registration to continue without it, or select only the extensions you want. Registration requires at least one selected extension. The separate checkbox to open Windows Default Apps settings starts unchecked. Silent setup never registers formats or opens Settings. Reinstalling replaces this copy's registered selection; leaving registration disabled removes registrations owned by this copy.
-- **From the app**: Open the menu and select **Set as default app…** to register and open Windows Default Apps settings. Select **Remove file associations** to unregister.
-- **From the command line** (convenient for portable copies):
-
-```powershell
-# Register all supported file associations under HKCU
-.\LitematicaPreview.exe --register
-
-# Replace this copy's registered selection with these extensions
-.\LitematicaPreview.exe --register-extensions ".litematic,.schem"
-
-# Open Windows Default Apps settings without changing registration
-.\LitematicaPreview.exe --default-apps
-
-# Remove file associations registered by this copy
-.\LitematicaPreview.exe --unregister
-```
-
-> [!IMPORTANT]
-> Registrations are written strictly to the current user's registry hive (`HKCU`). The app never overwrites Windows `UserChoice`; choose defaults in Windows Settings or the **Open with** dialog. Removing registrations only removes entries owned by this executable, preserving another installed or portable copy's registrations.
+For large builds, open **Preview settings** from the top-right menu to adjust the decoder memory limit (2–8 GiB or unlimited) and chunk separation size.
 
 ## Supported Formats
 
-| Extension | Format | Description |
-| --- | --- | --- |
-| `.litematic` | Litematica | Fabric / Litematica mod schematic |
-| `.schem` | Sponge Schematic | Sponge schematic v2 and v3 (WorldEdit modern) |
-| `.schematic` | MCEdit Schematic | Classic legacy schematic format (Minecraft 1.12 and earlier) |
-| `.nbt` | Java Structure Block | Vanilla Java Edition structure NBT |
-| `.snbt` | Structure SNBT | Text-based SNBT structure (brace and bracket block states) |
-| `.mcstructure` | Bedrock Structure | Minecraft Bedrock Edition structure export |
-| `.nusn` | Nucleation Snapshot | Nucleation native binary snapshot |
-
-## Controls
-
-| Action | Input |
+| Extension | File format |
 | --- | --- |
-| **Open schematic** | Click **Open** or press `Ctrl+O` |
-| **Orbit camera** | Left-click and drag, or Arrow keys (with preview focused) |
-| **Pan camera** | Right-click / Middle-click and drag, or `Shift` + Arrow keys |
-| **Zoom** | Mouse scroll wheel, `+` / `-`, or Zoom buttons |
-| **Fit geometry** | Click **Fit**, or press `F` / `Home` |
-| **Toggle ground grid** | Click **Ground grid** in the toolbar |
-| **Return to home** | Click **Home** in the toolbar |
-| **Cancel load** | Click **Cancel** or press `Esc` |
-
-> [!TIP]
-> The top-right menu provides quick access to **Controls and shortcuts**, appearance settings (System / Light / Dark), and license notices.
+| `.litematic` | Litematica |
+| `.schem` | Sponge schematic |
+| `.schematic` | MCEdit |
+| `.nbt` | Java structure block |
+| `.snbt` | Structure SNBT, brace or bracket block states |
+| `.mcstructure` | Bedrock structure |
+| `.nusn` | Nucleation snapshot |
 
 ## Development
 
-### Prerequisites
-
-- [Node.js 24 LTS](https://nodejs.org/) and pnpm 12.5.1
-- Current stable [Rust](https://www.rust-lang.org/) toolchain with the `x86_64-pc-windows-msvc` target installed
-- Visual Studio 2022 Build Tools with **Desktop development with C++**, x64 MSVC tools, and Windows SDK
-- Microsoft Edge WebView2 Evergreen Runtime
-
-Nucleation `0.10.14` and schematic-mesher `0.2.0` are pinned to their unmodified
-crates.io releases. No dependency patch or Vendor directory is required.
-Application-owned bounded readers, compact chunk scheduling, neighbor context,
-dynamic atlas discovery and mesh ownership adapters live in `Native/src/` and
-use the dependencies' public APIs. A first build needs registry access or a
-populated Cargo cache; offline viewing does not require a network connection.
-
-### Build from Source
-
-Run the PowerShell build script from the repository root:
+Run the desktop app in development mode:
 
 ```powershell
-# Add the MSVC Rust target if not already installed
-rustup target add x86_64-pc-windows-msvc
-
-# Build the setup executable and portable ZIP; retain artifacts/win-x64/
-./scripts/build.ps1
-
-# Automated build: suppress the optional final folder-opening prompt
-./scripts/build.ps1 -NonInteractive
+pnpm --prefix App install --frozen-lockfile
+pnpm --prefix App exec tauri dev
 ```
 
-Every build creates the following outputs using the version in `App/src-tauri/tauri.conf.json`:
-
-- `artifacts/LitematicaPreview-<version>-win-x64-setup.exe`
-- `artifacts/LitematicaPreview-<version>-win-x64-portable.zip`, containing `LitematicaPreview.exe`, `Assets`, `Demos`, and `Licenses` at the archive root
-- `artifacts/win-x64/`, the complete portable staging directory, ready to run
-- `artifacts/logs/build-<timestamp>.log`, the full build transcript, including compiler and bundler output
-
-The script prints numbered stages, elapsed time, absolute package paths, file sizes, and installation guidance. Failures identify the stage and log path. An interactive terminal may offer to open the artifacts folder when the build completes; CI, redirected input/output, and `-NonInteractive` runs never prompt. Existing `-Installer` commands remain supported and produce the same two packages. GitHub workflows upload both packages and the build logs; releases also include SHA-256 checksums.
-
-### Development Commands
-
-Run the full desktop app with hot-reloading:
+Run frontend and Rust checks:
 
 ```powershell
-pnpm --dir App install --frozen-lockfile
-pnpm --dir App run tauri dev
-```
-
-Run frontend-only development:
-
-```powershell
-pnpm --dir App run dev
-pnpm --dir App run build
-```
-
-Run test suites and code validation:
-
-```powershell
-# Native decoder and mesher tests
+pnpm --prefix App run build
 cargo test --manifest-path Native/Cargo.toml --release --locked
-
-# Host compile and unit tests
-pnpm --dir App run build
-cargo check --manifest-path App/src-tauri/Cargo.toml --all-targets --locked
 cargo test --manifest-path App/src-tauri/Cargo.toml --release --locked
-
-# Code formatting checks
-cargo fmt --manifest-path Native/Cargo.toml -- --check
-cargo fmt --manifest-path App/src-tauri/Cargo.toml -- --check
 ```
+
+### Build
+
+- Node.js 24 LTS and pnpm
+- Rust stable toolchain (`x86_64-pc-windows-msvc`)
+- Visual Studio C++ Build Tools (Desktop development with C++, x64 MSVC, Windows SDK)
+
+```powershell
+git clone https://github.com/Arcadi4/LitematicaPreview.git
+cd LitematicaPreview
+
+rustup target add x86_64-pc-windows-msvc
+./scripts/build.ps1
+```
+
+Build outputs (`*-setup.exe`, `*-portable.zip`, and the runnable `win-x64/` directory) are written to `artifacts/`.
 
 ## Acknowledgements
 
-- [LitematicaQL](https://github.com/Arcadi4/LitematicaQL): The macOS Quick Look previewer this desktop application is adapted from.
-- [Nucleation](https://github.com/Schem-at/Nucleation) by [@Nano112](https://github.com/Nano112): Powers the schematic decoding and meshing pipeline.
-- [Tauri](https://tauri.app/): Desktop application framework.
-- [Fluent UI React](https://react.fluentui.dev/): Windows Fluent Design system components.
+Great thanks to [@Nano112](https://github.com/Nano112)'s project [Nucleation](https://github.com/Schem-at/Nucleation) for powering the parsing and meshing pipeline, and to [LitematicaQL](https://github.com/Arcadi4/LitematicaQL) for the original macOS implementation.

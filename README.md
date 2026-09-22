@@ -29,17 +29,33 @@ The app pairs a Rust host with Fluent UI React v9 and an on-demand WebGL 2 rende
 File-open failures and recoverable internal errors display their diagnostic in an
 error dialog and return to the home screen. Decoding runs in an isolated worker:
 even a native decoder crash does not close the viewer, and the next open starts
-a fresh worker. On Windows the worker has a 2 GiB memory limit. Extremely detailed
-schematics can exceed this limit and cannot be previewed. The resource pack is
-cached while the worker remains healthy.
+a fresh worker. On Windows the worker memory limit defaults to 2 GiB. Open
+**Preview settings** from the application menu to select 2–8 GiB or disable the
+limit. Changing this setting replaces the worker on the next file open; the
+resource pack is cached while the worker remains healthy.
 
-Native owns Litematic and Sponge readers that fill each region's final block array
-directly. It retains compact palette-indexed chunk data for neighbor queries while
-generating and releasing one mesh chunk at a time. The host stores one segmented
-upload payload, then releases it after upload or cancellation. The WebView uploads
-each bounded segment directly to GPU buffers without assembling a complete model
-ArrayBuffer. The 2 GiB limit applies to the decoder, not the combined host,
-WebView2 and GPU memory.
+Litematic previews use two fixed-buffer gzip/NBT passes: one collects necessary
+region/palette/entity metadata while skipping packed arrays; the next unpacks
+block states directly into the compact occupied-position index. Neither pass
+retains the full decompressed document, packed arrays or a dense region volume.
+Field order, gzip checksums, malformed-data checks and cancellation are preserved.
+The compressed input and the complete compact index still remain in memory;
+this is not end-to-end streaming into the GPU.
+Other formats retain their bounded dense readers; the explicit Native `decode`
+API also returns a dense schematic for callers that need it. The preview never
+falls back to dense Litematic decoding after a recognized malformed file.
+Chunk separation defaults to 64 blocks per axis; Preview settings can
+select 16, 32, 64, 128 or 256, or disable separation for a single whole-model mesh.
+Settings are saved locally and apply to the next file open, not an active load.
+Chunked mode retains compact neighbor data and releases each generated mesh. The
+host stores a segmented upload payload and releases it after upload or cancellation;
+the WebView uploads bounded segments directly to GPU buffers.
+
+There are no application preview quotas for file size, model volume, block count
+or total upload size. Malformed-data, recursion, integer/addressability and GPU
+capability checks remain. The optional memory cap applies only to the decoder,
+not combined host, WebView2 and GPU memory. Disabling the cap can exhaust system
+memory; disabling chunk separation increases peak memory and cancellation latency.
 
 ## Installation
 

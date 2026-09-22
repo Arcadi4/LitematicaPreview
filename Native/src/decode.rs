@@ -1,8 +1,16 @@
 use nucleation::formats::limits::DecodeLimits;
-use nucleation::formats::manager::get_manager;
+use nucleation::formats::{
+    classic_schematic, manager::SchematicImporter, mcstructure, snapshot, structure_snbt, world,
+};
 use nucleation::UniversalSchematic;
 use regex::Regex;
 
+#[path = "bounded_nbt.rs"]
+mod bounded_nbt;
+#[path = "litematic.rs"]
+mod litematic;
+#[path = "schematic.rs"]
+mod schematic;
 #[path = "structure_nbt.rs"]
 mod structure_nbt;
 
@@ -11,8 +19,11 @@ const MAX_INPUT_BYTES: usize = 1_024 * 1_024 * 1_024;
 // Inflated NBT bytes Nucleation may allocate while decoding.
 const MAX_DECOMPRESSED_BYTES: usize = 1_024 * 1_024 * 1_024;
 const MAX_AXIS_LENGTH: usize = 4_096;
-// Cells Nucleation may decode per schematic; mirrors the renderer budget.
-const MAX_VOLUME: usize = 536_870_912;
+// One GiB for all dense usize Region indices leaves room in the 2 GiB worker
+// for the independently bounded input/NBT, chunk index, resources and mesh.
+// On x64 the 134,217,728-cell ceiling admits the 95,722,550-cell target.
+const MAX_DENSE_INDEX_BYTES: usize = 1_024 * 1_024 * 1_024;
+const MAX_VOLUME: usize = MAX_DENSE_INDEX_BYTES / std::mem::size_of::<usize>();
 const MAX_REGIONS: usize = 64;
 const MAX_PALETTE_ENTRIES: usize = 4_096;
 const MAX_ENTITIES: usize = 100_000;
@@ -79,31 +90,77 @@ pub enum DecodeFailure {
 // Keep the bounded reader and two required compatibility fallbacks. The old
 // diagnostic retry with relaxed limits did extra work only to refine an error.
 pub fn decode(bytes: &[u8]) -> Result<UniversalSchematic, DecodeFailure> {
-    preview_limits()
+    let limits = preview_limits();
+    limits
         .check_input(bytes)
-        .map_err(|e| DecodeFailure::Limit(e.to_string()))?;
-    let manager = get_manager();
-    let guard = manager
-        .lock()
-        .map_err(|_| DecodeFailure::Format("the format registry is unavailable".to_string()))?;
+        .map_err(|error| DecodeFailure::Limit(error.to_string()))?;
 
-    if let Ok((_, schematic)) = guard.read_bounded_with_format(bytes, &preview_limits()) {
+    if let Ok(schematic) = read_bounded(bytes, &limits) {
         return Ok(schematic);
     }
 
-    // A readable document that only trips on Nucleation's brace block-state
-    // spelling gets one normalized retry.
+    // Retry the existing brace-state compatibility spelling only once.
     if let Some(normalized) = normalize_structure_snbt(bytes) {
-        if let Ok((_, schematic)) = guard.read_bounded_with_format(&normalized, &preview_limits()) {
+        if let Ok(schematic) = read_bounded(&normalized, &limits) {
             return Ok(schematic);
         }
     }
-
-    // The binary fallback parses once, including bounded decompression.
-    if let Some(result) = structure_nbt::try_load(bytes) {
+    if let Some(result) = structure_nbt::try_load(bytes, &limits) {
         return result;
     }
     Err(DecodeFailure::Format(
         "This file is not a readable Minecraft schematic, or it exceeds the preview limits.".into(),
     ))
+}
+
+fn read_bounded(bytes: &[u8], limits: &DecodeLimits) -> Result<UniversalSchematic, String> {
+    limits
+        .check_input(bytes)
+        .map_err(|error| error.to_string())?;
+    // Preserve registry precedence and retain the first successful decode.
+    // A failed parse continues probing, just as the original bounded detector.
+    if let Ok(schematic) = litematic::read(bytes, limits) {
+        return Ok(schematic);
+    }
+    if let Ok(schematic) = schematic::read(bytes, limits) {
+        return Ok(schematic);
+    }
+    if let Ok(schematic) = mcstructure::from_mcstructure_bounded(bytes, limits) {
+        return Ok(schematic);
+    }
+    // Header-detected formats keep their terminal read-error semantics.
+    if snapshot::SnapshotFormat.detect_bounded(bytes, limits) {
+        return snapshot::from_snapshot_bounded(bytes, limits).map_err(|error| error.to_string());
+    }
+    if let Ok(schematic) = structure_snbt::from_structure_snbt_bounded(bytes, limits) {
+        return Ok(schematic);
+    }
+    if let Ok(schematic) = classic_schematic::from_classic_schematic_bounded(bytes, limits) {
+        return Ok(schematic);
+    }
+    if world::McaFormat.detect_bounded(bytes, limits) {
+        return world::McaFormat
+            .read_bounded(bytes, limits)
+            .map_err(|error| error.to_string());
+    }
+    if world::WorldZipFormat.detect_bounded(bytes, limits) {
+        return world::WorldZipFormat
+            .read_bounded(bytes, limits)
+            .map_err(|error| error.to_string());
+    }
+    Err("Unknown or unsupported schematic format".into())
+}
+
+// Native readers enforce the exact source palette cap before constructing a
+// Region. Its public constructor adds one ordinary-air entry even when the
+// source contains no air; that implementation detail must not reject the file.
+fn validate_with_implicit_air(
+    schematic: &UniversalSchematic,
+    limits: &DecodeLimits,
+) -> Result<(), String> {
+    let mut internal_limits = limits.clone();
+    internal_limits.max_palette_entries = limits.max_palette_entries.saturating_add(1);
+    internal_limits
+        .validate_schematic(schematic)
+        .map_err(|error| error.to_string())
 }

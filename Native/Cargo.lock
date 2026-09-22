@@ -597,7 +597,9 @@ dependencies = [
  "nucleation",
  "quartz_nbt",
  "regex",
+ "rustc-hash",
  "schematic-mesher",
+ "serde_json",
 ]
 
 [[package]]

@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [ValidateRange(100, 5000)]
-    [int]$IntervalMs = 1000,
+    [int]$IntervalMs = 200,
 
     [string]$ProcessName = 'LitematicaPreview',
 

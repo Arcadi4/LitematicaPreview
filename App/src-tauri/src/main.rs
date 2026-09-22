@@ -79,8 +79,10 @@ async fn choose_file(app: AppHandle, window: WebviewWindow) -> Result<Option<Str
 async fn load_preview(
     path: String,
     request_id: u64,
+    options: preview::LoadOptions,
     state: State<'_, HostState>,
 ) -> Result<protocol::Metadata, String> {
+    let options = options.validate()?;
     let worker = Arc::clone(&state.worker);
     worker.advance(request_id);
     worker.ensure_current(request_id)?;
@@ -103,7 +105,7 @@ async fn load_preview(
     tauri::async_runtime::spawn_blocking(move || {
         worker.ensure_current(request_id)?;
         let pack_path = resources.pack()?;
-        let metadata = worker.load(&path, &pack_path, request_id)?;
+        let metadata = worker.load(&path, &pack_path, request_id, options)?;
         worker.ensure_current(request_id)?;
         Ok(metadata)
     })

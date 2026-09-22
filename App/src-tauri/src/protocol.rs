@@ -6,8 +6,6 @@ use litematica_preview_native::{parts, Preview, PreviewInfo};
 use serde::{Deserialize, Serialize};
 
 pub const FRAME_BYTES: usize = 1024 * 1024;
-const MAX_PAYLOAD_BYTES: usize = 2 * 1024 * 1024 * 1024;
-const MAX_RECORDS: usize = 100_000;
 const END: u8 = 0;
 const ERROR: u8 = 1;
 const TEXTURE: u8 = 2;
@@ -143,9 +141,21 @@ impl Payload {
                 return Err(io::Error::new(io::ErrorKind::Interrupted, "Cancelled"));
             }
             let key = (part.texture_index, part.alpha_mode);
-            let group = if let Some(&index) = groups.get(&key) {
+            let existing = groups.get(&key).copied().filter(|&index| {
+                let target: &PartMetadata = &merged[index];
+                target
+                    .vertex_count
+                    .checked_add(part.vertex_count)
+                    .is_some_and(|count| count <= i32::MAX as u32)
+                    && target
+                        .index_count
+                        .checked_add(part.index_count)
+                        .is_some_and(|count| count <= i32::MAX as u32)
+            });
+            let group = if let Some(index) = existing {
                 index
             } else {
+                // Keep GPU-addressable draw batches rather than limiting the model.
                 let index = merged.len();
                 let base = buffers.len();
                 buffers.extend((0..5).map(|_| Buffer::default()));
@@ -184,10 +194,12 @@ impl Payload {
                 }
                 let destination = &mut buffers[target.buffers[attribute]];
                 let base = destination.length;
+                destination.length = base
+                    .checked_add(buffer.length)
+                    .ok_or_else(|| invalid(TOO_LARGE))?;
                 destination
                     .ends
                     .extend(buffer.ends.into_iter().map(|end| base + end));
-                destination.length += buffer.length;
                 destination.segments.extend(buffer.segments);
             }
         }
@@ -284,11 +296,9 @@ impl<'a, S: Read + Write> Encoder<'a, S> {
                 && record.repeat == repeat
                 && prior == pixels
         }) {
-            return Ok(index as u32);
+            return u32::try_from(index).map_err(|_| TOO_LARGE.into());
         }
-        if self.textures.len() >= MAX_RECORDS {
-            return Err(TOO_LARGE.into());
-        }
+        let index = u32::try_from(self.textures.len()).map_err(|_| TOO_LARGE)?;
         let record = TextureRecord {
             width,
             height,
@@ -297,7 +307,6 @@ impl<'a, S: Read + Write> Encoder<'a, S> {
         };
         self.record(TEXTURE, &record)?;
         self.bytes(pixels)?;
-        let index = self.textures.len() as u32;
         self.textures.push((key, record, pixels.to_vec()));
         Ok(index)
     }
@@ -408,10 +417,12 @@ pub fn receive(
             }
             let summary: Summary =
                 serde_json::from_slice(&bytes).map_err(|e| invalid(e.to_string()))?;
-            let counted: u64 = parts
+            let counted = parts
                 .iter()
-                .map(|p: &PartMetadata| u64::from(p.index_count / 3))
-                .sum();
+                .try_fold(0u64, |total, p: &PartMetadata| {
+                    total.checked_add(u64::from(p.index_count / 3))
+                })
+                .ok_or_else(|| invalid(TOO_LARGE))?;
             if summary.block_count <= 0
                 || summary.block_entity_count < 0
                 || counted == 0
@@ -452,11 +463,7 @@ pub fn receive(
                 let size = (record.width as usize)
                     .checked_mul(record.height as usize)
                     .and_then(|n| n.checked_mul(4));
-                if record.width == 0
-                    || record.height == 0
-                    || size != Some(record.byte_length)
-                    || textures.len() >= MAX_RECORDS
-                {
+                if record.width == 0 || record.height == 0 || size != Some(record.byte_length) {
                     return Err(invalid("The decoder returned an invalid texture."));
                 }
                 let id = add_buffer(&mut buffers, &mut total, record.byte_length)?;
@@ -479,14 +486,20 @@ pub fn receive(
                     || record.index_count % 3 != 0
                     || record.texture_index as usize >= textures.len()
                     || record.alpha_mode > 2
-                    || parts.len() >= MAX_RECORDS
                 {
                     return Err(invalid("The decoder returned an invalid mesh part."));
                 }
                 let v = record.vertex_count as usize;
-                let lengths = [v * 12, v * 3, v * 8, v * 4, record.index_count as usize * 4];
+                let lengths = [
+                    v.checked_mul(12),
+                    v.checked_mul(3),
+                    v.checked_mul(8),
+                    v.checked_mul(4),
+                    (record.index_count as usize).checked_mul(4),
+                ];
                 let mut ids = [0; 5];
                 for (i, length) in lengths.into_iter().enumerate() {
+                    let length = length.ok_or_else(|| invalid(TOO_LARGE))?;
                     ids[i] = add_buffer(&mut buffers, &mut total, length)?;
                     pending.push_back((
                         ids[i],
@@ -510,8 +523,12 @@ pub fn receive(
                     .front()
                     .ok_or_else(|| invalid("Unexpected preview buffer."))?;
                 let buffer = &mut buffers[id];
-                let received = buffer.segments.len() * FRAME_BYTES;
-                let expected = (buffer.length - received).min(FRAME_BYTES);
+                let received = buffer.ends.last().copied().unwrap_or(0);
+                let expected = buffer
+                    .length
+                    .checked_sub(received)
+                    .ok_or_else(|| invalid("The decoder buffer is oversized."))?
+                    .min(FRAME_BYTES);
                 if bytes.len() != expected {
                     return Err(invalid("The decoder buffer is truncated or oversized."));
                 }
@@ -539,15 +556,14 @@ pub fn receive(
 fn add_buffer(buffers: &mut Vec<Buffer>, total: &mut usize, length: usize) -> io::Result<usize> {
     *total = total
         .checked_add(length)
-        .filter(|n| *n <= MAX_PAYLOAD_BYTES)
         .ok_or_else(|| invalid(TOO_LARGE))?;
     if length == 0 {
         return Err(invalid("The decoder returned an empty buffer."));
     }
     let id = buffers.len();
     buffers.push(Buffer {
-        segments: Vec::with_capacity(length.div_ceil(FRAME_BYTES)),
-        ends: Vec::with_capacity(length.div_ceil(FRAME_BYTES)),
+        segments: Vec::new(),
+        ends: Vec::new(),
         length,
     });
     Ok(id)
@@ -556,6 +572,94 @@ fn add_buffer(buffers: &mut Vec<Buffer>, total: &mut usize, length: usize) -> io
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn declared_buffers_above_two_gib_wait_for_payload_without_eager_allocation() {
+        let mut bytes = Vec::new();
+        let texture = TextureRecord {
+            width: 1 << 30,
+            height: 1,
+            byte_length: 4usize << 30,
+            repeat: false,
+        };
+        write_packet(&mut bytes, TEXTURE, &serde_json::to_vec(&texture).unwrap()).unwrap();
+        finish(&mut bytes, Err("Stopped before pixel data".into())).unwrap();
+        let mut connection = wire(bytes);
+        assert!(matches!(
+            receive(&mut connection, || true).unwrap(),
+            Err(error) if error == "Stopped before pixel data"
+        ));
+        assert_eq!(connection.outgoing, [CONTINUE]);
+
+        let mut buffers = Vec::new();
+        let mut total = usize::MAX - 1;
+        assert!(add_buffer(&mut buffers, &mut total, 2).is_err());
+    }
+
+    #[test]
+    fn preview_accepts_more_than_one_hundred_thousand_texture_records() {
+        let mut bytes = Vec::new();
+        let texture = serde_json::to_vec(&TextureRecord {
+            width: 1,
+            height: 1,
+            byte_length: 4,
+            repeat: false,
+        })
+        .unwrap();
+        for _ in 0..100_000 {
+            write_packet(&mut bytes, TEXTURE, &texture).unwrap();
+            write_packet(&mut bytes, DATA, &[255; 4]).unwrap();
+        }
+        bytes.extend(part_packets(0));
+        let payload = receive(&mut wire(bytes), || true).unwrap().unwrap();
+        assert_eq!(payload.metadata.textures.len(), 100_001);
+        let last = payload.metadata.textures.last().unwrap();
+        assert_eq!(payload.read(last.buffer_id, 0, 4).unwrap(), [255; 4]);
+        assert_eq!(payload.metadata.triangle_count, 1);
+    }
+
+    #[test]
+    fn gpu_batch_count_boundary_starts_a_new_draw_instead_of_rejecting_the_model() {
+        let max_triangular_indices = i32::MAX as u32 - 1;
+        let records = vec![
+            PartMetadata {
+                vertex_count: 1,
+                index_count: max_triangular_indices,
+                texture_index: 0,
+                alpha_mode: 0,
+                buffers: [0, 1, 2, 3, 4],
+            },
+            PartMetadata {
+                vertex_count: 1,
+                index_count: 3,
+                texture_index: 0,
+                alpha_mode: 0,
+                buffers: [5, 6, 7, 8, 9],
+            },
+        ];
+        let source = (0..10).map(|_| Buffer::default()).collect();
+        let payload = Payload::assemble(
+            Metadata {
+                block_count: 2,
+                block_entity_count: 0,
+                triangle_count: u64::from(max_triangular_indices / 3) + 1,
+                min: [0.0; 3],
+                max: [1.0; 3],
+                byte_length: 0,
+                textures: vec![],
+                parts: records,
+            },
+            source,
+            || true,
+        )
+        .unwrap();
+        assert_eq!(payload.metadata.parts.len(), 2);
+        assert_eq!(
+            payload.metadata.parts[0].index_count,
+            max_triangular_indices
+        );
+        assert_eq!(payload.metadata.parts[1].index_count, 3);
+    }
 
     #[test]
     fn range_reads_cross_segments_without_flattening_and_reject_overflow() {

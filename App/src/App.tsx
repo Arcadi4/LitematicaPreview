@@ -8,6 +8,7 @@ import {
   DialogContent,
   DialogSurface,
   DialogTitle,
+  Field,
   FluentProvider,
   Menu,
   MenuDivider,
@@ -22,6 +23,8 @@ import {
   MessageBarActions,
   MessageBarBody,
   MessageBarTitle,
+  Select,
+  Switch,
   ToggleButton,
   Tooltip,
   webDarkTheme,
@@ -40,6 +43,7 @@ import {
   Info20Regular,
   Keyboard20Regular,
   MoreHorizontal20Regular,
+  Settings20Regular,
   ShieldCheckmark20Regular,
   Subtract20Regular,
 } from "@fluentui/react-icons"
@@ -57,6 +61,12 @@ type Bootstrap = {
   requestId: number
 }
 type ThemePreference = "system" | "light" | "dark"
+type PreviewSettings = {
+  memoryLimitEnabled: boolean
+  memoryLimitGiB: number
+  chunkingEnabled: boolean
+  chunkSize: number
+}
 type Loading = { path: string; phase: "decode" | "upload" }
 type Loaded = { path: string; metadata: PreviewMetadata; seconds: number }
 type Notice = { intent: "error" | "success" | "info"; message: string }
@@ -66,6 +76,14 @@ const numbers = new Intl.NumberFormat()
 const dimensions = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 2,
 })
+const memoryLimitsGiB = [2, 3, 4, 5, 6, 7, 8]
+const chunkSizes = [16, 32, 64, 128, 256]
+const defaultPreviewSettings: PreviewSettings = {
+  memoryLimitEnabled: true,
+  memoryLimitGiB: 2,
+  chunkingEnabled: true,
+  chunkSize: 64,
+}
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
 const isTheme = (value: unknown): value is ThemePreference =>
@@ -80,6 +98,36 @@ function savedTheme(): ThemePreference {
   }
 }
 
+function savedPreviewSettings(): PreviewSettings {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem("litematica-preview-settings") || "null")
+    if (value === null || typeof value !== "object" || Array.isArray(value))
+      return defaultPreviewSettings
+    const settings = value as Record<string, unknown>
+    return {
+      memoryLimitEnabled:
+        typeof settings.memoryLimitEnabled === "boolean"
+          ? settings.memoryLimitEnabled
+          : defaultPreviewSettings.memoryLimitEnabled,
+      memoryLimitGiB:
+        typeof settings.memoryLimitGiB === "number" &&
+        memoryLimitsGiB.includes(settings.memoryLimitGiB)
+          ? settings.memoryLimitGiB
+          : defaultPreviewSettings.memoryLimitGiB,
+      chunkingEnabled:
+        typeof settings.chunkingEnabled === "boolean"
+          ? settings.chunkingEnabled
+          : defaultPreviewSettings.chunkingEnabled,
+      chunkSize:
+        typeof settings.chunkSize === "number" && chunkSizes.includes(settings.chunkSize)
+          ? settings.chunkSize
+          : defaultPreviewSettings.chunkSize,
+    }
+  } catch {
+    return defaultPreviewSettings
+  }
+}
+
 export default function App({ initialError }: { initialError?: string }) {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
   const [loading, setLoading] = useState<Loading | null>(null)
@@ -88,10 +136,11 @@ export default function App({ initialError }: { initialError?: string }) {
   const [dragging, setDragging] = useState(false)
   const [grid, setGrid] = useState(true)
   const [theme, setTheme] = useState<ThemePreference>(savedTheme)
+  const [previewSettings, setPreviewSettings] = useState<PreviewSettings>(savedPreviewSettings)
   const [systemDark, setSystemDark] = useState(
     () => matchMedia("(prefers-color-scheme: dark)").matches,
   )
-  const [dialog, setDialog] = useState<"controls" | "about" | "error">(
+  const [dialog, setDialog] = useState<"controls" | "about" | "settings" | "error">(
     initialError ? "error" : "controls",
   )
   const [dialogOpen, setDialogOpen] = useState(Boolean(initialError))
@@ -102,6 +151,7 @@ export default function App({ initialError }: { initialError?: string }) {
   const rendererRef = useRef<SchematicRenderer | null>(null)
   const bootstrapRef = useRef<Bootstrap | null>(null)
   const gridRef = useRef(true)
+  const previewSettingsRef = useRef(previewSettings)
   const mounted = useRef(false)
   const generation = useRef(0)
   const initialPathConsumed = useRef(Boolean(initialError))
@@ -109,6 +159,12 @@ export default function App({ initialError }: { initialError?: string }) {
   const actionBusyRef = useRef(false)
   const titleQueue = useRef<Promise<void>>(Promise.resolve())
   const previewReadQueue = useRef<Promise<void>>(Promise.resolve())
+
+  const updatePreviewSettings = (patch: Partial<PreviewSettings>) => {
+    const settings = { ...previewSettingsRef.current, ...patch }
+    previewSettingsRef.current = settings
+    setPreviewSettings(settings)
+  }
 
   const isCurrent = useCallback((id: number) => mounted.current && generation.current === id, [])
 
@@ -223,6 +279,13 @@ export default function App({ initialError }: { initialError?: string }) {
   const loadPath = useCallback(
     async (path: string) => {
       if (!mounted.current) return
+      // Read current settings without rebuilding startup and drag-and-drop subscriptions.
+      // This request keeps its own snapshot even if settings change during decoding.
+      const settings = previewSettingsRef.current
+      const options = {
+        memoryLimitGiB: settings.memoryLimitEnabled ? settings.memoryLimitGiB : null,
+        chunkSize: settings.chunkingEnabled ? settings.chunkSize : null,
+      }
       const id = ++generation.current
       clearView()
       setNotice(null)
@@ -245,6 +308,7 @@ export default function App({ initialError }: { initialError?: string }) {
         const descriptor = await invoke<PreviewMetadata>("load_preview", {
           path,
           requestId: id,
+          options,
         })
         if (!isCurrent(id)) return
         setLoading({ path, phase: "upload" })
@@ -459,6 +523,14 @@ export default function App({ initialError }: { initialError?: string }) {
   }, [dark, theme])
 
   useEffect(() => {
+    try {
+      localStorage.setItem("litematica-preview-settings", JSON.stringify(previewSettings))
+    } catch {
+      /* Preview settings still work when storage is disabled. */
+    }
+  }, [previewSettings])
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.altKey) return
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
@@ -532,6 +604,15 @@ export default function App({ initialError }: { initialError?: string }) {
           </MenuTrigger>
           <MenuPopover>
             <MenuList>
+              <MenuItem
+                icon={<Settings20Regular />}
+                onClick={() => {
+                  setDialog("settings")
+                  setDialogOpen(true)
+                }}
+              >
+                Preview settings
+              </MenuItem>
               <MenuItem
                 icon={<Keyboard20Regular />}
                 onClick={() => {
@@ -870,7 +951,9 @@ export default function App({ initialError }: { initialError?: string }) {
                 ? "Unable to open preview"
                 : dialog === "controls"
                   ? "Controls and shortcuts"
-                  : `About ${appName}`}
+                  : dialog === "settings"
+                    ? "Preview settings"
+                    : `About ${appName}`}
             </DialogTitle>
             <DialogContent>
               {dialog === "error" ? (
@@ -880,6 +963,82 @@ export default function App({ initialError }: { initialError?: string }) {
                     {errorDetails}
                   </pre>
                 </>
+              ) : dialog === "settings" ? (
+                <div className="flex flex-col gap-5 max-h-[60vh] overflow-y-auto">
+                  <p className="m-0 leading-relaxed">
+                    Changes are saved automatically and apply the next time you open a schematic.
+                    The current preview or load is not changed.
+                  </p>
+                  <div className="flex flex-col gap-3">
+                    <Switch
+                      label="Limit decoder memory"
+                      checked={previewSettings.memoryLimitEnabled}
+                      aria-describedby="memory-limit-description"
+                      onChange={(_, data) =>
+                        updatePreviewSettings({ memoryLimitEnabled: data.checked })
+                      }
+                    />
+                    <Field label="Decoder memory limit">
+                      <Select
+                        value={String(previewSettings.memoryLimitGiB)}
+                        disabled={!previewSettings.memoryLimitEnabled}
+                        onChange={(_, data) => {
+                          const value = Number(data.value)
+                          if (memoryLimitsGiB.includes(value))
+                            updatePreviewSettings({ memoryLimitGiB: value })
+                        }}
+                      >
+                        {memoryLimitsGiB.map((value) => (
+                          <option key={value} value={value}>
+                            {value} GiB
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <p
+                      id="memory-limit-description"
+                      className="m-0 text-sm leading-relaxed text-muted"
+                    >
+                      Limits the isolated decoder process, not graphics or total application memory.
+                      Disabling this limit may exhaust system memory.
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    <Switch
+                      label="Separate geometry into chunks"
+                      checked={previewSettings.chunkingEnabled}
+                      aria-describedby="chunk-size-description"
+                      onChange={(_, data) =>
+                        updatePreviewSettings({ chunkingEnabled: data.checked })
+                      }
+                    />
+                    <Field label="Chunk size (blocks per side)">
+                      <Select
+                        value={String(previewSettings.chunkSize)}
+                        disabled={!previewSettings.chunkingEnabled}
+                        onChange={(_, data) => {
+                          const value = Number(data.value)
+                          if (chunkSizes.includes(value))
+                            updatePreviewSettings({ chunkSize: value })
+                        }}
+                      >
+                        {chunkSizes.map((value) => (
+                          <option key={value} value={value}>
+                            {value}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <p
+                      id="chunk-size-description"
+                      className="m-0 text-sm leading-relaxed text-muted"
+                    >
+                      Smaller chunks reduce peak meshing memory and allow cancellation between
+                      chunks. Disabling chunk separation increases peak memory use and cancellation
+                      latency.
+                    </p>
+                  </div>
+                </div>
               ) : dialog === "controls" ? (
                 <>
                   <p className="mt-0 mb-5 leading-relaxed">

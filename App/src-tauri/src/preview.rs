@@ -6,12 +6,39 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+use litematica_preview_native::PreviewOptions;
 use nucleation::meshing::ResourcePackSource;
 
 use crate::preview_process::DecoderProcess;
 use crate::protocol;
 
-const MAX_INPUT_BYTES: usize = 1_024 * 1_024 * 1_024;
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoadOptions {
+    #[serde(rename = "memoryLimitGiB", deserialize_with = "required_nullable")]
+    memory_limit_gib: Option<u8>,
+    #[serde(deserialize_with = "required_nullable")]
+    chunk_size: Option<u16>,
+}
+
+fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    serde::Deserialize::deserialize(deserializer)
+}
+
+impl LoadOptions {
+    pub fn validate(self) -> Result<PreviewOptions, String> {
+        let options = PreviewOptions {
+            memory_limit_gib: self.memory_limit_gib,
+            chunk_size: self.chunk_size,
+        };
+        options.validate()?;
+        Ok(options)
+    }
+}
 
 #[derive(Default)]
 pub struct PreviewWorker {
@@ -45,20 +72,30 @@ impl PreviewWorker {
         path: &Path,
         pack_path: &Path,
         request_id: u64,
+        options: PreviewOptions,
     ) -> Result<protocol::Metadata, String> {
+        options.validate()?;
         self.ensure_current(request_id)?;
         let mut process = self
             .process
             .lock()
             .map_err(|_| "The preview worker is unavailable. Restart the app.".to_string())?;
         self.ensure_current(request_id)?;
+        if process
+            .as_ref()
+            .is_some_and(|process| process.memory_limit_gib() != options.memory_limit_gib)
+        {
+            process.take();
+        }
         if process.is_none() {
-            *process = Some(DecoderProcess::spawn()?);
+            *process = Some(DecoderProcess::spawn(options.memory_limit_gib)?);
         }
         let result = process
             .as_mut()
             .ok_or("The preview worker is unavailable.")?
-            .load(path, pack_path, || self.ensure_current(request_id).is_ok());
+            .load(path, pack_path, options.chunk_size, || {
+                self.ensure_current(request_id).is_ok()
+            });
         let payload = match result {
             Ok(result) => result?,
             Err(error) => {
@@ -123,7 +160,7 @@ impl PreviewWorker {
 
 #[cfg(test)]
 mod tests {
-    use super::PreviewWorker;
+    use super::{read_bytes, LoadOptions, PreviewOptions, PreviewWorker};
 
     #[test]
     fn reload_and_delayed_requests_cannot_revive_stale_work() {
@@ -140,6 +177,67 @@ mod tests {
         assert!(worker.ensure_current(reloaded + 1).is_ok());
         assert!(worker.ensure_current(reloaded).is_err());
     }
+
+    fn options(value: serde_json::Value) -> Result<PreviewOptions, String> {
+        serde_json::from_value::<LoadOptions>(value)
+            .map_err(|error| error.to_string())?
+            .validate()
+    }
+
+    #[test]
+    fn preview_options_require_explicit_nullable_integer_settings() {
+        use serde_json::json;
+
+        assert_eq!(
+            options(json!({"memoryLimitGiB": 2, "chunkSize": 64})).unwrap(),
+            PreviewOptions::default()
+        );
+        assert_eq!(
+            options(json!({"memoryLimitGiB": null, "chunkSize": null})).unwrap(),
+            PreviewOptions {
+                memory_limit_gib: None,
+                chunk_size: None,
+            }
+        );
+        for value in [
+            json!({}),
+            json!({"memoryLimitGiB": 2}),
+            json!({"chunkSize": 64}),
+            json!({"memoryLimitGiB": 1, "chunkSize": 64}),
+            json!({"memoryLimitGiB": 9, "chunkSize": 64}),
+            json!({"memoryLimitGiB": 2.5, "chunkSize": 64}),
+            json!({"memoryLimitGiB": "2", "chunkSize": 64}),
+            json!({"memoryLimitGiB": 2, "chunkSize": 48}),
+            json!({"memoryLimitGiB": 2, "chunkSize": 64.5}),
+            json!({"memoryLimitGiB": 2, "chunkSize": 64, "extra": true}),
+        ] {
+            assert!(options(value.clone()).is_err(), "accepted {value}");
+        }
+        for gib in 2..=8 {
+            for size in [16, 32, 64, 128, 256] {
+                assert_eq!(
+                    options(json!({"memoryLimitGiB": gib, "chunkSize": size})).unwrap(),
+                    PreviewOptions {
+                        memory_limit_gib: Some(gib),
+                        chunk_size: Some(size),
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn file_reads_follow_actual_bytes_instead_of_declared_file_quota() {
+        let bytes = [1, 2, 3];
+        assert_eq!(
+            read_bytes(&bytes[..], 1024 * 1024 * 1024 + 1, || Ok(())).unwrap(),
+            bytes
+        );
+        let error = read_bytes(&bytes[..], 1, || Err("Cancelled".into())).unwrap_err();
+        assert_eq!(error, "Cancelled");
+        assert!(read_bytes(&[][..], 3, || Ok(())).is_err());
+        assert!(read_bytes(&bytes[..], u64::MAX, || Ok(())).is_err());
+    }
 }
 
 // Runs only in the isolated decoder. Each chunk is sent synchronously and
@@ -148,14 +246,16 @@ pub(crate) fn decode(
     path: &Path,
     pack_path: &Path,
     pack: &mut Option<ResourcePackSource>,
+    options: PreviewOptions,
     stream: &mut (impl Read + Write),
 ) -> Result<litematica_preview_native::PreviewInfo, String> {
+    options.validate()?;
     let result = catch_unwind(AssertUnwindSafe(|| {
         let encoder = RefCell::new(protocol::Encoder::new(stream));
         let current = || encoder.borrow_mut().checkpoint();
-        let data = read_bounded(path, &current)?;
+        let data = read_file(path, &current)?;
         if pack.is_none() {
-            let bytes = read_bounded(pack_path, &current)?;
+            let bytes = read_file(pack_path, &current)?;
             *pack = Some(
                 ResourcePackSource::from_bytes(&bytes)
                     .map_err(|e| format!("The bundled block resources are invalid: {e}"))?,
@@ -165,6 +265,7 @@ pub(crate) fn decode(
             &data,
             pack.as_ref()
                 .ok_or("The bundled block resources are unavailable.")?,
+            options,
             |preview| encoder.borrow_mut().chunk(preview),
             current,
         )
@@ -183,7 +284,7 @@ pub(crate) fn decode(
     })
 }
 
-fn read_bounded(path: &Path, current: impl Fn() -> Result<(), String>) -> Result<Vec<u8>, String> {
+fn read_file(path: &Path, current: impl Fn() -> Result<(), String>) -> Result<Vec<u8>, String> {
     let file = File::open(path).map_err(|e| format!("Unable to open {}: {e}", path.display()))?;
     let metadata = file
         .metadata()
@@ -191,32 +292,36 @@ fn read_bounded(path: &Path, current: impl Fn() -> Result<(), String>) -> Result
     if !metadata.is_file() {
         return Err("Choose a schematic file, not a folder or device.".into());
     }
-    if metadata.len() == 0 || metadata.len() > MAX_INPUT_BYTES as u64 {
-        return Err("Choose a nonempty schematic no larger than 1 GiB.".into());
+    read_bytes(file, metadata.len(), current)
+}
+
+fn read_bytes(
+    mut reader: impl Read,
+    declared_length: u64,
+    current: impl Fn() -> Result<(), String>,
+) -> Result<Vec<u8>, String> {
+    if declared_length == 0 {
+        return Err("Choose a nonempty schematic.".into());
     }
+    usize::try_from(declared_length)
+        .ok()
+        .filter(|length| *length <= isize::MAX as usize)
+        .ok_or("The file exceeds this platform's addressable memory.")?;
+    // Grow from bytes actually read, not potentially stale or sparse-file metadata.
     let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(metadata.len() as usize)
-        .map_err(|_| "There is not enough memory to read this file.".to_string())?;
-    // The handle, not a prior path stat, owns the size check. Still cap actual
-    // reads: another process can grow the file after metadata was inspected.
-    let mut reader = file.take(MAX_INPUT_BYTES as u64 + 1);
     let mut chunk = [0u8; 64 * 1_024];
     loop {
         current()?;
         let count = match reader.read(&mut chunk) {
             Ok(count) => count,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(format!("Unable to read {}: {error}", path.display())),
+            Err(error) => return Err(format!("Unable to read the file: {error}")),
         };
         if count == 0 {
             break;
         }
-        if bytes.len() + count > MAX_INPUT_BYTES {
-            return Err("Choose a schematic no larger than 1 GiB.".into());
-        }
         bytes
-            .try_reserve_exact(count)
+            .try_reserve(count)
             .map_err(|_| "There is not enough memory to read this file.".to_string())?;
         bytes.extend_from_slice(&chunk[..count]);
     }

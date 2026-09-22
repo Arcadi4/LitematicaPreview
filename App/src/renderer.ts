@@ -73,7 +73,6 @@ const BUFFER_FORMATS = [
   { size: 1, array: Uint32Array, normalized: false },
 ] as const
 const UPLOAD_CHUNK = 1024 * 1024
-const MAX_METADATA_BYTES = 16 * 1024 * 1024
 const MAX_RENDER_PIXELS = 16 * 1024 * 1024
 const UP = new Float32Array([0, 1, 0])
 
@@ -135,10 +134,8 @@ function validateMetadata(metadata: PreviewMetadata, maxTextureSize: number): vo
   if (
     !Array.isArray(root.textures) ||
     root.textures.length === 0 ||
-    root.textures.length > MAX_METADATA_BYTES / 2 ||
     !Array.isArray(root.parts) ||
-    root.parts.length === 0 ||
-    root.parts.length > MAX_METADATA_BYTES / 2
+    root.parts.length === 0
   ) {
     throw new Error("The preview must contain textures and renderable mesh parts.")
   }

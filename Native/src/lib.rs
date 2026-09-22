@@ -7,6 +7,39 @@ mod decode;
 mod meshing;
 pub use decode::{decode, DecodeFailure};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreviewOptions {
+    pub memory_limit_gib: Option<u8>,
+    pub chunk_size: Option<u16>,
+}
+
+impl Default for PreviewOptions {
+    fn default() -> Self {
+        Self {
+            memory_limit_gib: Some(2),
+            chunk_size: Some(64),
+        }
+    }
+}
+
+impl PreviewOptions {
+    pub fn validate(&self) -> Result<(), String> {
+        if self
+            .memory_limit_gib
+            .is_some_and(|limit| !(2..=8).contains(&limit))
+        {
+            return Err("The memory limit must be an integer from 2 to 8 GiB.".into());
+        }
+        if self
+            .chunk_size
+            .is_some_and(|size| !matches!(size, 16 | 32 | 64 | 128 | 256))
+        {
+            return Err("The chunk size must be 16, 32, 64, 128 or 256 blocks.".into());
+        }
+        Ok(())
+    }
+}
+
 pub struct Preview {
     pub mesh: MeshOutput,
     pub textures: Vec<Texture>,
@@ -55,31 +88,33 @@ pub fn parts(mesh: &MeshOutput) -> impl Iterator<Item = (&MeshLayer, u32, u32)> 
     .filter(|(layer, _, _)| !layer.indices.is_empty())
 }
 
-/// Generate and synchronously hand off one spatial chunk at a time. The callback
-/// owns that chunk; callers must release it before accepting the next one.
+/// Generate and synchronously hand off each configured spatial chunk, or one
+/// complete geometry group when chunk separation is disabled. The caller owns
+/// each result and should release it before accepting the next one.
+/// Memory enforcement belongs to the isolated host process. Some formats still
+/// decode densely, and an unseparated mesh can exhaust memory without that cap.
 pub fn load_chunks(
     data: &[u8],
     pack: &ResourcePackSource,
+    options: PreviewOptions,
     mut consume: impl FnMut(Preview) -> Result<(), String>,
     current: impl Fn() -> Result<(), String>,
 ) -> Result<PreviewInfo, String> {
+    options.validate()?;
     current()?;
-    if data.is_empty() || data.len() > 1_024 * 1_024 * 1_024 {
-        return Err("Choose a nonempty schematic smaller than 1 GiB.".into());
+    if data.is_empty() {
+        return Err("Choose a nonempty schematic.".into());
     }
-    let schematic = decode(data).map_err(|e| match e {
-        DecodeFailure::Format(m) | DecodeFailure::Limit(m) => m,
-    })?;
+    let chunk_size = options.chunk_size.map(i32::from);
+    let source = decode::decode_preview(data, chunk_size, &current)?;
     current()?;
-    let block_count = i64::from(schematic.total_blocks());
-    if block_count == 0 || block_count > 33_554_432 {
-        return Err("The schematic must contain between 1 and 33,554,432 blocks.".into());
+    let block_count = source.block_count();
+    let block_entity_count = source.block_entity_count();
+    if block_count == 0 {
+        return Err("The schematic must contain at least one block.".into());
     }
-    let block_entity_count = std::iter::once(&schematic.default_region)
-        .chain(schematic.other_regions.values())
-        .map(|region| region.block_entities.len() as i64)
-        .sum();
-    let mut chunks = meshing::ChunkMeshes::new(schematic, pack, &mesh_config(), 64, &current)?;
+    let mut chunks =
+        meshing::ChunkMeshes::from_source(source, pack, &mesh_config(), chunk_size, &current)?;
     current()?;
     let mut info = PreviewInfo {
         block_count,

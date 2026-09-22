@@ -48,6 +48,9 @@ pub(super) fn mesh(
     bounds: BoundingBox,
 ) -> Result<MeshOutput, String> {
     // All halo entries participate in neighbor queries; only `blocks` are emitted.
+    if config.cull_hidden_faces {
+        validate_culler_grid(context)?;
+    }
     let culler = config
         .cull_hidden_faces
         .then(|| FaceCuller::new(pack, context));
@@ -154,6 +157,43 @@ pub(super) fn mesh(
         }
     }
     Ok(output)
+}
+
+// The original culler allocates a dense, padded byte grid even for sparse input.
+// Do not impose a content quota or silently partition an unseparated mesh, but
+// reject arithmetic/addressability overflow before entering its unchecked code.
+// A representable grid can still exhaust physical memory; the host's optional
+// worker memory limit is the only memory budget.
+fn validate_culler_grid(context: &[(BlockPosition, &InputBlock)]) -> Result<(), String> {
+    if context.is_empty() {
+        return Ok(());
+    }
+    let mut min = [i32::MAX; 3];
+    let mut max = [i32::MIN; 3];
+    for (pos, _) in context {
+        for (axis, value) in [pos.x, pos.y, pos.z].into_iter().enumerate() {
+            min[axis] = min[axis].min(value);
+            max[axis] = max[axis].max(value);
+        }
+    }
+    let mut volume = 1usize;
+    for axis in 0..3 {
+        let padded_min = min[axis]
+            .checked_sub(1)
+            .ok_or("Culling bounds exceed i32 coordinates.")?;
+        let padded_max = max[axis]
+            .checked_add(1)
+            .ok_or("Culling bounds exceed i32 coordinates.")?;
+        let size = padded_max
+            .checked_sub(padded_min)
+            .and_then(|span| span.checked_add(1))
+            .ok_or("Culling dimensions exceed i32 representation.")?;
+        volume = volume
+            .checked_mul(size as usize)
+            .filter(|&value| value <= isize::MAX as usize)
+            .ok_or("Culling grid exceeds addressable memory.")?;
+    }
+    Ok(())
 }
 
 fn collect_pack_animations(

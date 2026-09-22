@@ -5,6 +5,8 @@ use nucleation::formats::{
 use nucleation::UniversalSchematic;
 use regex::Regex;
 
+use crate::meshing::CompactBlocks;
+
 #[path = "bounded_nbt.rs"]
 mod bounded_nbt;
 #[path = "litematic.rs"]
@@ -14,42 +16,25 @@ mod schematic;
 #[path = "structure_nbt.rs"]
 mod structure_nbt;
 
-// Compressed schematic bytes accepted from the desktop host.
-const MAX_INPUT_BYTES: usize = 1_024 * 1_024 * 1_024;
-// Inflated NBT bytes Nucleation may allocate while decoding.
-const MAX_DECOMPRESSED_BYTES: usize = 1_024 * 1_024 * 1_024;
-const MAX_AXIS_LENGTH: usize = 4_096;
-// One GiB for all dense usize Region indices leaves room in the 2 GiB worker
-// for the independently bounded input/NBT, chunk index, resources and mesh.
-// On x64 the 134,217,728-cell ceiling admits the 95,722,550-cell target.
-const MAX_DENSE_INDEX_BYTES: usize = 1_024 * 1_024 * 1_024;
-const MAX_VOLUME: usize = MAX_DENSE_INDEX_BYTES / std::mem::size_of::<usize>();
-const MAX_REGIONS: usize = 64;
-const MAX_PALETTE_ENTRIES: usize = 4_096;
-const MAX_ENTITIES: usize = 100_000;
-const MAX_BLOCK_ENTITIES: usize = 100_000;
+// Bound content only by representation, not by an application preview quota.
+// Litematic preview streams packed states; other formats retain their bounded
+// dense readers. Recursive NBT parsing keeps an independent stack-safety bound.
 const MAX_NBT_DEPTH: usize = 64;
-const MAX_NBT_STRING_BYTES: usize = 1_000_000;
-// A Sponge `BlockData` array declares one VarInt per padded cell, so the
-// collection allowance is the volume widened by a VarInt's width.
-const MAX_NBT_COLLECTION_ITEMS: usize = MAX_VOLUME * 2;
-const MAX_NBT_NODES: usize = 4_194_304;
 
-// Decode limits bounding what a preview accepts.
 pub fn preview_limits() -> DecodeLimits {
     DecodeLimits {
-        max_input_bytes: MAX_INPUT_BYTES,
-        max_decompressed_bytes: MAX_DECOMPRESSED_BYTES,
-        max_dimension: MAX_AXIS_LENGTH,
-        max_volume: MAX_VOLUME,
-        max_regions: MAX_REGIONS,
-        max_palette_entries: MAX_PALETTE_ENTRIES,
-        max_entities: MAX_ENTITIES,
-        max_block_entities: MAX_BLOCK_ENTITIES,
+        max_input_bytes: isize::MAX as usize,
+        max_decompressed_bytes: isize::MAX as usize,
+        max_dimension: i32::MAX as usize,
+        max_volume: isize::MAX as usize / std::mem::size_of::<usize>(),
+        max_regions: usize::MAX,
+        max_palette_entries: usize::MAX,
+        max_entities: usize::MAX,
+        max_block_entities: usize::MAX,
         max_nbt_depth: MAX_NBT_DEPTH,
-        max_nbt_string_bytes: MAX_NBT_STRING_BYTES,
-        max_nbt_collection_items: MAX_NBT_COLLECTION_ITEMS,
-        max_nbt_nodes: MAX_NBT_NODES,
+        max_nbt_string_bytes: isize::MAX as usize,
+        max_nbt_collection_items: isize::MAX as usize,
+        max_nbt_nodes: usize::MAX,
     }
 }
 
@@ -85,10 +70,8 @@ pub enum DecodeFailure {
     Limit(String),
 }
 
-// Decode schematic `bytes`, refusing anything outside the preview budget.
-//
-// Keep the bounded reader and two required compatibility fallbacks. The old
-// diagnostic retry with relaxed limits did extra work only to refine an error.
+// Decode schematic bytes with structural, addressability and stack-safety checks.
+// Keep the bounded reader and two required compatibility fallbacks.
 pub fn decode(bytes: &[u8]) -> Result<UniversalSchematic, DecodeFailure> {
     let limits = preview_limits();
     limits
@@ -109,8 +92,44 @@ pub fn decode(bytes: &[u8]) -> Result<UniversalSchematic, DecodeFailure> {
         return result;
     }
     Err(DecodeFailure::Format(
-        "This file is not a readable Minecraft schematic, or it exceeds the preview limits.".into(),
+        "This file is not a readable Minecraft schematic, or its data exceeds supported representation or nesting bounds.".into(),
     ))
+}
+
+pub(crate) fn decode_preview(
+    bytes: &[u8],
+    chunk_size: Option<i32>,
+    current: &impl Fn() -> Result<(), String>,
+) -> Result<CompactBlocks, String> {
+    let limits = preview_limits();
+    limits
+        .check_input(bytes)
+        .map_err(|error| error.to_string())?;
+    if let Some(source) = litematic::read_compact(bytes, &limits, chunk_size, current)? {
+        return Ok(source);
+    }
+    current()?;
+    let result = read_other_bounded(bytes, &limits);
+    current()?;
+    if let Ok(schematic) = result {
+        return CompactBlocks::from_schematic(schematic, chunk_size);
+    }
+    if let Some(normalized) = normalize_structure_snbt(bytes) {
+        let result = read_other_bounded(&normalized, &limits);
+        current()?;
+        if let Ok(schematic) = result {
+            return CompactBlocks::from_schematic(schematic, chunk_size);
+        }
+    }
+    let result = structure_nbt::try_load(bytes, &limits);
+    current()?;
+    if let Some(result) = result {
+        let schematic = result.map_err(|error| match error {
+            DecodeFailure::Format(message) | DecodeFailure::Limit(message) => message,
+        })?;
+        return CompactBlocks::from_schematic(schematic, chunk_size);
+    }
+    Err("This file is not a readable Minecraft schematic, or its data exceeds supported representation or nesting bounds.".into())
 }
 
 fn read_bounded(bytes: &[u8], limits: &DecodeLimits) -> Result<UniversalSchematic, String> {
@@ -122,6 +141,15 @@ fn read_bounded(bytes: &[u8], limits: &DecodeLimits) -> Result<UniversalSchemati
     if let Ok(schematic) = litematic::read(bytes, limits) {
         return Ok(schematic);
     }
+    read_other_bounded(bytes, limits)
+}
+
+// Preview fallback must never call read_bounded: doing so could allocate a
+// dense Litematic Region after a failed compact probe.
+fn read_other_bounded(bytes: &[u8], limits: &DecodeLimits) -> Result<UniversalSchematic, String> {
+    limits
+        .check_input(bytes)
+        .map_err(|error| error.to_string())?;
     if let Ok(schematic) = schematic::read(bytes, limits) {
         return Ok(schematic);
     }
@@ -169,6 +197,28 @@ fn validate_with_implicit_air(
 mod tests {
     use super::*;
     use quartz_nbt::{NbtCompound, NbtList, NbtTag};
+
+    #[test]
+    #[ignore = "Explicit code-only timing of compact decode for LP_MEMORY_INPUT"]
+    fn inspect_compact_decode_timing() {
+        let path = std::env::var_os("LP_MEMORY_INPUT").expect("Set LP_MEMORY_INPUT");
+        let bytes = std::fs::read(path).unwrap();
+        let mut samples = Vec::new();
+        for iteration in 0..6 {
+            let start = std::time::Instant::now();
+            let source = decode_preview(&bytes, Some(64), &|| Ok(())).unwrap();
+            let seconds = start.elapsed().as_secs_f64();
+            println!("compact_decode iteration={iteration} seconds={seconds:.6} blocks={} block_entities={}", source.block_count(), source.block_entity_count());
+            if iteration != 0 {
+                samples.push(seconds);
+            }
+        }
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "compact_decode median_seconds={:.6} min_seconds={:.6} max_seconds={:.6}",
+            samples[2], samples[0], samples[4]
+        );
+    }
 
     fn fixture(name: &str) -> Vec<u8> {
         std::fs::read(

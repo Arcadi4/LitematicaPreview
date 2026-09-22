@@ -1,4 +1,4 @@
-//! Single-storage Litematic import through Nucleation's public Region API.
+//! Bounded dense and direct compact Litematic import.
 //!
 //! Format and metadata handling adapted from Nucleation 0.10.14,
 //! Copyright (c) 2025 Schem-at, MIT licensed (see NOTICE).
@@ -9,7 +9,12 @@ use nucleation::BoundingBox;
 use nucleation::{BlockState, Entity, Region, UniversalSchematic};
 use quartz_nbt::{NbtCompound, NbtList, NbtTag};
 
+use crate::meshing::CompactBlocks;
+
 use super::bounded_nbt;
+
+#[path = "litematic_stream.rs"]
+mod stream;
 
 struct PreparedRegion {
     name: String,
@@ -23,18 +28,16 @@ struct PreparedRegion {
 }
 
 pub(super) fn read(data: &[u8], limits: &DecodeLimits) -> Result<UniversalSchematic, String> {
-    let mut root = bounded_nbt::gzip_root(data, limits)?;
+    let root = bounded_nbt::gzip_root(data, limits)?;
     let mut schematic = UniversalSchematic::new("Unnamed".into());
     metadata(&root, &mut schematic)?;
-    let Some(NbtTag::Compound(regions)) = root.inner_mut().shift_remove("Regions") else {
-        return Err("missing Litematic Regions compound".into());
-    };
-    drop(root);
-    // Match the original importer: the first serialized region names the default.
-    if let Some(name) = regions.inner().keys().next() {
-        schematic.default_region_name = name.clone();
+    let (default_name, regions) = prepare_regions(root, limits, &|| Ok(()))?;
+    schematic.default_region_name = default_name;
+    // The explicit dense API still validates every index before allocating any
+    // volume-sized Region. The preview path validates while streaming instead.
+    for prepared in &regions {
+        visit_blocks(prepared, &|| Ok(()), |_, _| Ok(()))?;
     }
-    let regions = preflight(regions, &schematic.default_region_name, limits)?;
     for prepared in regions {
         schematic.add_region(read_region(prepared)?);
     }
@@ -42,12 +45,42 @@ pub(super) fn read(data: &[u8], limits: &DecodeLimits) -> Result<UniversalSchema
     Ok(schematic)
 }
 
-// All regions, their aggregate budgets and every packed index are checked before
-// the first volume-sized Region is allocated. Only small palettes are decoded here.
+pub(super) fn read_compact(
+    data: &[u8],
+    limits: &DecodeLimits,
+    chunk_size: Option<i32>,
+    current: &impl Fn() -> Result<(), String>,
+) -> Result<Option<CompactBlocks>, String> {
+    stream::read(data, limits, chunk_size, current)
+}
+
+fn prepare_regions(
+    mut root: NbtCompound,
+    limits: &DecodeLimits,
+    current: &impl Fn() -> Result<(), String>,
+) -> Result<(String, Vec<PreparedRegion>), String> {
+    let Some(NbtTag::Compound(regions)) = root.inner_mut().shift_remove("Regions") else {
+        return Err("missing Litematic Regions compound".into());
+    };
+    drop(root);
+    // Even a non-compound first entry names the default, matching the importer.
+    let default_name = regions
+        .inner()
+        .keys()
+        .next()
+        .cloned()
+        .unwrap_or_else(|| "Main".into());
+    let regions = preflight(regions, &default_name, limits, current)?;
+    Ok((default_name, regions))
+}
+
+// The dense reader validates region, palette and entity metadata before
+// allocating its volume-sized store; preview has a separate streaming scan.
 fn preflight(
     regions: NbtCompound,
     default_name: &str,
     limits: &DecodeLimits,
+    current: &impl Fn() -> Result<(), String>,
 ) -> Result<Vec<PreparedRegion>, String> {
     if regions.len() > limits.max_regions {
         return Err("region limit exceeded".into());
@@ -58,6 +91,7 @@ fn preflight(
     let mut total_block_entities = 0usize;
     let mut has_default = false;
     for (name, tag) in regions.into_inner() {
+        current()?;
         let NbtTag::Compound(mut nbt) = tag else {
             continue;
         };
@@ -92,6 +126,9 @@ fn preflight(
             palette.push(BlockState::from_nbt(&state)?);
         }
         let bits = (usize::BITS - (palette.len() - 1).leading_zeros()).max(2) as usize;
+        if bits > u64::BITS as usize {
+            return Err("palette index exceeds packed state representation".into());
+        }
         let Some(NbtTag::LongArray(packed)) = nbt.inner_mut().shift_remove("BlockStates") else {
             return Err("missing Litematic BlockStates".into());
         };
@@ -104,11 +141,6 @@ fn preflight(
             / 64;
         if packed.len() != required_longs {
             return Err("packed state length does not match region volume".into());
-        }
-        for index in 0..volume {
-            if packed_index(&packed, bits, index) >= palette.len() {
-                return Err("packed block palette index out of range".into());
-            }
         }
         if let Ok(entities) = nbt.get::<_, &NbtList>("Entities") {
             total_entities = total_entities
@@ -164,7 +196,26 @@ fn packed_index(packed: &[i64], bits: usize, index: usize) -> usize {
     if shift + bits > 64 {
         value |= (packed[word + 1] as u64) << (64 - shift);
     }
-    (value & ((1u64 << bits) - 1)) as usize
+    let mask = 1u64.checked_shl(bits as u32).unwrap_or(0).wrapping_sub(1);
+    (value & mask) as usize
+}
+
+fn visit_blocks(
+    prepared: &PreparedRegion,
+    current: &impl Fn() -> Result<(), String>,
+    mut visit: impl FnMut(usize, usize) -> Result<(), String>,
+) -> Result<(), String> {
+    for index in 0..prepared.volume {
+        if index % 65_536 == 0 {
+            current()?;
+        }
+        let palette_index = packed_index(&prepared.packed, prepared.bits, index);
+        if palette_index >= prepared.palette.len() {
+            return Err("packed block palette index out of range".into());
+        }
+        visit(index, palette_index)?;
+    }
+    Ok(())
 }
 
 fn read_region(prepared: PreparedRegion) -> Result<Region, String> {
@@ -194,35 +245,64 @@ fn read_region(prepared: PreparedRegion) -> Result<Region, String> {
     }
     drop(packed);
     let min_corner = region.get_bounding_box().min;
+    read_region_extras(
+        nbt,
+        position,
+        min_corner,
+        &|| Ok(()),
+        |entity| {
+            region.entities.push(entity);
+            Ok(())
+        },
+        |nbt, position| {
+            let mut entity = BlockEntity::from_nbt(&nbt);
+            entity.position = position;
+            region.block_entities.insert(position, entity);
+            Ok(())
+        },
+    )?;
+    Ok(region)
+}
+
+fn read_region_extras(
+    nbt: NbtCompound,
+    origin: (i32, i32, i32),
+    min_corner: (i32, i32, i32),
+    current: &impl Fn() -> Result<(), String>,
+    mut push_entity: impl FnMut(Entity) -> Result<(), String>,
+    mut push_block_entity: impl FnMut(NbtCompound, (i32, i32, i32)) -> Result<(), String>,
+) -> Result<(), String> {
     for (key, tag) in nbt.into_inner() {
         match (key.as_str(), tag) {
             ("Entities", NbtTag::List(entities)) => {
                 for tag in entities.into_inner() {
+                    current()?;
                     if let NbtTag::Compound(entity) = tag {
                         if let Ok(mut entity) = Entity::from_nbt(&entity) {
-                            // Ordinary entities are relative to the signed region
-                            // origin, not the normalized minimum corner.
-                            entity.position.0 += f64::from(position.0);
-                            entity.position.1 += f64::from(position.1);
-                            entity.position.2 += f64::from(position.2);
-                            region.entities.push(entity);
+                            // Ordinary entities use the signed origin, unlike
+                            // block entities, which use the minimum corner.
+                            entity.position.0 += f64::from(origin.0);
+                            entity.position.1 += f64::from(origin.1);
+                            entity.position.2 += f64::from(origin.2);
+                            push_entity(entity)?;
                         }
                     }
                 }
             }
             ("TileEntities", NbtTag::List(entities)) => {
                 for tag in entities.into_inner() {
+                    current()?;
                     if let NbtTag::Compound(entity) = tag {
-                        let mut entity = BlockEntity::from_nbt(&entity);
-                        entity.position = offset_position(entity.position, min_corner)?;
-                        region.block_entities.insert(entity.position, entity);
+                        let position =
+                            offset_position(block_entity_position(&entity)?, min_corner)?;
+                        push_block_entity(entity, position)?;
                     }
                 }
             }
             _ => {}
         }
     }
-    Ok(region)
+    Ok(())
 }
 
 fn triple(nbt: &NbtCompound, key: &str) -> Result<(i32, i32, i32), String> {
@@ -281,6 +361,13 @@ fn offset_position(
     ))
 }
 
+// Metadata is mandatory; optional metadata fields are permissive and have no
+// preview effect. Share the mandatory validation without copying unused text.
+fn metadata_compound(root: &NbtCompound) -> Result<&NbtCompound, String> {
+    root.get::<_, &NbtCompound>("Metadata")
+        .map_err(|error| error.to_string())
+}
+
 fn metadata(root: &NbtCompound, schematic: &mut UniversalSchematic) -> Result<(), String> {
     if let Ok(version) = root.get::<_, i32>("MinecraftDataVersion") {
         schematic.metadata.mc_version = Some(version);
@@ -289,9 +376,7 @@ fn metadata(root: &NbtCompound, schematic: &mut UniversalSchematic) -> Result<()
     if let Ok(test) = root.get::<_, &NbtCompound>("NucleationTest") {
         schematic.metadata.embedded_test = test.get::<_, &str>("Spec").ok().map(String::from);
     }
-    let metadata = root
-        .get::<_, &NbtCompound>("Metadata")
-        .map_err(|error| error.to_string())?;
+    let metadata = metadata_compound(root)?;
     schematic.metadata.name = metadata.get::<_, &str>("Name").ok().map(String::from);
     schematic.metadata.description = metadata
         .get::<_, &str>("Description")
@@ -321,4 +406,194 @@ fn metadata(root: &NbtCompound, schematic: &mut UniversalSchematic) -> Result<()
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn root_with_indices(palette: &[BlockState], indices: &[usize]) -> NbtCompound {
+        let bits = (usize::BITS - (palette.len() - 1).leading_zeros()).max(2) as usize;
+        let mut packed = vec![0i64; (indices.len() * bits).div_ceil(64)];
+        for (index, &state) in indices.iter().enumerate() {
+            for bit in 0..bits {
+                if state & (1 << bit) != 0 {
+                    let offset = index * bits + bit;
+                    packed[offset / 64] |= (1u64 << (offset % 64)) as i64;
+                }
+            }
+        }
+        let mut position = NbtCompound::new();
+        let mut size = NbtCompound::new();
+        for key in ["x", "y", "z"] {
+            position.insert(key, 10);
+            size.insert(
+                key,
+                if key == "x" {
+                    -(indices.len() as i32)
+                } else {
+                    1
+                },
+            );
+        }
+        let mut region = NbtCompound::new();
+        region.insert("Position", position);
+        region.insert("Size", size);
+        region.insert(
+            "BlockStatePalette",
+            NbtList::from(palette.iter().map(BlockState::to_nbt).collect::<Vec<_>>()),
+        );
+        region.insert("BlockStates", NbtTag::LongArray(packed));
+        let mut regions = NbtCompound::new();
+        regions.insert("region", region);
+        let mut metadata = NbtCompound::new();
+        metadata.insert("TotalBlocks", i32::MAX);
+        let mut root = NbtCompound::new();
+        root.insert("Version", 6);
+        root.insert("Metadata", metadata);
+        root.insert("Regions", regions);
+        root
+    }
+
+    fn gzip(root: &NbtCompound) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        quartz_nbt::io::write_nbt(&mut bytes, None, root, quartz_nbt::io::Flavor::GzCompressed)
+            .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn sponge_metadata_and_version_do_not_claim_litematic_preview() {
+        let mut palette = NbtCompound::new();
+        palette.insert("minecraft:stone", 0);
+        let mut root = NbtCompound::new();
+        root.insert("Version", 2);
+        root.insert("Metadata", NbtCompound::new());
+        root.insert("Width", 1i16);
+        root.insert("Height", 1i16);
+        root.insert("Length", 1i16);
+        root.insert("Palette", palette);
+        root.insert("BlockData", NbtTag::ByteArray(vec![0]));
+        let bytes = gzip(&root);
+        assert!(
+            read_compact(&bytes, &super::super::preview_limits(), None, &|| Ok(()))
+                .unwrap()
+                .is_none()
+        );
+        let compact = super::super::decode_preview(&bytes, None, &|| Ok(())).unwrap();
+        assert_eq!(compact.block_count(), 1);
+    }
+
+    #[test]
+    fn compact_counts_match_dense_with_signed_bounds_and_effective_tile_positions() {
+        let palette = [
+            BlockState::new("minecraft:air"),
+            BlockState::new("minecraft:stone"),
+            BlockState::new("minecraft:cave_air"),
+            BlockState::new("minecraft:void_air"),
+            BlockState::new("minecraft:air").with_property("custom", "yes"),
+        ];
+        let indices: Vec<_> = (0..33).map(|index| index % palette.len()).collect();
+        let mut root = root_with_indices(&palette, &indices);
+        let regions = root.get_mut::<_, &mut NbtCompound>("Regions").unwrap();
+        let region = regions.get_mut::<_, &mut NbtCompound>("region").unwrap();
+        let mut origin = NbtCompound::new();
+        origin.insert("Pos", NbtTag::IntArray(vec![0, 0, 0]));
+        let mut fallback = NbtCompound::new();
+        fallback.insert("Pos", NbtList::from(vec![NbtTag::Int(9); 3]));
+        let mut adjacent = NbtCompound::new();
+        adjacent.insert("x", 1i8);
+        adjacent.insert("y", 0i16);
+        adjacent.insert("z", 0);
+        region.insert(
+            "TileEntities",
+            NbtList::from(vec![
+                NbtTag::Compound(origin),
+                NbtTag::Compound(fallback),
+                NbtTag::Compound(adjacent),
+            ]),
+        );
+        let bytes = gzip(&root);
+        let dense = read(&bytes, &super::super::preview_limits()).unwrap();
+        let compact = super::super::decode_preview(&bytes, Some(16), &|| Ok(())).unwrap();
+        assert_eq!(compact.block_count(), 26);
+        assert_eq!(compact.block_count(), i64::from(dense.total_blocks()));
+        assert_eq!(compact.block_entity_count(), 2);
+        assert_eq!(
+            compact.block_entity_count() as usize,
+            dense.get_block_entities_as_list().len()
+        );
+    }
+
+    #[test]
+    fn recognized_malformed_litematic_is_terminal_for_preview() {
+        let palette = [BlockState::new("minecraft:air")];
+        let root = root_with_indices(&palette, &[0, 0, 1]);
+        let bytes = gzip(&root);
+        let error = read_compact(&bytes, &super::super::preview_limits(), None, &|| Ok(()))
+            .err()
+            .expect("out-of-range packed index must be rejected");
+        let preview_error = super::super::decode_preview(&bytes, None, &|| Ok(()))
+            .err()
+            .unwrap();
+        assert_eq!(preview_error, error);
+        let mut missing_metadata = root_with_indices(&palette, &[0]);
+        missing_metadata.inner_mut().shift_remove("Metadata");
+        assert!(read_compact(
+            &gzip(&missing_metadata),
+            &super::super::preview_limits(),
+            None,
+            &|| Ok(())
+        )
+        .is_err());
+        assert!(read_compact(
+            &gzip(&NbtCompound::new()),
+            &super::super::preview_limits(),
+            None,
+            &|| Ok(())
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
+    fn packed_air_traversal_is_cancellable_without_consuming_the_volume() {
+        let palette = [BlockState::new("minecraft:air")];
+        let root = root_with_indices(&palette, &vec![0; 131_072]);
+        let (_, prepared) =
+            prepare_regions(root, &super::super::preview_limits(), &|| Ok(())).unwrap();
+        let visited = Cell::new(0);
+        let result = visit_blocks(
+            &prepared[0],
+            &|| {
+                if visited.get() >= 65_536 {
+                    Err("cancelled".into())
+                } else {
+                    Ok(())
+                }
+            },
+            |_, _| {
+                visited.set(visited.get() + 1);
+                Ok(())
+            },
+        );
+        assert_eq!(result, Err("cancelled".into()));
+        assert_eq!(visited.get(), 65_536);
+        let result = super::super::decode_preview(&gzip(&NbtCompound::new()), None, &|| {
+            Err("cancelled".into())
+        });
+        assert_eq!(result.err().as_deref(), Some("cancelled"));
+    }
+
+    #[test]
+    fn packed_indices_support_the_entire_word_without_shift_overflow() {
+        if usize::BITS == 64 {
+            assert_eq!(packed_index(&[-1, 7], 64, 0), usize::MAX);
+            assert_eq!(packed_index(&[-1, 7], 64, 1), 7);
+        }
+        // A 63-bit value crossing the packed-word boundary.
+        let packed = [i64::MIN, 3];
+        assert_eq!(packed_index(&packed, 63, 1), 7);
+    }
 }

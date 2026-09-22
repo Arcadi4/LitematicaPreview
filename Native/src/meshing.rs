@@ -17,16 +17,178 @@ mod builder;
 type ChunkCoord = (i32, i32, i32);
 type IndexedBlock = (BlockPosition, u32);
 
-struct CompactBlocks {
+pub(crate) struct CompactBlocks {
     chunks: Vec<(ChunkCoord, Vec<IndexedBlock>)>,
     palette: Vec<InputBlock>,
+    block_count: i64,
+    block_entity_count: i64,
+}
+
+pub(crate) struct PaletteEntry {
+    index: Option<u32>,
+    counted: bool,
+}
+
+pub(crate) struct CompactBlocksBuilder {
+    chunks: HashMap<ChunkCoord, Vec<IndexedBlock>>,
+    palette: Vec<InputBlock>,
+    states: HashMap<BlockState, u32>,
+    chunk_size: Option<i32>,
+    block_count: i64,
+    block_entity_count: i64,
+    // Streaming regions arrive in file order. Temporary palette aliases carry
+    // their logical source order without growing every stored block index.
+    source_order: Option<Vec<(usize, u32)>>,
+    source: usize,
+}
+
+impl CompactBlocksBuilder {
+    pub(crate) fn new(chunk_size: Option<i32>) -> Result<Self, String> {
+        if chunk_size.is_some_and(|size| size <= 0) {
+            return Err("The mesh chunk size must be positive.".into());
+        }
+        Ok(Self {
+            chunks: HashMap::new(),
+            palette: Vec::new(),
+            states: HashMap::new(),
+            chunk_size,
+            block_count: 0,
+            block_entity_count: 0,
+            source_order: None,
+            source: 0,
+        })
+    }
+
+    pub(crate) fn begin_source(&mut self) -> Result<(), String> {
+        self.source = self.source.checked_add(1).ok_or("source order overflow")?;
+        self.source_order.get_or_insert_with(Vec::new);
+        Ok(())
+    }
+
+    fn source_index(&mut self, index: u32) -> Result<u32, String> {
+        let Some(order) = &mut self.source_order else {
+            return Ok(index);
+        };
+        let alias = u32::try_from(order.len())
+            .map_err(|_| "The schematic has too many source block states.")?;
+        order.try_reserve(1).map_err(|error| error.to_string())?;
+        order.push((self.source, index));
+        Ok(alias)
+    }
+
+    pub(crate) fn register_palette(
+        &mut self,
+        palette: &[BlockState],
+    ) -> Result<Vec<PaletteEntry>, String> {
+        let mut remap = Vec::new();
+        remap
+            .try_reserve_exact(palette.len())
+            .map_err(|e| e.to_string())?;
+        for state in palette {
+            // Region's public constructor seeds exactly this ordinary-air state.
+            // Cave/void air do not render, but still contribute to its block count.
+            let counted = state.name != "minecraft:air" || !state.properties.is_empty();
+            let index = if is_air(&state.name) {
+                None
+            } else {
+                let index = match self.states.entry(state.clone()) {
+                    Entry::Occupied(entry) => *entry.get(),
+                    Entry::Vacant(entry) => {
+                        let index = u32::try_from(self.palette.len())
+                            .map_err(|_| "The schematic has too many block states.")?;
+                        self.palette.try_reserve(1).map_err(|e| e.to_string())?;
+                        self.palette.push(block_state_to_input_block(entry.key()));
+                        entry.insert(index);
+                        index
+                    }
+                };
+                Some(self.source_index(index)?)
+            };
+            remap.push(PaletteEntry { index, counted });
+        }
+        Ok(remap)
+    }
+
+    pub(crate) fn push_block(
+        &mut self,
+        position: BlockPosition,
+        entry: &PaletteEntry,
+    ) -> Result<(), String> {
+        if entry.counted {
+            self.block_count = self
+                .block_count
+                .checked_add(1)
+                .ok_or("Block count exceeds i64.")?;
+        }
+        if let Some(index) = entry.index {
+            self.push_index(position, index)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn push_entity(&mut self, entity: &Entity) -> Result<(), String> {
+        let position = BlockPosition::new(
+            entity.position.0.floor() as i32,
+            entity.position.1.floor() as i32,
+            entity.position.2.floor() as i32,
+        );
+        let index = u32::try_from(self.palette.len())
+            .map_err(|_| "The schematic has too many block states.")?;
+        self.palette.try_reserve(1).map_err(|e| e.to_string())?;
+        self.palette.push(entity_to_input_block(entity));
+        let index = self.source_index(index)?;
+        self.push_index(position, index)
+    }
+
+    pub(crate) fn add_block_entities(&mut self, count: usize) -> Result<(), String> {
+        self.block_entity_count = self
+            .block_entity_count
+            .checked_add(i64::try_from(count).map_err(|_| "Block entity count exceeds i64.")?)
+            .ok_or("Block entity count exceeds i64.")?;
+        Ok(())
+    }
+
+    fn push_index(&mut self, position: BlockPosition, index: u32) -> Result<(), String> {
+        let coord = self
+            .chunk_size
+            .map_or((0, 0, 0), |size| chunk_coord(position, size));
+        let blocks = self.chunks.entry(coord).or_default();
+        blocks.try_reserve(1).map_err(|e| e.to_string())?;
+        blocks.push((position, index));
+        Ok(())
+    }
+
+    pub(crate) fn finish(self) -> CompactBlocks {
+        let mut chunks: Vec<_> = self.chunks.into_iter().collect();
+        chunks.sort_unstable_by_key(|(coord, _)| *coord);
+        for (_, blocks) in &mut chunks {
+            // Stable ties retain all additive block/entity entries. For streamed
+            // input, restore default-first/sorted region precedence before
+            // replacing temporary aliases with the deduplicated global palette.
+            if let Some(order) = &self.source_order {
+                blocks.sort_by_key(|(pos, index)| (pos.y, pos.z, pos.x, order[*index as usize].0));
+                for (_, index) in blocks {
+                    *index = order[*index as usize].1;
+                }
+            } else {
+                blocks.sort_by_key(|(pos, _)| (pos.y, pos.z, pos.x));
+            }
+        }
+        CompactBlocks {
+            chunks,
+            palette: self.palette,
+            block_count: self.block_count,
+            block_entity_count: self.block_entity_count,
+        }
+    }
 }
 
 impl CompactBlocks {
-    fn new(schematic: UniversalSchematic, chunk_size: i32) -> Result<Self, String> {
-        if chunk_size <= 0 {
-            return Err("The mesh chunk size must be positive.".into());
-        }
+    pub(crate) fn from_schematic(
+        schematic: UniversalSchematic,
+        chunk_size: Option<i32>,
+    ) -> Result<Self, String> {
+        let mut builder = CompactBlocksBuilder::new(chunk_size)?;
         let UniversalSchematic {
             default_region,
             other_regions,
@@ -34,74 +196,38 @@ impl CompactBlocks {
         } = schematic;
         let mut regions: Vec<_> = other_regions.into_iter().collect();
         regions.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
-        let mut chunks: HashMap<ChunkCoord, Vec<IndexedBlock>> = HashMap::new();
-        let mut palette = Vec::new();
-        let mut states = HashMap::new();
-        // Preserve the flat source's additive geometry: overlapping blocks and
-        // co-located entities all remain. For neighbor queries the mesher uses
-        // the last co-located entry, so make the previously HashMap-dependent
-        // order explicit: default region, other region keys, then each region's
-        // volume scan and entities. Stable spatial sorting keeps those ties.
         for region in std::iter::once(default_region).chain(regions.into_iter().map(|(_, r)| r)) {
-            // The public accessor clones a small palette once per region. Its
-            // entries move into the deduplication map, never into each voxel.
-            let region_palette = region.get_palette();
-            let mut remap = Vec::with_capacity(region_palette.len());
-            for state in region_palette {
-                if is_air(&state.name) {
-                    remap.push(None);
-                    continue;
-                }
-                let index = match states.entry(state) {
-                    Entry::Occupied(entry) => *entry.get(),
-                    Entry::Vacant(entry) => {
-                        let index = u32::try_from(palette.len())
-                            .map_err(|_| "The schematic has too many block states.")?;
-                        palette.push(block_state_to_input_block(entry.key()));
-                        entry.insert(index);
-                        index
-                    }
-                };
-                remap.push(Some(index));
-            }
+            builder.block_count = builder
+                .block_count
+                .checked_add(
+                    i64::try_from(region.count_blocks()).map_err(|_| "Block count exceeds i64.")?,
+                )
+                .ok_or("Block count exceeds i64.")?;
+            let remap = builder.register_palette(&region.get_palette())?;
             for (index, &state) in region.blocks.iter().enumerate() {
-                let Some(&state) = remap.get(state) else {
-                    return Err("The schematic contains an invalid palette index.".into());
-                };
-                if let Some(state) = state {
+                let entry = remap
+                    .get(state)
+                    .ok_or("The schematic contains an invalid palette index.")?;
+                if let Some(state) = entry.index {
                     let (x, y, z) = region.index_to_coords(index);
-                    let position = BlockPosition::new(x, y, z);
-                    chunks
-                        .entry(chunk_coord(position, chunk_size))
-                        .or_default()
-                        .push((position, state));
+                    builder.push_index(BlockPosition::new(x, y, z), state)?;
                 }
             }
             for entity in &region.entities {
-                let position = BlockPosition::new(
-                    entity.position.0.floor() as i32,
-                    entity.position.1.floor() as i32,
-                    entity.position.2.floor() as i32,
-                );
-                let index = u32::try_from(palette.len())
-                    .map_err(|_| "The schematic has too many block states.")?;
-                palette.push(entity_to_input_block(entity));
-                chunks
-                    .entry(chunk_coord(position, chunk_size))
-                    .or_default()
-                    .push((position, index));
+                builder.push_entity(entity)?;
             }
-            // Moving regions through this loop releases each dense block array
-            // now, while the remaining regions and compact index still coexist.
+            builder.add_block_entities(region.block_entities.len())?;
+            // Release this region's dense volume before converting the next one.
         }
-        drop(states);
-        let mut chunks: Vec<_> = chunks.into_iter().collect();
-        chunks.sort_unstable_by_key(|(coord, _)| *coord);
-        for (_, blocks) in &mut chunks {
-            // Stable ties preserve region/entity order at duplicate positions.
-            blocks.sort_by_key(|(pos, _)| (pos.y, pos.z, pos.x));
-        }
-        Ok(Self { chunks, palette })
+        Ok(builder.finish())
+    }
+
+    pub(crate) fn block_count(&self) -> i64 {
+        self.block_count
+    }
+
+    pub(crate) fn block_entity_count(&self) -> i64 {
+        self.block_entity_count
     }
 
     fn atlas(
@@ -137,7 +263,24 @@ impl CompactBlocks {
             .map_err(|error| format!("Unable to prepare schematic textures: {error}"))
     }
 
-    fn context(&self, coord: ChunkCoord, chunk_size: i32) -> Vec<(BlockPosition, &InputBlock)> {
+    fn context(
+        &self,
+        coord: ChunkCoord,
+        chunk_size: Option<i32>,
+    ) -> Vec<(BlockPosition, &InputBlock)> {
+        let Some(chunk_size) = chunk_size else {
+            // Unseparated means one real core and complete neighbor context,
+            // not a hidden series of meshing windows merged after greedy meshing.
+            return self
+                .chunks
+                .iter()
+                .flat_map(|(_, blocks)| {
+                    blocks
+                        .iter()
+                        .map(|&(pos, state)| (pos, &self.palette[state as usize]))
+                })
+                .collect();
+        };
         let (min, max) = chunk_bounds(coord, chunk_size);
         let capacity = self
             .chunks
@@ -200,7 +343,7 @@ fn chunk_bounds(coord: ChunkCoord, size: i32) -> ([i64; 3], [i64; 3]) {
 pub(super) struct ChunkMeshes<'a> {
     source: CompactBlocks,
     index: usize,
-    chunk_size: i32,
+    chunk_size: Option<i32>,
     pack: &'a ResourcePack,
     config: MesherConfig,
     atlas: TextureAtlas,
@@ -208,14 +351,25 @@ pub(super) struct ChunkMeshes<'a> {
 }
 
 impl<'a> ChunkMeshes<'a> {
+    #[cfg(test)]
     pub(super) fn new(
         schematic: UniversalSchematic,
         pack: &'a ResourcePackSource,
         config: &MeshConfig,
-        chunk_size: i32,
+        chunk_size: Option<i32>,
         current: impl Fn() -> Result<(), String>,
     ) -> Result<Self, String> {
-        let source = CompactBlocks::new(schematic, chunk_size)?;
+        let source = CompactBlocks::from_schematic(schematic, chunk_size)?;
+        Self::from_source(source, pack, config, chunk_size, current)
+    }
+
+    pub(super) fn from_source(
+        source: CompactBlocks,
+        pack: &'a ResourcePackSource,
+        config: &MeshConfig,
+        chunk_size: Option<i32>,
+        current: impl Fn() -> Result<(), String>,
+    ) -> Result<Self, String> {
         current()?;
         let config = mesher_config(config);
         let atlas = source.atlas(pack, &config)?;
@@ -243,8 +397,17 @@ impl Iterator for ChunkMeshes<'_> {
     fn next(&mut self) -> Option<Self::Item> {
         let (coord, blocks) = self.source.chunks.get(self.index)?;
         self.index += 1;
-        let (min, max) = chunk_bounds(*coord, self.chunk_size);
-        let bounds = BoundingBox::new(min.map(|value| value as f32), max.map(|value| value as f32));
+        let bounds = if let Some(size) = self.chunk_size {
+            let (min, max) = chunk_bounds(*coord, size);
+            BoundingBox::new(min.map(|value| value as f32), max.map(|value| value as f32))
+        } else {
+            BoundingBox::from_points(
+                blocks
+                    .iter()
+                    .map(|(pos, _)| [pos.x as f32, pos.y as f32, pos.z as f32]),
+            )
+            .expect("Only occupied groups are retained")
+        };
         // Context and output both borrow the palette. No full InputBlock map or
         // geometry is retained after this one chunk has been consumed.
         let context = self.source.context(*coord, self.chunk_size);
@@ -260,7 +423,7 @@ impl Iterator for ChunkMeshes<'_> {
                 bounds,
             )
             .map(|mut mesh| {
-                mesh.chunk_coord = Some(*coord);
+                mesh.chunk_coord = self.chunk_size.map(|_| *coord);
                 mesh
             }),
         )

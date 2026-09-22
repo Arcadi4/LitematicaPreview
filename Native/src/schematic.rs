@@ -38,9 +38,12 @@ pub(super) fn read(data: &[u8], limits: &DecodeLimits) -> Result<UniversalSchema
     if palette.is_empty() || palette.len() > limits.max_palette_entries {
         return Err("palette limit exceeded or palette is empty".into());
     }
-    let palette_max = blocks
-        .get::<_, i32>("PaletteMax")
-        .unwrap_or(palette.len() as i32);
+    let palette_max = match blocks.get::<_, i32>("PaletteMax") {
+        Ok(value) => value,
+        Err(_) => {
+            i32::try_from(palette.len()).map_err(|_| "palette size exceeds i32 representation")?
+        }
+    };
     if palette_max < 0 || palette_max as usize > limits.max_palette_entries {
         return Err("palette limit exceeded".into());
     }
@@ -129,7 +132,14 @@ pub(super) fn read(data: &[u8], limits: &DecodeLimits) -> Result<UniversalSchema
         (0, 0, 0),
         (i32::from(width), i32::from(height), i32::from(length)),
     )?;
-    let mut remap = vec![usize::MAX; max_id + 1];
+    let remap_len = max_id
+        .checked_add(1)
+        .ok_or("palette index count overflow")?;
+    let mut remap = Vec::new();
+    remap
+        .try_reserve_exact(remap_len)
+        .map_err(|error| error.to_string())?;
+    remap.resize(remap_len, usize::MAX);
     for (state, value) in palette.inner() {
         let NbtTag::Int(id) = value else {
             unreachable!("palette preflight")

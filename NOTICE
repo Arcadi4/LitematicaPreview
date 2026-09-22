@@ -4,6 +4,13 @@ The source repository's LICENSE is GNU AGPL version 3 and is preserved.
 The source NOTICE described an older MIT license; this port follows LICENSE.
 
 Nucleation and schematic-mesher power file decoding and meshing.
+Nucleation 0.10.14 is used unmodified from crates.io. Native/src/litematic.rs,
+Native/src/schematic.rs and Native/src/meshing.rs contain application-owned
+readers/adapters adapted from its MIT-licensed implementation (Copyright (c) 2025
+Schem-at); the full license is in ThirdParty/Nucleation-LICENSE.txt.
+schematic-mesher 0.2.0 is also used unmodified from crates.io. Native/src/meshing/
+adapts its public builders for neighbor-aware chunks, stable texture atlases and
+mesh buffer ownership. Its license is in ThirdParty/schematic-mesher-LICENSE.txt.
 Tauri 2 provides the Rust desktop host and the Windows WebView2 integration.
 React and Fluent UI React v9 provide the desktop interface and Fluent System Icons.
 The preview renderer uses WebGL 2 and gl-matrix for camera and matrix operations.

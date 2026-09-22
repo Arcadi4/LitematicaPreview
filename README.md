@@ -12,18 +12,18 @@
   [Features](#features) • [Installation](#installation) • [Supported Formats](#supported-formats) • [Controls](#controls) • [Development](#development)
 </div>
 
-Litematica Preview is a native Windows desktop application for inspecting and viewing Minecraft schematics and structures in real-time 3D. Adapted from [LitematicaQL](https://github.com/Arcadi4/LitematicaQL) for macOS, it uses [Nucleation](https://github.com/Schem-at/Nucleation) to decode and mesh builds locally without uploading files to external services.
+Litematica Preview is a native Windows desktop application for inspecting and viewing Minecraft schematics and structures in real-time 3D. Adapted from [LitematicaQL](https://github.com/Arcadi4/LitematicaQL) for macOS, it uses [Nucleation](https://github.com/Schem-at/Nucleation) and application-owned bounded readers to decode builds locally, with schematic-mesher generating their geometry. Files are never uploaded to external services.
 
 The app pairs a Rust host with Fluent UI React v9 and an on-demand WebGL 2 renderer, delivering a responsive desktop experience with native Windows shell integration.
 
 ## Features
 
-- **Offline & Private**: Decoding and meshing run entirely locally via Nucleation; schematic data is never uploaded.
+- **Offline & Private**: Decoding and meshing run entirely locally; schematic data is never uploaded.
 - **Seven Format Support**: Inspect `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, and `.nusn` files.
 - **Accurate Material Meshing**: Opaque, cutout, and transparent geometry are rendered in dedicated passes with repeated greedy meshing and high-fidelity textures.
 - **Tight Geometry Framing**: Initial camera framing and **Fit** calculate tight bounding geometry rather than empty chunk boundaries.
 - **On-Demand Rendering**: The WebGL 2 engine redraws only on user input, resize, or file loads instead of running a perpetual animation loop.
-- **Responsive Architecture**: Meshes stream across Tauri IPC as binary vertex buffers, yielding during GPU uploads and discarding stale requests when a new file opens.
+- **Bounded Transfers**: Spatial chunks are generated with complete neighbor context, sent in acknowledged frames, and uploaded to WebGL through binary reads of at most 1 MiB. Normals and colors use normalized 8-bit attributes.
 - **Windows Integration**: Per-user file association management, Fluent UI v9 controls, light/dark/system themes, and drag-and-drop support.
 
 File-open failures and recoverable internal errors display their diagnostic in an
@@ -32,6 +32,14 @@ even a native decoder crash does not close the viewer, and the next open starts
 a fresh worker. On Windows the worker has a 2 GiB memory limit. Extremely detailed
 schematics can exceed this limit and cannot be previewed. The resource pack is
 cached while the worker remains healthy.
+
+Native owns Litematic and Sponge readers that fill each region's final block array
+directly. It retains compact palette-indexed chunk data for neighbor queries while
+generating and releasing one mesh chunk at a time. The host stores one segmented
+upload payload, then releases it after upload or cancellation. The WebView uploads
+each bounded segment directly to GPU buffers without assembling a complete model
+ArrayBuffer. The 2 GiB limit applies to the decoder, not the combined host,
+WebView2 and GPU memory.
 
 ## Installation
 
@@ -123,6 +131,13 @@ The application can register as a Windows handler for supported schematic format
 - Current stable [Rust](https://www.rust-lang.org/) toolchain with the `x86_64-pc-windows-msvc` target installed
 - Visual Studio 2022 Build Tools with **Desktop development with C++**, x64 MSVC tools, and Windows SDK
 - Microsoft Edge WebView2 Evergreen Runtime
+
+Nucleation `0.10.14` and schematic-mesher `0.2.0` are pinned to their unmodified
+crates.io releases. No dependency patch or Vendor directory is required.
+Application-owned bounded readers, compact chunk scheduling, neighbor context,
+dynamic atlas discovery and mesh ownership adapters live in `Native/src/` and
+use the dependencies' public APIs. A first build needs registry access or a
+populated Cargo cache; offline viewing does not require a network connection.
 
 ### Build from Source
 

@@ -421,3 +421,6 @@ fn dye_color_name(color: u8) -> &'static str {
         _ => "white",
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -142,3 +142,72 @@ fn extract_tile(atlas: &TextureAtlas, region: &AtlasRegion) -> Result<TextureDat
     }
     Ok(TextureData::new(width, height, pixels))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repacking_preserves_rectangular_pixels_and_regenerates_padding() {
+        let pixels: Vec<u8> = (0..24).collect();
+        let mut source = AtlasBuilder::new(256, 3);
+        source.add_texture("_dynamic".into(), TextureData::new(3, 2, pixels.clone()));
+        let source = source.build().unwrap();
+        let tile = extract_tile(&source, source.get_region("_dynamic").unwrap()).unwrap();
+        assert_eq!((tile.width, tile.height), (3, 2));
+        assert_eq!(tile.pixels, pixels);
+
+        let mut target = AtlasBuilder::new(256, 1);
+        target.add_texture("_dynamic".into(), tile);
+        let target = target.build().unwrap();
+        let region = target.get_region("_dynamic").unwrap();
+        let x = (region.u_min * target.width as f32) as usize;
+        let y = (region.v_min * target.height as f32) as usize;
+        let offset = ((y - 1) * target.width as usize + x - 1) * 4;
+        assert_eq!(&target.pixels[offset..offset + 4], &pixels[..4]);
+        assert_eq!(extract_tile(&target, region).unwrap().pixels, pixels);
+    }
+
+    #[test]
+    fn position_keyed_skins_survive_shared_atlas_and_chunk_builds() {
+        let mut pack = ResourcePack::new();
+        let pixels: Vec<u8> = (0..64 * 64 * 4).map(|index| (index % 251) as u8).collect();
+        pack.add_texture(
+            "minecraft",
+            "entity/player/wide/steve",
+            TextureData::new(64, 64, pixels.clone()),
+        );
+        let config = MesherConfig::default();
+        let block = InputBlock::new("minecraft:player_head");
+        let positions = [BlockPosition::new(-65, 2, 3), BlockPosition::new(128, 2, 3)];
+        let atlas = build(
+            &pack,
+            &config,
+            positions.into_iter().map(|pos| (pos, &block)),
+        )
+        .unwrap();
+        assert!(atlas.contains("__missing__"));
+        for pos in positions {
+            let key = format!("_player_head/{}_{}_{}", pos.x, pos.y, pos.z);
+            let region = atlas.get_region(&key).unwrap();
+            assert_eq!(extract_tile(&atlas, region).unwrap().pixels, pixels);
+            let mut builder = MeshBuilder::new(&pack, &config, None, None, None);
+            builder.add_block(pos, &block).unwrap();
+            let (_, _, _, actual, _, _) = builder.build(Some(atlas.clone())).unwrap();
+            assert_eq!((actual.width, actual.height), (atlas.width, atlas.height));
+            assert_eq!(actual.pixels, atlas.pixels);
+            for (path, expected) in &atlas.regions {
+                let actual = actual.get_region(path).unwrap();
+                assert_eq!(
+                    [actual.u_min, actual.v_min, actual.u_max, actual.v_max],
+                    [
+                        expected.u_min,
+                        expected.v_min,
+                        expected.u_max,
+                        expected.v_max
+                    ]
+                );
+            }
+        }
+    }
+}

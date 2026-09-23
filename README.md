@@ -37,6 +37,8 @@ Open a schematic by double-clicking an associated file in Explorer, dragging a f
 
 For large builds, open **Preview settings** from the top-right menu to adjust chunk separation and the decoder memory limit. The limit is off by default; enabling it starts at 2048 MB and accepts integer values through 8192 MB. Changes apply on the next file open.
 
+Loading shows indeterminate decoding, then progress by processed mesh chunks and uploaded model bytes. Chunk counts are not time estimates; disabling chunk separation leaves one mesh group. During loading, the footer displays the decoder's Windows working set in MB, which can include shared pages and fluctuate. Model data is the uploaded geometry and texture byte count, not actual GPU memory; it remains visible with the preview and clears on Home.
+
 ## Supported Formats
 
 | Extension | File format |

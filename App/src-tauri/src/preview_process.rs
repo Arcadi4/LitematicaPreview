@@ -128,6 +128,10 @@ impl DecoderProcess {
         self.memory_limit_mb
     }
 
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
     // The outer error invalidates the process; an inner decoder error leaves
     // the connection and resource-pack cache available for the next request.
     pub fn load(
@@ -196,6 +200,56 @@ impl Drop for DecoderProcess {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn working_set(pid: u32) -> Option<u64> {
+    use std::mem::size_of;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
+    use windows_sys::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // Standard access right required by WaitForSingleObject on process handles.
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        return None;
+    }
+    let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+    if unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } != WAIT_TIMEOUT {
+        return None;
+    }
+    let mut counters = PROCESS_MEMORY_COUNTERS {
+        cb: size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        PageFaultCount: 0,
+        PeakWorkingSetSize: 0,
+        WorkingSetSize: 0,
+        QuotaPeakPagedPoolUsage: 0,
+        QuotaPagedPoolUsage: 0,
+        QuotaPeakNonPagedPoolUsage: 0,
+        QuotaNonPagedPoolUsage: 0,
+        PagefileUsage: 0,
+        PeakPagefileUsage: 0,
+    };
+    let ok = unsafe {
+        GetProcessMemoryInfo(
+            handle.as_raw_handle(),
+            &mut counters,
+            size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        )
+    };
+    (ok != 0 && unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } == WAIT_TIMEOUT)
+        .then_some(counters.WorkingSetSize as u64)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn working_set(_: u32) -> Option<u64> {
+    None
 }
 
 pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {

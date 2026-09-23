@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use std::sync::Mutex;
 
@@ -44,6 +44,8 @@ impl LoadOptions {
 #[derive(Default)]
 pub struct PreviewWorker {
     generation: AtomicU64,
+    active_request: AtomicU64,
+    worker_pid: AtomicU32,
     process: Mutex<Option<DecoderProcess>>,
     payload: Mutex<Option<(u64, protocol::Payload)>>,
 }
@@ -51,12 +53,16 @@ pub struct PreviewWorker {
 impl PreviewWorker {
     pub fn begin_session(&self) -> u64 {
         let request_id = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        self.active_request.store(0, Ordering::Release);
         self.clear_older_payloads(request_id);
         request_id
     }
 
     pub fn advance(&self, request_id: u64) {
         self.generation.fetch_max(request_id, Ordering::AcqRel);
+        if self.active_request.load(Ordering::Acquire) != self.generation.load(Ordering::Acquire) {
+            self.active_request.store(0, Ordering::Release);
+        }
         self.clear_older_payloads(self.generation.load(Ordering::Acquire));
     }
 
@@ -66,6 +72,23 @@ impl PreviewWorker {
         } else {
             Err("Cancelled".into())
         }
+    }
+
+    pub fn decoder_working_set(&self, request_id: u64) -> Option<u64> {
+        if self.generation.load(Ordering::Acquire) != request_id
+            || self.active_request.load(Ordering::Acquire) != request_id
+        {
+            return None;
+        }
+        let pid = self.worker_pid.load(Ordering::Acquire);
+        if pid == 0 {
+            return None;
+        }
+        let bytes = crate::preview_process::working_set(pid)?;
+        (self.generation.load(Ordering::Acquire) == request_id
+            && self.active_request.load(Ordering::Acquire) == request_id
+            && self.worker_pid.load(Ordering::Acquire) == pid)
+            .then_some(bytes)
     }
 
     pub fn load(
@@ -87,11 +110,17 @@ impl PreviewWorker {
             .as_ref()
             .is_some_and(|process| process.memory_limit_mb() != options.memory_limit_mb)
         {
+            self.active_request.store(0, Ordering::Release);
+            self.worker_pid.store(0, Ordering::Release);
             process.take();
         }
         if process.is_none() {
             *process = Some(DecoderProcess::spawn(options.memory_limit_mb)?);
         }
+        self.worker_pid
+            .store(process.as_ref().unwrap().pid(), Ordering::Release);
+        self.ensure_current(request_id)?;
+        self.active_request.store(request_id, Ordering::Release);
         let result = process
             .as_mut()
             .ok_or("The preview worker is unavailable.")?
@@ -103,8 +132,14 @@ impl PreviewWorker {
                 on_progress,
             );
         let payload = match result {
-            Ok(result) => result?,
+            Ok(Err(error)) => {
+                self.active_request.store(0, Ordering::Release);
+                return Err(error);
+            }
+            Ok(Ok(payload)) => payload,
             Err(error) => {
+                self.active_request.store(0, Ordering::Release);
+                self.worker_pid.store(0, Ordering::Release);
                 process.take();
                 return Err(error);
             }
@@ -132,6 +167,9 @@ impl PreviewWorker {
     }
 
     pub fn release(&self, request_id: u64) {
+        if self.active_request.load(Ordering::Acquire) == request_id {
+            self.active_request.store(0, Ordering::Release);
+        }
         // A stale upload's finally block must never release the newer model.
         if let Ok(mut stored) = self.payload.lock() {
             if stored.as_ref().is_some_and(|(id, _)| *id == request_id) {

@@ -149,6 +149,7 @@ function savedPreviewSettings(): PreviewSettings {
 export default function App({ initialError }: { initialError?: string }) {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
   const [loading, setLoading] = useState<Loading | null>(null)
+  const [decoderMemory, setDecoderMemory] = useState<number | null>(null)
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [dragging, setDragging] = useState(false)
@@ -320,6 +321,7 @@ export default function App({ initialError }: { initialError?: string }) {
         return
       }
       setLoading({ path, requestId: id, phase: "decode", completed: 0, total: 0 })
+      setDecoderMemory(null)
       const started = performance.now()
       let unlistenProgress: (() => void) | undefined
       try {
@@ -404,13 +406,15 @@ export default function App({ initialError }: { initialError?: string }) {
           seconds: (performance.now() - started) / 1000,
         })
         setLoading(null)
+        setDecoderMemory(null)
         updateTitle(path, id)
         // React has committed the active view before the native decode finishes.
         canvasRef.current?.focus({ preventScroll: true })
       } catch (error) {
         if (!isCurrent(id)) return
         rendererRef.current?.clear()
-          setLoading(null)
+        setLoading(null)
+        setDecoderMemory(null)
         if (errorMessage(error) !== "Cancelled")
           setNotice({ intent: "error", message: `${path}\n\n${errorMessage(error)}` })
       } finally {
@@ -557,6 +561,31 @@ export default function App({ initialError }: { initialError?: string }) {
       canvas?.removeEventListener("webglcontextlost", allowContextRestore)
     }
   }, [cancelNative, isCurrent, loadPath])
+
+  useEffect(() => {
+    if (!loading) return
+    const id = loading.requestId
+    let active = true
+    let inFlight = false
+    const sample = async () => {
+      if (inFlight) return
+      inFlight = true
+      try {
+        const bytes = await invoke<number | null>("decoder_working_set", { requestId: id })
+        if (active && isCurrent(id)) setDecoderMemory(bytes)
+      } catch {
+        if (active && isCurrent(id)) setDecoderMemory(null)
+      } finally {
+        inFlight = false
+      }
+    }
+    void sample()
+    const timer = window.setInterval(() => void sample(), 500)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [loading?.requestId, isCurrent])
 
   useEffect(() => {
     const media = matchMedia("(prefers-color-scheme: dark)")
@@ -1001,7 +1030,10 @@ export default function App({ initialError }: { initialError?: string }) {
                   ? "Choose a schematic in the file dialog"
                   : "Local files. A clearer view."}
             </span>
-            <span className="ml-auto hidden sm:inline">Works offline</span>
+            {loading && decoderMemory !== null && (
+              <span className="ml-auto">Decoder memory {formatMB(decoderMemory)}</span>
+            )}
+            <span className={loading && decoderMemory !== null ? "hidden sm:inline" : "ml-auto hidden sm:inline"}>Works offline</span>
           </>
         )}
       </footer>

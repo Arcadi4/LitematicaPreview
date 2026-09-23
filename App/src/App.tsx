@@ -22,6 +22,7 @@ import {
   MessageBar,
   MessageBarActions,
   MessageBarBody,
+  Slider,
   MessageBarTitle,
   SpinButton,
   Switch,
@@ -1030,22 +1031,33 @@ export default function App({ initialError }: { initialError?: string }) {
                         updatePreviewSettings({ chunkingEnabled: data.checked })
                       }
                     />
-                    <Field label="Chunk size (blocks per side)">
-                      <Select
-                        value={String(previewSettings.chunkSize)}
+                    <Field label={`Chunk size (blocks per side): ${previewSettings.chunkSize}`}>
+                      <Slider
+                        className="chunk-size-slider mb-8"
+                        min={0}
+                        max={chunkSizes.length - 1}
+                        step={1}
+                        aria-label="Chunk size (blocks per side)"
+                        value={chunkSizes.indexOf(previewSettings.chunkSize)}
                         disabled={!previewSettings.chunkingEnabled}
-                        onChange={(_, data) => {
-                          const value = Number(data.value)
-                          if (chunkSizes.includes(value))
-                            updatePreviewSettings({ chunkSize: value })
+                        rail={{
+                          className: "chunk-size-rail",
+                          children: chunkSizes.map((size, index) => (
+                            <span
+                              key={size}
+                              aria-hidden="true"
+                              className="chunk-size-mark"
+                              style={{ left: `${(index / (chunkSizes.length - 1)) * 100}%` }}
+                            >
+                              <span className="chunk-size-mark-dot" />
+                              <span className="chunk-size-mark-label">{size}</span>
+                            </span>
+                          )),
                         }}
-                      >
-                        {chunkSizes.map((value) => (
-                          <option key={value} value={value}>
-                            {value}
-                          </option>
-                        ))}
-                      </Select>
+                        onChange={(_, data) =>
+                          updatePreviewSettings({ chunkSize: chunkSizes[data.value] })
+                        }
+                      />
                     </Field>
                     <p
                       id="chunk-size-description"

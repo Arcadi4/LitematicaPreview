@@ -77,6 +77,54 @@
   }
 }
 
+@property --fui-Slider--progress {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 0%;
+}
+
+.chunk-size-slider {
+  transition: --fui-Slider--progress 180ms ease-out;
+}
+
+.chunk-size-rail {
+  overflow: visible;
+}
+
+.chunk-size-mark {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.chunk-size-mark-dot {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--colorNeutralStroke1);
+  border-radius: 50%;
+  background: var(--colorNeutralBackground1);
+}
+
+.chunk-size-mark-label {
+  position: absolute;
+  top: 17px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--colorNeutralForeground2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.chunk-size-slider:has(input:disabled) .chunk-size-mark-dot {
+  border-color: var(--colorNeutralForegroundDisabled);
+}
+
+.chunk-size-slider:has(input:disabled) .chunk-size-mark-label {
+  color: var(--colorNeutralForegroundDisabled);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

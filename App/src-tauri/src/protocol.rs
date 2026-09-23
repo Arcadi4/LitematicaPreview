@@ -10,9 +10,9 @@ const END: u8 = 0;
 const ERROR: u8 = 1;
 const TEXTURE: u8 = 2;
 const PART: u8 = 3;
+const DATA: u8 = 4;
 const CHECKPOINT: u8 = 5;
 const PROGRESS: u8 = 6;
-const DATA: u8 = 4;
 const CONTINUE: u8 = 1;
 const CANCEL: u8 = 0;
 const TOO_LARGE: &str = "The preview is too large to transfer to the graphics device.";
@@ -254,13 +254,13 @@ impl<'a, S: Read + Write> Encoder<'a, S> {
     pub fn checkpoint(&mut self) -> Result<(), String> {
         self.send(CHECKPOINT, &[])
     }
+
     pub fn progress(&mut self, completed: u64, total: u64) -> Result<(), String> {
         let mut bytes = [0; 16];
         bytes[..8].copy_from_slice(&completed.to_le_bytes());
         bytes[8..].copy_from_slice(&total.to_le_bytes());
         self.send(PROGRESS, &bytes)
     }
-
 
     fn send(&mut self, kind: u8, bytes: &[u8]) -> Result<(), String> {
         write_packet(self.stream, kind, bytes).map_err(|e| e.to_string())?;
@@ -406,8 +406,8 @@ pub fn receive(
     let mut buffers: Vec<Buffer> = Vec::new();
     let mut pending = std::collections::VecDeque::new();
     let mut total = 0usize;
-    let mut progress = None;
     let mut cancelled = false;
+    let mut progress = None;
     loop {
         let (kind, bytes) = read_packet(stream)?;
         cancelled |= !current();
@@ -866,6 +866,56 @@ mod tests {
                 .unwrap(),
             [0; 12]
         );
+    }
+
+    #[test]
+    fn mesh_progress_is_acknowledged_and_validated_between_previews() {
+        let mut bytes = Vec::new();
+        let mut initial = [0; 16];
+        initial[8..].copy_from_slice(&1u64.to_le_bytes());
+        write_packet(&mut bytes, PROGRESS, &initial).unwrap();
+        let mut completed = [0; 16];
+        completed[..8].copy_from_slice(&1u64.to_le_bytes());
+        completed[8..].copy_from_slice(&1u64.to_le_bytes());
+        write_packet(&mut bytes, PROGRESS, &completed).unwrap();
+        bytes.extend(part_packets(0));
+        let mut connection = wire(bytes);
+        let mut observed = Vec::new();
+        receive(
+            &mut connection,
+            || true,
+            |done, total| observed.push((done, total)),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(observed, [(0, 1), (1, 1)]);
+        assert_eq!(&connection.outgoing[..2], &[CONTINUE, CONTINUE]);
+
+        for invalid_bytes in [vec![0; 15], {
+            let mut count = [0; 16];
+            count[..8].copy_from_slice(&2u64.to_le_bytes());
+            count[8..].copy_from_slice(&1u64.to_le_bytes());
+            count.to_vec()
+        }] {
+            let mut bytes = Vec::new();
+            write_packet(&mut bytes, PROGRESS, &invalid_bytes).unwrap();
+            assert!(receive(&mut wire(bytes), || true, |_, _| {}).is_err());
+        }
+    }
+
+    #[test]
+    fn mesh_progress_rejects_incomplete_or_regressing_results() {
+        let mut bytes = Vec::new();
+        let mut first = [0; 16];
+        first[8..].copy_from_slice(&2u64.to_le_bytes());
+        write_packet(&mut bytes, PROGRESS, &first).unwrap();
+        bytes.extend(part_packets(0));
+        assert!(receive(&mut wire(bytes), || true, |_, _| {}).is_err());
+
+        let mut bytes = Vec::new();
+        write_packet(&mut bytes, PROGRESS, &first).unwrap();
+        write_packet(&mut bytes, PROGRESS, &first).unwrap();
+        assert!(receive(&mut wire(bytes), || true, |_, _| {}).is_err());
     }
 
     #[test]

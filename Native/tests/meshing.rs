@@ -82,6 +82,7 @@ fn public_preview_preserves_dense_fixture_counts_and_geometry_for_all_formats() 
         )
         .unwrap()
         .info;
+        let mut progress = Vec::new();
         let actual = load_chunks(
             &bytes,
             &pack,
@@ -89,11 +90,15 @@ fn public_preview_preserves_dense_fixture_counts_and_geometry_for_all_formats() 
                 chunk_size: None,
                 ..PreviewOptions::default()
             },
-            |_, _| Ok(()),
             |_| Ok(()),
+            |completed, total| {
+                progress.push((completed, total));
+                Ok(())
+            },
             || Ok(()),
         )
         .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(progress, [(0, 1), (1, 1)], "{name}");
         assert_eq!(actual.block_count, expected.block_count, "{name}");
         assert_eq!(
             actual.block_entity_count, expected.block_entity_count,
@@ -121,6 +126,7 @@ fn native_stream_counts_visible_bounds_and_stops_between_chunks() {
     let data = nucleation::formats::litematic::to_litematic(&schematic).unwrap();
     let mut triangles = 0;
     let mut chunk_count = 0;
+    let mut progress = Vec::new();
     let info = load_chunks(
         &data,
         &pack,
@@ -129,12 +135,16 @@ fn native_stream_counts_visible_bounds_and_stops_between_chunks() {
             chunk_count += 1;
             triangles += preview.info.triangle_count;
             Ok(())
-        |_, _| Ok(()),
+        },
+        |completed, total| {
+            progress.push((completed, total));
+            Ok(())
         },
         || Ok(()),
     )
     .unwrap();
     assert_eq!(chunk_count, 2);
+    assert_eq!(progress, [(0, 2), (1, 2), (2, 2)]);
     // Decode counts retain their upstream meaning; cave/void air do not emit
     // geometry, affect visible bounds, or create an extra streamed chunk.
     assert_eq!(info.block_count, 4);
@@ -151,8 +161,8 @@ fn native_stream_counts_visible_bounds_and_stops_between_chunks() {
         |_| {
             consumed.set(consumed.get() + 1);
             Ok(())
-        |_, _| Ok(()),
         },
+        |_, _| Ok(()),
         || {
             if consumed.get() > 0 {
                 Err("cancelled".into())
@@ -257,8 +267,8 @@ fn negative_litematic_extents_preserve_entity_origin_and_visible_geometry() {
                 chunk_size: None,
                 ..PreviewOptions::default()
             },
-            |_, _| Ok(()),
             |_| Ok(()),
+            |_, _| Ok(()),
             || Ok(()),
         )
         .unwrap()
@@ -288,8 +298,8 @@ fn consumer_failure_stops_streaming_without_accepting_another_chunk() {
         |_| {
             consumed += 1;
             Err("transport closed".into())
-        |_, _| Ok(()),
         },
+        |_, _| Ok(()),
         || Ok(()),
     );
     assert_eq!(result.err().as_deref(), Some("transport closed"));
@@ -328,8 +338,8 @@ fn requested_chunk_sizes_and_disabled_separation_control_delivered_groups() {
                 assert_eq!(preview.mesh.chunk_coord.is_some(), chunk_size.is_some());
                 groups += 1;
                 Ok(())
-            |_, _| Ok(()),
             },
+            |_, _| Ok(()),
             || Ok(()),
         )
         .unwrap();
@@ -350,8 +360,8 @@ fn unseparated_greedy_mesh_merges_across_the_default_chunk_boundary() {
         &data,
         &pack,
         PreviewOptions::default(),
-        |_, _| Ok(()),
         |_| Ok(()),
+        |_, _| Ok(()),
         || Ok(()),
     )
     .unwrap();
@@ -367,8 +377,8 @@ fn unseparated_greedy_mesh_merges_across_the_default_chunk_boundary() {
             groups += 1;
             assert_eq!(preview.mesh.chunk_coord, None);
             Ok(())
-        |_, _| Ok(()),
         },
+        |_, _| Ok(()),
         || Ok(()),
     )
     .unwrap();
@@ -409,8 +419,8 @@ fn invalid_options_fail_before_decoding_or_consuming_input() {
             &[],
             &pack,
             options,
-            |_, _| Ok(()),
             |_| panic!("invalid options reached consumer"),
+            |_, _| Ok(()),
             || panic!("invalid options reached decoding"),
         );
         assert_eq!(result.err(), Some(expected));

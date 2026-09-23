@@ -9,14 +9,14 @@ pub use decode::{decode, DecodeFailure};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PreviewOptions {
-    pub memory_limit_gib: Option<u8>,
+    pub memory_limit_mb: Option<u16>,
     pub chunk_size: Option<u16>,
 }
 
 impl Default for PreviewOptions {
     fn default() -> Self {
         Self {
-            memory_limit_gib: Some(2),
+            memory_limit_mb: None,
             chunk_size: Some(64),
         }
     }
@@ -25,10 +25,10 @@ impl Default for PreviewOptions {
 impl PreviewOptions {
     pub fn validate(&self) -> Result<(), String> {
         if self
-            .memory_limit_gib
-            .is_some_and(|limit| !(2..=8).contains(&limit))
+            .memory_limit_mb
+            .is_some_and(|limit| !(2048..=8192).contains(&limit))
         {
-            return Err("The memory limit must be an integer from 2 to 8 GiB.".into());
+            return Err("The memory limit must be an integer from 2048 to 8192 MB.".into());
         }
         if self
             .chunk_size

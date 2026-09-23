@@ -316,7 +316,7 @@ fn requested_chunk_sizes_and_disabled_separation_control_delivered_groups() {
             &data,
             &pack,
             PreviewOptions {
-                memory_limit_gib: None,
+                memory_limit_mb: None,
                 chunk_size,
             },
             |preview| {
@@ -376,23 +376,23 @@ fn invalid_options_fail_before_decoding_or_consuming_input() {
     let pack = test_pack();
     for options in [
         PreviewOptions {
-            memory_limit_gib: Some(1),
+            memory_limit_mb: Some(2047),
             chunk_size: Some(64),
         },
         PreviewOptions {
-            memory_limit_gib: Some(9),
+            memory_limit_mb: Some(8193),
             chunk_size: Some(64),
         },
         PreviewOptions {
-            memory_limit_gib: Some(2),
+            memory_limit_mb: Some(2048),
             chunk_size: Some(0),
         },
         PreviewOptions {
-            memory_limit_gib: Some(2),
+            memory_limit_mb: Some(2048),
             chunk_size: Some(48),
         },
         PreviewOptions {
-            memory_limit_gib: Some(2),
+            memory_limit_mb: Some(2048),
             chunk_size: Some(512),
         },
     ] {
@@ -406,16 +406,16 @@ fn invalid_options_fail_before_decoding_or_consuming_input() {
         );
         assert_eq!(result.err(), Some(expected));
     }
-    for limit in 2..=8 {
+    for limit in [2048, 2049, 8191, 8192] {
         PreviewOptions {
-            memory_limit_gib: Some(limit),
+            memory_limit_mb: Some(limit),
             chunk_size: None,
         }
         .validate()
         .unwrap();
     }
     PreviewOptions {
-        memory_limit_gib: None,
+        memory_limit_mb: None,
         chunk_size: None,
     }
     .validate()

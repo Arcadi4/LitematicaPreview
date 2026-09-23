@@ -15,8 +15,8 @@ use crate::protocol;
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LoadOptions {
-    #[serde(rename = "memoryLimitGiB", deserialize_with = "required_nullable")]
-    memory_limit_gib: Option<u8>,
+    #[serde(rename = "memoryLimitMB", deserialize_with = "required_nullable")]
+    memory_limit_mb: Option<u16>,
     #[serde(deserialize_with = "required_nullable")]
     chunk_size: Option<u16>,
 }
@@ -32,7 +32,7 @@ where
 impl LoadOptions {
     pub fn validate(self) -> Result<PreviewOptions, String> {
         let options = PreviewOptions {
-            memory_limit_gib: self.memory_limit_gib,
+            memory_limit_mb: self.memory_limit_mb,
             chunk_size: self.chunk_size,
         };
         options.validate()?;
@@ -83,12 +83,12 @@ impl PreviewWorker {
         self.ensure_current(request_id)?;
         if process
             .as_ref()
-            .is_some_and(|process| process.memory_limit_gib() != options.memory_limit_gib)
+            .is_some_and(|process| process.memory_limit_mb() != options.memory_limit_mb)
         {
             process.take();
         }
         if process.is_none() {
-            *process = Some(DecoderProcess::spawn(options.memory_limit_gib)?);
+            *process = Some(DecoderProcess::spawn(options.memory_limit_mb)?);
         }
         let result = process
             .as_mut()
@@ -189,36 +189,40 @@ mod tests {
         use serde_json::json;
 
         assert_eq!(
-            options(json!({"memoryLimitGiB": 2, "chunkSize": 64})).unwrap(),
-            PreviewOptions::default()
+            options(json!({"memoryLimitMB": 2048, "chunkSize": 64})).unwrap(),
+            PreviewOptions {
+                memory_limit_mb: Some(2048),
+                ..PreviewOptions::default()
+            }
         );
         assert_eq!(
-            options(json!({"memoryLimitGiB": null, "chunkSize": null})).unwrap(),
+            options(json!({"memoryLimitMB": null, "chunkSize": null})).unwrap(),
             PreviewOptions {
-                memory_limit_gib: None,
+                memory_limit_mb: None,
                 chunk_size: None,
             }
         );
         for value in [
             json!({}),
-            json!({"memoryLimitGiB": 2}),
+            json!({"memoryLimitMB": 2048}),
             json!({"chunkSize": 64}),
-            json!({"memoryLimitGiB": 1, "chunkSize": 64}),
-            json!({"memoryLimitGiB": 9, "chunkSize": 64}),
-            json!({"memoryLimitGiB": 2.5, "chunkSize": 64}),
-            json!({"memoryLimitGiB": "2", "chunkSize": 64}),
-            json!({"memoryLimitGiB": 2, "chunkSize": 48}),
-            json!({"memoryLimitGiB": 2, "chunkSize": 64.5}),
-            json!({"memoryLimitGiB": 2, "chunkSize": 64, "extra": true}),
+            json!({"memoryLimitGiB": 2, "chunkSize": 64}),
+            json!({"memoryLimitMB": 2047, "chunkSize": 64}),
+            json!({"memoryLimitMB": 8193, "chunkSize": 64}),
+            json!({"memoryLimitMB": 2048.5, "chunkSize": 64}),
+            json!({"memoryLimitMB": "2048", "chunkSize": 64}),
+            json!({"memoryLimitMB": 2048, "chunkSize": 48}),
+            json!({"memoryLimitMB": 2048, "chunkSize": 64.5}),
+            json!({"memoryLimitMB": 2048, "chunkSize": 64, "extra": true}),
         ] {
             assert!(options(value.clone()).is_err(), "accepted {value}");
         }
-        for gib in 2..=8 {
+        for mb in [2048, 3072, 4096, 5120, 6144, 7168, 8192] {
             for size in [16, 32, 64, 128, 256] {
                 assert_eq!(
-                    options(json!({"memoryLimitGiB": gib, "chunkSize": size})).unwrap(),
+                    options(json!({"memoryLimitMB": mb, "chunkSize": size})).unwrap(),
                     PreviewOptions {
-                        memory_limit_gib: Some(gib),
+                        memory_limit_mb: Some(mb),
                         chunk_size: Some(size),
                     }
                 );

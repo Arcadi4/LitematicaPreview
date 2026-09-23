@@ -14,15 +14,15 @@ pub struct DecoderProcess {
     stream: Option<TcpStream>,
     // Kept open for the child's lifetime watchdog, including during native calls.
     input: Option<ChildStdin>,
-    memory_limit_gib: Option<u8>,
+    memory_limit_mb: Option<u16>,
     #[cfg(windows)]
     _job: std::os::windows::io::OwnedHandle,
 }
 
 impl DecoderProcess {
-    pub fn spawn(memory_limit_gib: Option<u8>) -> Result<Self, String> {
+    pub fn spawn(memory_limit_mb: Option<u16>) -> Result<Self, String> {
         PreviewOptions {
-            memory_limit_gib,
+            memory_limit_mb,
             ..PreviewOptions::default()
         }
         .validate()?;
@@ -52,7 +52,7 @@ impl DecoderProcess {
             command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
         #[cfg(windows)]
-        let job = decoder_job(memory_limit_gib)?;
+        let job = decoder_job(memory_limit_mb)?;
         let mut child = command
             .spawn()
             .map_err(|e| format!("Unable to start the decoder process: {e}"))?;
@@ -61,7 +61,7 @@ impl DecoderProcess {
             child,
             stream: None,
             input,
-            memory_limit_gib,
+            memory_limit_mb,
             #[cfg(windows)]
             _job: job,
         };
@@ -77,7 +77,7 @@ impl DecoderProcess {
                     .input
                     .as_mut()
                     .ok_or_else(|| io::Error::other("The decoder input pipe is unavailable"))?
-                    .write_all(&[memory_limit_gib.unwrap_or(0)])
+                    .write_all(&memory_limit_mb.unwrap_or(0).to_le_bytes())
             })
             .map_err(|e| process.failure(e))?;
 
@@ -124,8 +124,8 @@ impl DecoderProcess {
         }
     }
 
-    pub fn memory_limit_gib(&self) -> Option<u8> {
-        self.memory_limit_gib
+    pub fn memory_limit_mb(&self) -> Option<u16> {
+        self.memory_limit_mb
     }
 
     // The outer error invalidates the process; an inner decoder error leaves
@@ -208,13 +208,13 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
         .read_exact(&mut token)
         .map_err(|e| format!("Unable to read decoder authentication: {e}"))?;
     // Read the launch cap only from the inherited host pipe, never a load request.
-    let mut cap = [0];
+    let mut cap = [0; 2];
     io::stdin()
         .read_exact(&mut cap)
         .map_err(|e| format!("Unable to read decoder memory settings: {e}"))?;
-    let memory_limit_gib = (cap[0] != 0).then_some(cap[0]);
+    let memory_limit_mb = (u16::from_le_bytes(cap) != 0).then_some(u16::from_le_bytes(cap));
     PreviewOptions {
-        memory_limit_gib,
+        memory_limit_mb,
         ..PreviewOptions::default()
     }
     .validate()?;
@@ -248,7 +248,7 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
             serde_json::from_slice(&request)
                 .map_err(|e| format!("Invalid decoder request: {e}"))?;
         let options = PreviewOptions {
-            memory_limit_gib,
+            memory_limit_mb,
             chunk_size,
         };
         let result = crate::preview::decode(&path, &pack_path, &mut pack, options, &mut stream);
@@ -316,7 +316,7 @@ fn authentication_token() -> Result<[u8; TOKEN_BYTES], String> {
 }
 
 #[cfg(windows)]
-fn decoder_job(memory_limit_gib: Option<u8>) -> Result<std::os::windows::io::OwnedHandle, String> {
+fn decoder_job(memory_limit_mb: Option<u16>) -> Result<std::os::windows::io::OwnedHandle, String> {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::System::JobObjects::{
         CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
@@ -335,10 +335,10 @@ fn decoder_job(memory_limit_gib: Option<u8>) -> Result<std::os::windows::io::Own
     let job = unsafe { OwnedHandle::from_raw_handle(handle) };
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if let Some(gib) = memory_limit_gib {
+    if let Some(mb) = memory_limit_mb {
         limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_MEMORY;
-        limits.ProcessMemoryLimit = usize::from(gib)
-            .checked_mul(1024 * 1024 * 1024)
+        limits.ProcessMemoryLimit = usize::from(mb)
+            .checked_mul(1024 * 1024)
             .ok_or("The decoder memory limit exceeds this platform's addressable memory.")?;
     }
     let configured = unsafe {
@@ -358,10 +358,10 @@ fn decoder_job(memory_limit_gib: Option<u8>) -> Result<std::os::windows::io::Own
     Ok(job)
 }
 
-fn process_limit_message(memory_limit_gib: Option<u8>) -> String {
-    match memory_limit_gib {
-        Some(gib) if cfg!(windows) => {
-            format!(" Decoder memory is limited to {gib} GiB to protect the app and the system.")
+fn process_limit_message(memory_limit_mb: Option<u16>) -> String {
+    match memory_limit_mb {
+        Some(mb) if cfg!(windows) => {
+            format!(" Decoder memory is limited to {mb} MB to protect the app and the system.")
         }
         None => " The decoder memory limit is disabled.".into(),
         Some(_) => String::new(),
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn changing_or_disabling_memory_cap_retains_kill_on_close_isolation() {
-        for cap in [Some(2), Some(8), None, Some(2)] {
+        for cap in [None, Some(2048), Some(3073), Some(8192), None] {
             let job = decoder_job(cap).unwrap();
             let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
             let queried = unsafe {
@@ -403,7 +403,7 @@ mod tests {
             );
             assert_eq!(
                 limits.ProcessMemoryLimit,
-                usize::from(cap.unwrap_or(0)) * 1024 * 1024 * 1024
+                usize::from(cap.unwrap_or(0)) * 1024 * 1024
             );
         }
     }

@@ -23,7 +23,7 @@ import {
   MessageBarActions,
   MessageBarBody,
   MessageBarTitle,
-  Select,
+  SpinButton,
   Switch,
   ToggleButton,
   Tooltip,
@@ -63,7 +63,7 @@ type Bootstrap = {
 type ThemePreference = "system" | "light" | "dark"
 type PreviewSettings = {
   memoryLimitEnabled: boolean
-  memoryLimitGiB: number
+  memoryLimitMB: number
   chunkingEnabled: boolean
   chunkSize: number
 }
@@ -76,11 +76,10 @@ const numbers = new Intl.NumberFormat()
 const dimensions = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 2,
 })
-const memoryLimitsGiB = [2, 3, 4, 5, 6, 7, 8]
 const chunkSizes = [16, 32, 64, 128, 256]
 const defaultPreviewSettings: PreviewSettings = {
-  memoryLimitEnabled: true,
-  memoryLimitGiB: 2,
+  memoryLimitEnabled: false,
+  memoryLimitMB: 2048,
   chunkingEnabled: true,
   chunkSize: 64,
 }
@@ -109,11 +108,18 @@ function savedPreviewSettings(): PreviewSettings {
         typeof settings.memoryLimitEnabled === "boolean"
           ? settings.memoryLimitEnabled
           : defaultPreviewSettings.memoryLimitEnabled,
-      memoryLimitGiB:
-        typeof settings.memoryLimitGiB === "number" &&
-        memoryLimitsGiB.includes(settings.memoryLimitGiB)
-          ? settings.memoryLimitGiB
-          : defaultPreviewSettings.memoryLimitGiB,
+      memoryLimitMB:
+        typeof settings.memoryLimitMB === "number" &&
+        Number.isInteger(settings.memoryLimitMB) &&
+        settings.memoryLimitMB >= 2048 &&
+        settings.memoryLimitMB <= 8192
+          ? settings.memoryLimitMB
+          : typeof settings.memoryLimitGiB === "number" &&
+              Number.isInteger(settings.memoryLimitGiB) &&
+              settings.memoryLimitGiB >= 2 &&
+              settings.memoryLimitGiB <= 8
+            ? settings.memoryLimitGiB * 1024
+            : defaultPreviewSettings.memoryLimitMB,
       chunkingEnabled:
         typeof settings.chunkingEnabled === "boolean"
           ? settings.chunkingEnabled
@@ -283,7 +289,7 @@ export default function App({ initialError }: { initialError?: string }) {
       // This request keeps its own snapshot even if settings change during decoding.
       const settings = previewSettingsRef.current
       const options = {
-        memoryLimitGiB: settings.memoryLimitEnabled ? settings.memoryLimitGiB : null,
+        memoryLimitMB: settings.memoryLimitEnabled ? settings.memoryLimitMB : null,
         chunkSize: settings.chunkingEnabled ? settings.chunkSize : null,
       }
       const id = ++generation.current
@@ -970,31 +976,43 @@ export default function App({ initialError }: { initialError?: string }) {
                     The current preview or load is not changed.
                   </p>
                   <div className="flex flex-col gap-3">
-                    <Switch
-                      label="Limit decoder memory"
-                      checked={previewSettings.memoryLimitEnabled}
-                      aria-describedby="memory-limit-description"
-                      onChange={(_, data) =>
-                        updatePreviewSettings({ memoryLimitEnabled: data.checked })
-                      }
-                    />
-                    <Field label="Decoder memory limit">
-                      <Select
-                        value={String(previewSettings.memoryLimitGiB)}
-                        disabled={!previewSettings.memoryLimitEnabled}
-                        onChange={(_, data) => {
-                          const value = Number(data.value)
-                          if (memoryLimitsGiB.includes(value))
-                            updatePreviewSettings({ memoryLimitGiB: value })
-                        }}
-                      >
-                        {memoryLimitsGiB.map((value) => (
-                          <option key={value} value={value}>
-                            {value} GiB
-                          </option>
-                        ))}
-                      </Select>
-                    </Field>
+                    <div className="flex items-center justify-between gap-4">
+                      <Switch
+                        label="Limit decoder memory"
+                        checked={previewSettings.memoryLimitEnabled}
+                        aria-describedby="memory-limit-description"
+                        onChange={(_, data) =>
+                          updatePreviewSettings({ memoryLimitEnabled: data.checked })
+                        }
+                      />
+                      <div className="ml-auto flex items-center gap-2">
+                        <SpinButton
+                          value={previewSettings.memoryLimitMB}
+                          min={2048}
+                          max={8192}
+                          step={1}
+                          disabled={!previewSettings.memoryLimitEnabled}
+                          aria-label="Decoder memory limit (MB)"
+                          aria-describedby="memory-limit-description"
+                          className="w-32"
+                          onChange={(_, data) => {
+                            const value =
+                              data.value ??
+                              (data.displayValue && /^\d+$/.test(data.displayValue)
+                                ? Number(data.displayValue)
+                                : null)
+                            if (
+                              value !== null &&
+                              Number.isInteger(value) &&
+                              value >= 2048 &&
+                              value <= 8192
+                            )
+                              updatePreviewSettings({ memoryLimitMB: value })
+                          }}
+                        />
+                        <span className="text-sm">MB</span>
+                      </div>
+                    </div>
                     <p
                       id="memory-limit-description"
                       className="m-0 text-sm leading-relaxed text-muted"

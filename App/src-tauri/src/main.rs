@@ -83,7 +83,6 @@ struct PreviewProgress {
     total: u64,
 }
 
-
 #[tauri::command]
 async fn load_preview(
     path: String,

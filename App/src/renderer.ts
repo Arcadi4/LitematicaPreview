@@ -400,6 +400,7 @@ export class SchematicRenderer {
     metadata: PreviewMetadata,
     readBuffer: ReadBuffer,
     isCurrent: () => boolean,
+    onUploadProgress: (uploadedBytes: number, totalBytes: number) => void,
   ): Promise<PreviewMetadata> {
     if (this.disposed || !isCurrent()) throw new Error("Cancelled")
     const generation = ++this.generation
@@ -435,9 +436,17 @@ export class SchematicRenderer {
     this.staged.add(model)
     const gl = this.gl
     const budget: UploadBudget = { bytes: 0, started: performance.now() }
+    let totalBytes = 0
+    let uploadedBytes = 0
+    const reportUploaded = (bytes: number) => {
+      uploadedBytes += bytes
+      onUploadProgress(uploadedBytes, totalBytes)
+    }
     try {
       guard()
       validateMetadata(metadata, this.maxTextureSize)
+      totalBytes = metadata.byteLength
+      onUploadProgress(0, totalBytes)
       for (const source of metadata.textures) {
         guard()
         const texture = required(gl.createTexture(), "a block texture")
@@ -482,6 +491,8 @@ export class SchematicRenderer {
               gl.UNSIGNED_BYTE,
               pixels,
             )
+            this.checkGraphics("upload a block texture")
+            reportUploaded(pixels.byteLength)
             await this.checkpoint(budget, length, guard)
           }
         }
@@ -515,6 +526,7 @@ export class SchematicRenderer {
             read,
             budget,
             guard,
+            reportUploaded,
           )
           guard()
           if (!isIndex) {
@@ -694,6 +706,7 @@ export class SchematicRenderer {
     read: ReadBuffer,
     budget: UploadBudget,
     guard: () => void,
+    reportUploaded: (bytes: number) => void,
   ): Promise<void> {
     guard()
     const gl = this.gl
@@ -724,6 +737,8 @@ export class SchematicRenderer {
       gl.bindVertexArray(vao)
       gl.bindBuffer(target, gpu)
       gl.bufferSubData(target, offset, values)
+      this.checkGraphics("upload a mesh buffer")
+      reportUploaded(values.byteLength)
       await this.checkpoint(budget, length, guard)
     }
     guard()

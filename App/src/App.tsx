@@ -86,6 +86,8 @@ const numbers = new Intl.NumberFormat()
 const dimensions = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 2,
 })
+const megabytes = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 })
+const formatMB = (bytes: number) => `${megabytes.format(bytes / (1024 * 1024))} MB`
 const chunkSizes = [16, 32, 64, 128, 256]
 const defaultPreviewSettings: PreviewSettings = {
   memoryLimitEnabled: false,
@@ -362,6 +364,7 @@ export default function App({ initialError }: { initialError?: string }) {
           rendererRef.current = renderer
           renderer.setGrid(gridRef.current)
         }
+        let lastUploadUpdate = 0
         const metadata = await renderer.load(
           descriptor,
           (bufferId, offset, length) => {
@@ -382,6 +385,17 @@ export default function App({ initialError }: { initialError?: string }) {
             return read
           },
           () => isCurrent(id),
+          (completed, total) => {
+            if (!isCurrent(id)) return
+            const now = performance.now()
+            if (completed !== total && now - lastUploadUpdate < 150) return
+            lastUploadUpdate = now
+            setLoading((previous) =>
+              previous?.requestId === id && previous.phase === "upload"
+                ? { ...previous, completed, total }
+                : previous,
+            )
+          },
         )
         if (!isCurrent(id)) return
         setLoaded({
@@ -922,7 +936,7 @@ export default function App({ initialError }: { initialError?: string }) {
                     ? "Reading blocks locally."
                     : loading.phase === "mesh"
                       ? `Generating geometry: ${numbers.format(loading.completed)} / ${numbers.format(loading.total)} chunks (${Math.round((loading.completed / loading.total) * 100)}%).`
-                      : "Uploading geometry and textures to your graphics device."}
+                      : `Uploading geometry and textures: ${formatMB(loading.completed)} / ${formatMB(loading.total)} (${Math.round((loading.completed / loading.total) * 100)}%).`}
                 </p>
                 <ProgressBar
                   value={loading.phase === "decode" ? undefined : loading.completed}

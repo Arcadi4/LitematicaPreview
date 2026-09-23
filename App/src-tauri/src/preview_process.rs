@@ -434,6 +434,12 @@ mod tests {
     };
 
     #[test]
+    fn working_set_reads_live_process_and_rejects_missing_process() {
+        assert!(super::working_set(std::process::id()).is_some_and(|bytes| bytes > 0));
+        assert_eq!(super::working_set(0), None);
+    }
+
+    #[test]
     fn changing_or_disabling_memory_cap_retains_kill_on_close_isolation() {
         for cap in [None, Some(2048), Some(3073), Some(8192), None] {
             let job = decoder_job(cap).unwrap();

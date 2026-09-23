@@ -145,6 +145,7 @@ fn preview(bytes: &[u8], pack: &ResourcePackSource) -> (PreviewInfo, Vec<Triangl
             geometry.extend(triangles(&preview.mesh));
             Ok(())
         },
+        |_, _| Ok(()),
         || Ok(()),
     )
     .unwrap();
@@ -423,6 +424,7 @@ fn rejected(bytes: &[u8], pack: &ResourcePackSource) {
             consumed += 1;
             Ok(())
         },
+        |_, _| Ok(()),
         || Ok(()),
     );
     assert!(
@@ -537,6 +539,7 @@ fn cancellation_interrupts_early_and_late_scans_without_delivering_partial_geome
                 before_consume.set(calls.get());
                 Ok(())
             },
+            |_, _| Ok(()),
             || {
                 calls.set(calls.get() + 1);
                 Ok(())
@@ -559,6 +562,7 @@ fn cancellation_interrupts_early_and_late_scans_without_delivering_partial_geome
                     consumed.set(true);
                     Ok(())
                 },
+                |_, _| Ok(()),
                 || {
                     calls.set(calls.get() + 1);
                     if calls.get() >= cancel_at {

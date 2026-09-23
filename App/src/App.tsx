@@ -22,8 +22,9 @@ import {
   MessageBar,
   MessageBarActions,
   MessageBarBody,
-  Slider,
   MessageBarTitle,
+  ProgressBar,
+  Slider,
   SpinButton,
   Switch,
   ToggleButton,
@@ -48,6 +49,7 @@ import {
   ShieldCheckmark20Regular,
   Subtract20Regular,
 } from "@fluentui/react-icons"
+import { listen } from "@tauri-apps/api/event"
 import { invoke } from "@tauri-apps/api/core"
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import { getCurrentWindow } from "@tauri-apps/api/window"
@@ -68,7 +70,14 @@ type PreviewSettings = {
   chunkingEnabled: boolean
   chunkSize: number
 }
-type Loading = { path: string; phase: "decode" | "upload" }
+type Loading = {
+  path: string
+  requestId: number
+  phase: "decode" | "mesh" | "upload"
+  completed: number
+  total: number
+}
+type MeshProgress = { requestId: number; phase: "mesh"; completed: number; total: number }
 type Loaded = { path: string; metadata: PreviewMetadata; seconds: number }
 type Notice = { intent: "error" | "success" | "info"; message: string }
 
@@ -308,9 +317,26 @@ export default function App({ initialError }: { initialError?: string }) {
         })
         return
       }
-      setLoading({ path, phase: "decode" })
+      setLoading({ path, requestId: id, phase: "decode", completed: 0, total: 0 })
       const started = performance.now()
+      let unlistenProgress: (() => void) | undefined
       try {
+        unlistenProgress = await listen<MeshProgress>("preview-progress", ({ payload }) => {
+          if (!isCurrent(id) || payload.requestId !== id || payload.phase !== "mesh") return
+          if (!Number.isSafeInteger(payload.total) || payload.total <= 0) return
+          if (
+            !Number.isSafeInteger(payload.completed) ||
+            payload.completed < 0 ||
+            payload.completed > payload.total
+          )
+            return
+          setLoading((previous) =>
+            previous?.requestId === id && (previous.phase === "decode" || previous.phase === "mesh")
+              ? { ...previous, phase: "mesh", completed: payload.completed, total: payload.total }
+              : previous,
+          )
+        })
+        if (!isCurrent(id)) return
         // load_preview advances the native generation itself; an older IPC call can never supersede it.
         const descriptor = await invoke<PreviewMetadata>("load_preview", {
           path,
@@ -318,7 +344,13 @@ export default function App({ initialError }: { initialError?: string }) {
           options,
         })
         if (!isCurrent(id)) return
-        setLoading({ path, phase: "upload" })
+        setLoading({
+          path,
+          requestId: id,
+          phase: "upload",
+          completed: 0,
+          total: descriptor.byteLength,
+        })
         let renderer = rendererRef.current
         if (!renderer) {
           if (!canvasRef.current) throw new Error("The preview canvas is unavailable.")
@@ -364,10 +396,11 @@ export default function App({ initialError }: { initialError?: string }) {
       } catch (error) {
         if (!isCurrent(id)) return
         rendererRef.current?.clear()
-        setLoading(null)
+          setLoading(null)
         if (errorMessage(error) !== "Cancelled")
           setNotice({ intent: "error", message: `${path}\n\n${errorMessage(error)}` })
       } finally {
+        unlistenProgress?.()
         try {
           await invoke("release_preview", { requestId: id })
         } catch (error) {
@@ -886,9 +919,23 @@ export default function App({ initialError }: { initialError?: string }) {
                 </p>
                 <p className="mt-0 mb-3 text-sm leading-relaxed text-muted">
                   {loading.phase === "decode"
-                    ? "Reading blocks and generating geometry locally."
-                    : "Uploading geometry and textures to your graphics device."}
+                    ? "Reading blocks locally."
+                    : loading.phase === "mesh"
+                      ? `Generating geometry: ${numbers.format(loading.completed)} / ${numbers.format(loading.total)} chunks (${Math.round((loading.completed / loading.total) * 100)}%).`
+                      : "Uploading geometry and textures to your graphics device."}
                 </p>
+                <ProgressBar
+                  value={loading.phase === "decode" ? undefined : loading.completed}
+                  max={loading.phase === "decode" ? undefined : loading.total}
+                  aria-label={
+                    loading.phase === "decode"
+                      ? "Reading blocks"
+                      : loading.phase === "mesh"
+                        ? "Generating geometry"
+                        : "Uploading model data"
+                  }
+                  className="mb-4"
+                />
                 <Button appearance="secondary" onClick={home} className="mt-1.5!">
                   Cancel
                   <span className="ml-2.5 opacity-75 text-xs font-normal hidden sm:inline">

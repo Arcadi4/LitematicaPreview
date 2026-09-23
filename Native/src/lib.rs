@@ -98,6 +98,7 @@ pub fn load_chunks(
     pack: &ResourcePackSource,
     options: PreviewOptions,
     mut consume: impl FnMut(Preview) -> Result<(), String>,
+    mut on_progress: impl FnMut(usize, usize) -> Result<(), String>,
     current: impl Fn() -> Result<(), String>,
 ) -> Result<PreviewInfo, String> {
     options.validate()?;
@@ -113,6 +114,11 @@ pub fn load_chunks(
     if block_count == 0 {
         return Err("The schematic must contain at least one block.".into());
     }
+    let total = source.chunk_count();
+    if total == 0 {
+        return Err("The schematic contains no visible geometry.".into());
+    }
+    on_progress(0, total)?;
     let mut chunks =
         meshing::ChunkMeshes::from_source(source, pack, &mesh_config(), chunk_size, &current)?;
     current()?;
@@ -124,14 +130,18 @@ pub fn load_chunks(
         max: [f32::NEG_INFINITY; 3],
         ..PreviewInfo::default()
     };
+    let mut completed = 0;
     loop {
         current()?;
         let Some(mesh) = chunks.next() else {
             break;
         };
         let mesh = mesh.map_err(|e| format!("This schematic is too detailed to preview: {e}"))?;
-        current()?;
+        completed += 1;
         if parts(&mesh).next().is_none() {
+            if completed < total {
+                on_progress(completed, total)?;
+            }
             continue;
         }
         let preview = prepare(mesh, block_count, block_entity_count)?;
@@ -152,11 +162,15 @@ pub fn load_chunks(
             info.max[axis] = info.max[axis].max(preview.info.max[axis]);
         }
         consume(preview)?;
+        if completed < total {
+            on_progress(completed, total)?;
+        }
         current()?;
     }
     if info.part_count == 0 {
         return Err("The schematic contains no visible geometry.".into());
     }
+    on_progress(completed, total)?;
     Ok(info)
 }
 

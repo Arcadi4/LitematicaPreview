@@ -230,6 +230,10 @@ impl CompactBlocks {
         self.block_entity_count
     }
 
+    pub(crate) fn chunk_count(&self) -> usize {
+        self.chunks.len()
+    }
+
     fn atlas(
         &self,
         pack: &ResourcePackSource,

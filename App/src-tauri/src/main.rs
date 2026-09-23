@@ -13,7 +13,7 @@ use std::sync::Arc;
 use preview::PreviewWorker;
 use resources::{Demo, Resources};
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
 pub use formats::EXTENSIONS;
@@ -74,11 +74,21 @@ async fn choose_file(app: AppHandle, window: WebviewWindow) -> Result<Option<Str
     .await
     .map_err(|e| format!("Unable to show the file picker: {e}"))?
 }
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewProgress {
+    request_id: u64,
+    phase: &'static str,
+    completed: u64,
+    total: u64,
+}
+
 
 #[tauri::command]
 async fn load_preview(
     path: String,
     request_id: u64,
+    app: AppHandle,
     options: preview::LoadOptions,
     state: State<'_, HostState>,
 ) -> Result<protocol::Metadata, String> {
@@ -105,7 +115,25 @@ async fn load_preview(
     tauri::async_runtime::spawn_blocking(move || {
         worker.ensure_current(request_id)?;
         let pack_path = resources.pack()?;
-        let metadata = worker.load(&path, &pack_path, request_id, options)?;
+        let metadata = worker.load(
+            &path,
+            &pack_path,
+            request_id,
+            options,
+            |completed, total| {
+                if worker.ensure_current(request_id).is_ok() {
+                    let _ = app.emit(
+                        "preview-progress",
+                        PreviewProgress {
+                            request_id,
+                            phase: "mesh",
+                            completed,
+                            total,
+                        },
+                    );
+                }
+            },
+        )?;
         worker.ensure_current(request_id)?;
         Ok(metadata)
     })

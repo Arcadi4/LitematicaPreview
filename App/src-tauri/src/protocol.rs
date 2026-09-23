@@ -9,8 +9,9 @@ pub const FRAME_BYTES: usize = 1024 * 1024;
 const END: u8 = 0;
 const ERROR: u8 = 1;
 const TEXTURE: u8 = 2;
-const CHECKPOINT: u8 = 5;
 const PART: u8 = 3;
+const CHECKPOINT: u8 = 5;
+const PROGRESS: u8 = 6;
 const DATA: u8 = 4;
 const CONTINUE: u8 = 1;
 const CANCEL: u8 = 0;
@@ -253,6 +254,13 @@ impl<'a, S: Read + Write> Encoder<'a, S> {
     pub fn checkpoint(&mut self) -> Result<(), String> {
         self.send(CHECKPOINT, &[])
     }
+    pub fn progress(&mut self, completed: u64, total: u64) -> Result<(), String> {
+        let mut bytes = [0; 16];
+        bytes[..8].copy_from_slice(&completed.to_le_bytes());
+        bytes[8..].copy_from_slice(&total.to_le_bytes());
+        self.send(PROGRESS, &bytes)
+    }
+
 
     fn send(&mut self, kind: u8, bytes: &[u8]) -> Result<(), String> {
         write_packet(self.stream, kind, bytes).map_err(|e| e.to_string())?;
@@ -391,12 +399,14 @@ pub fn finish(stream: &mut impl Write, result: Result<PreviewInfo, String>) -> i
 pub fn receive(
     stream: &mut (impl Read + Write),
     current: impl Fn() -> bool,
+    mut on_progress: impl FnMut(u64, u64),
 ) -> io::Result<Result<Payload, String>> {
     let mut textures = Vec::new();
     let mut parts = Vec::new();
     let mut buffers: Vec<Buffer> = Vec::new();
     let mut pending = std::collections::VecDeque::new();
     let mut total = 0usize;
+    let mut progress = None;
     let mut cancelled = false;
     loop {
         let (kind, bytes) = read_packet(stream)?;
@@ -414,6 +424,9 @@ pub fn receive(
             }
             if !pending.is_empty() {
                 return Err(invalid("The decoder preview is truncated."));
+            }
+            if progress.is_some_and(|(completed, total)| completed != total) {
+                return Err(invalid("The decoder mesh progress is incomplete."));
             }
             let summary: Summary =
                 serde_json::from_slice(&bytes).map_err(|e| invalid(e.to_string()))?;
@@ -546,6 +559,20 @@ pub fn receive(
                     pending.pop_front();
                 }
             }
+            PROGRESS if pending.is_empty() && bytes.len() == 16 => {
+                let completed = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+                let count = u64::from_le_bytes(bytes[8..].try_into().unwrap());
+                if count == 0
+                    || completed > count
+                    || progress.map_or(completed != 0, |(previous, total)| {
+                        count != total || completed <= previous
+                    })
+                {
+                    return Err(invalid("The decoder returned invalid mesh progress."));
+                }
+                progress = Some((completed, count));
+                on_progress(completed, count);
+            }
             CHECKPOINT if pending.is_empty() && bytes.is_empty() => {}
             _ => return Err(invalid("Unexpected decoder record.")),
         }
@@ -586,7 +613,7 @@ mod tests {
         finish(&mut bytes, Err("Stopped before pixel data".into())).unwrap();
         let mut connection = wire(bytes);
         assert!(matches!(
-            receive(&mut connection, || true).unwrap(),
+            receive(&mut connection, || true, |_, _| {}).unwrap(),
             Err(error) if error == "Stopped before pixel data"
         ));
         assert_eq!(connection.outgoing, [CONTINUE]);
@@ -611,7 +638,9 @@ mod tests {
             write_packet(&mut bytes, DATA, &[255; 4]).unwrap();
         }
         bytes.extend(part_packets(0));
-        let payload = receive(&mut wire(bytes), || true).unwrap().unwrap();
+        let payload = receive(&mut wire(bytes), || true, |_, _| {})
+            .unwrap()
+            .unwrap();
         assert_eq!(payload.metadata.textures.len(), 100_001);
         let last = payload.metadata.textures.last().unwrap();
         assert_eq!(payload.read(last.buffer_id, 0, 4).unwrap(), [255; 4]);
@@ -809,12 +838,12 @@ mod tests {
 
     #[test]
     fn malformed_geometry_is_rejected_before_exposing_buffers() {
-        assert!(receive(&mut wire(part_packets(1)), || true).is_err());
+        assert!(receive(&mut wire(part_packets(1)), || true, |_, _| {}).is_err());
         let mut truncated = part_packets(0);
         truncated.truncate(truncated.len() - 1);
-        assert!(receive(&mut wire(truncated), || true).is_err());
+        assert!(receive(&mut wire(truncated), || true, |_, _| {}).is_err());
         let oversized = [DATA, 1, 0, 16, 0];
-        assert!(receive(&mut wire(oversized.to_vec()), || true).is_err());
+        assert!(receive(&mut wire(oversized.to_vec()), || true, |_, _| {}).is_err());
     }
 
     #[test]
@@ -824,9 +853,13 @@ mod tests {
         finish(&mut bytes, Err("Cancelled".into())).unwrap();
         bytes.extend(part_packets(0));
         let mut connection = wire(bytes);
-        assert!(matches!(receive(&mut connection, || false).unwrap(), Err(e) if e == "Cancelled"));
+        assert!(
+            matches!(receive(&mut connection, || false, |_, _| {}).unwrap(), Err(e) if e == "Cancelled")
+        );
         assert_eq!(connection.outgoing, [CANCEL]);
-        let payload = receive(&mut connection, || true).unwrap().unwrap();
+        let payload = receive(&mut connection, || true, |_, _| {})
+            .unwrap()
+            .unwrap();
         assert_eq!(
             payload
                 .read(payload.metadata.parts[0].buffers[4], 0, 12)
@@ -839,7 +872,7 @@ mod tests {
     fn old_upload_release_cannot_free_a_new_request() {
         let worker = crate::preview::PreviewWorker::default();
         worker.advance(10);
-        let payload = receive(&mut wire(part_packets(0)), || true)
+        let payload = receive(&mut wire(part_packets(0)), || true, |_, _| {})
             .unwrap()
             .unwrap();
         worker.publish(10, payload).unwrap();
@@ -847,7 +880,7 @@ mod tests {
         assert_eq!(worker.read(10, 0, 0, 4).unwrap(), [255; 4]);
         worker.advance(11);
         assert!(worker.read(10, 0, 0, 4).is_err());
-        let payload = receive(&mut wire(part_packets(0)), || true)
+        let payload = receive(&mut wire(part_packets(0)), || true, |_, _| {})
             .unwrap()
             .unwrap();
         worker.publish(11, payload).unwrap();

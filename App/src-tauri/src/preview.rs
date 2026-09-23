@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use std::sync::Mutex;
 
 use litematica_preview_native::PreviewOptions;
@@ -73,6 +74,7 @@ impl PreviewWorker {
         pack_path: &Path,
         request_id: u64,
         options: PreviewOptions,
+        on_progress: impl FnMut(u64, u64),
     ) -> Result<protocol::Metadata, String> {
         options.validate()?;
         self.ensure_current(request_id)?;
@@ -93,9 +95,13 @@ impl PreviewWorker {
         let result = process
             .as_mut()
             .ok_or("The preview worker is unavailable.")?
-            .load(path, pack_path, options.chunk_size, || {
-                self.ensure_current(request_id).is_ok()
-            });
+            .load(
+                path,
+                pack_path,
+                options.chunk_size,
+                || self.ensure_current(request_id).is_ok(),
+                on_progress,
+            );
         let payload = match result {
             Ok(result) => result?,
             Err(error) => {
@@ -256,6 +262,7 @@ pub(crate) fn decode(
     options.validate()?;
     let result = catch_unwind(AssertUnwindSafe(|| {
         let encoder = RefCell::new(protocol::Encoder::new(stream));
+        let mut last_progress = None;
         let current = || encoder.borrow_mut().checkpoint();
         let data = read_file(path, &current)?;
         if pack.is_none() {
@@ -271,6 +278,20 @@ pub(crate) fn decode(
                 .ok_or("The bundled block resources are unavailable.")?,
             options,
             |preview| encoder.borrow_mut().chunk(preview),
+            |completed, total| {
+                let now = Instant::now();
+                if completed == 0
+                    || completed == total
+                    || last_progress
+                        .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(150))
+                {
+                    encoder
+                        .borrow_mut()
+                        .progress(completed as u64, total as u64)?;
+                    last_progress = Some(now);
+                }
+                Ok(())
+            },
             current,
         )
     }));

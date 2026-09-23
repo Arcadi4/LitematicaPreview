@@ -169,6 +169,7 @@ fn inspect_decoder_allocations() {
                 // Deliberate early stop: do not generate the rest of the model.
                 Err(STOP.into())
             },
+            |_, _| Ok(()),
             || Ok(()),
         )
         .map(|_| ())

@@ -136,6 +136,7 @@ impl DecoderProcess {
         pack_path: &Path,
         chunk_size: Option<u16>,
         current: impl Fn() -> bool,
+        on_progress: impl FnMut(u64, u64),
     ) -> Result<Result<crate::protocol::Payload, String>, String> {
         let request = serde_json::to_vec(&(path, pack_path, chunk_size))
             .map_err(|e| format!("Unable to describe the decoder request: {e}"))?;
@@ -147,7 +148,7 @@ impl DecoderProcess {
                 io::Error::new(io::ErrorKind::NotConnected, "The decoder is not connected")
             })?;
             write_frame(stream, &request)?;
-            crate::protocol::receive(stream, current)
+            crate::protocol::receive(stream, current, on_progress)
         })();
         result.map_err(|error| self.failure(error))
     }
@@ -175,7 +176,7 @@ impl DecoderProcess {
         loop {
             match self.child.try_wait() {
                 Ok(Some(status)) => {
-                    return format!("The decoder process stopped unexpectedly ({status}). The schematic could not be loaded.{}", process_limit_message(self.memory_limit_gib));
+                    return format!("The decoder process stopped unexpectedly ({status}). The schematic could not be loaded.{}", process_limit_message(self.memory_limit_mb));
                 }
                 Ok(None) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(10));

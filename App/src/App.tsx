@@ -907,12 +907,6 @@ export default function App({ initialError }: { initialError?: string }) {
                 </div>
               </section>
             )}
-            <p className="flex items-center gap-2.5 mt-7 mb-0 text-muted text-xs leading-normal [&>svg]:shrink-0">
-              <ShieldCheckmark20Regular />
-              <span>
-                Your schematics stay on this PC. Decoding and rendering work entirely offline.
-              </span>
-            </p>
           </div>
         </section>
 
@@ -1024,14 +1018,15 @@ export default function App({ initialError }: { initialError?: string }) {
           </>
         ) : (
           <>
-            <span role="status">
+            <span role="status" className="flex items-center gap-2">
+              {!loading && !choosing && <ShieldCheckmark20Regular className="shrink-0" />}
               {loading
                 ? loading.phase === "decode"
                   ? "Decoding and meshing…"
                   : "Uploading to graphics device…"
                 : choosing
                   ? "Choose a schematic in the file dialog"
-                  : "Local files. A clearer view."}
+                  : "Everything works offline."}
             </span>
             {loading && decoderMemory !== null && (
               <span className="ml-auto">Decoder memory {formatMB(decoderMemory)}</span>
@@ -1041,7 +1036,7 @@ export default function App({ initialError }: { initialError?: string }) {
                 {formatMB(loading.completed)} model data
               </span>
             )}
-            <span className={loading && decoderMemory !== null ? "hidden sm:inline" : "ml-auto hidden sm:inline"}>Works offline</span>
+            {!loading && bootstrap && <span className="ml-auto">v{bootstrap.version}</span>}
           </>
         )}
       </footer>

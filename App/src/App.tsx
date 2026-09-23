@@ -1017,7 +1017,10 @@ export default function App({ initialError }: { initialError?: string }) {
             </span>
             <span title="Geometry dimensions in blocks">{size} blocks</span>
             <span>{numbers.format(loaded.metadata.triangleCount)} triangles</span>
-            <span className="ml-auto">Loaded in {loaded.seconds.toFixed(2)} s</span>
+            <span className="ml-auto">
+              {formatMB(loaded.metadata.byteLength)} model data loaded in{" "}
+              {loaded.seconds.toFixed(2)} s.
+            </span>
           </>
         ) : (
           <>
@@ -1032,6 +1035,11 @@ export default function App({ initialError }: { initialError?: string }) {
             </span>
             {loading && decoderMemory !== null && (
               <span className="ml-auto">Decoder memory {formatMB(decoderMemory)}</span>
+            )}
+            {loading?.phase === "upload" && (
+              <span className={decoderMemory === null ? "ml-auto" : ""}>
+                {formatMB(loading.completed)} model data
+              </span>
             )}
             <span className={loading && decoderMemory !== null ? "hidden sm:inline" : "ml-auto hidden sm:inline"}>Works offline</span>
           </>

@@ -35,7 +35,7 @@ Open a schematic by double-clicking an associated file in Explorer, dragging a f
 | Toggle ground grid | Click **Ground grid** in the toolbar |
 | Cancel load | Click **Cancel** or press `Esc` |
 
-For large builds, open **Preview settings** from the top-right menu to adjust the decoder memory limit (2–8 GiB or unlimited) and chunk separation size.
+For large builds, open **Preview settings** from the top-right menu to adjust chunk separation and the decoder memory limit. The limit is off by default; enabling it starts at 2048 MB and accepts integer values through 8192 MB. Changes apply on the next file open.
 
 ## Supported Formats
 

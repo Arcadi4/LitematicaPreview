@@ -155,8 +155,8 @@ fn read_preview(
 }
 
 #[tauri::command]
-fn decoder_working_set(request_id: u64, state: State<'_, HostState>) -> Option<u64> {
-    state.worker.decoder_working_set(request_id)
+fn preview_memory(request_id: u64, state: State<'_, HostState>) -> Option<u64> {
+    state.worker.preview_memory(request_id)
 }
 
 #[tauri::command]
@@ -270,7 +270,7 @@ fn run() -> Result<(), String> {
             choose_file,
             load_preview,
             read_preview,
-            decoder_working_set,
+            preview_memory,
             release_preview,
             cancel_load,
             register_associations,

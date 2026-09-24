@@ -149,7 +149,7 @@ function savedPreviewSettings(): PreviewSettings {
 export default function App({ initialError }: { initialError?: string }) {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)
   const [loading, setLoading] = useState<Loading | null>(null)
-  const [decoderMemory, setDecoderMemory] = useState<number | null>(null)
+  const [previewMemory, setPreviewMemory] = useState<number | null>(null)
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [dragging, setDragging] = useState(false)
@@ -223,6 +223,7 @@ export default function App({ initialError }: { initialError?: string }) {
     rendererRef.current?.clear()
     setLoaded(null)
     setLoading(null)
+    setPreviewMemory(null)
     setDragging(false)
   }, [])
 
@@ -244,6 +245,7 @@ export default function App({ initialError }: { initialError?: string }) {
       renderer?.dispose()
       setLoaded(null)
       setLoading(null)
+      setPreviewMemory(null)
       setNotice({
         intent: "error",
         message: `The preview could not be rendered. ${message}`,
@@ -260,6 +262,7 @@ export default function App({ initialError }: { initialError?: string }) {
     rendererRef.current = null
     setLoaded(null)
     setLoading(null)
+    setPreviewMemory(null)
     setDragging(false)
     setNotice(null)
     setErrorDetails(notice.message)
@@ -321,7 +324,6 @@ export default function App({ initialError }: { initialError?: string }) {
         return
       }
       setLoading({ path, requestId: id, phase: "decode", completed: 0, total: 0 })
-      setDecoderMemory(null)
       const started = performance.now()
       let unlistenProgress: (() => void) | undefined
       try {
@@ -406,7 +408,7 @@ export default function App({ initialError }: { initialError?: string }) {
           seconds: (performance.now() - started) / 1000,
         })
         setLoading(null)
-        setDecoderMemory(null)
+        setPreviewMemory(null)
         updateTitle(path, id)
         // React has committed the active view before the native decode finishes.
         canvasRef.current?.focus({ preventScroll: true })
@@ -414,7 +416,7 @@ export default function App({ initialError }: { initialError?: string }) {
         if (!isCurrent(id)) return
         rendererRef.current?.clear()
         setLoading(null)
-        setDecoderMemory(null)
+        setPreviewMemory(null)
         if (errorMessage(error) !== "Cancelled")
           setNotice({ intent: "error", message: `${path}\n\n${errorMessage(error)}` })
       } finally {
@@ -571,10 +573,10 @@ export default function App({ initialError }: { initialError?: string }) {
       if (inFlight) return
       inFlight = true
       try {
-        const bytes = await invoke<number | null>("decoder_working_set", { requestId: id })
-        if (active && isCurrent(id)) setDecoderMemory(bytes)
+        const memory = await invoke<number | null>("preview_memory", { requestId: id })
+        if (active && isCurrent(id)) setPreviewMemory(memory)
       } catch {
-        if (active && isCurrent(id)) setDecoderMemory(null)
+        if (active && isCurrent(id)) setPreviewMemory(null)
       } finally {
         inFlight = false
       }
@@ -1028,13 +1030,19 @@ export default function App({ initialError }: { initialError?: string }) {
                   ? "Choose a schematic in the file dialog"
                   : "Everything works offline."}
             </span>
-            {loading && decoderMemory !== null && (
-              <span className="ml-auto">Decoder memory {formatMB(decoderMemory)}</span>
-            )}
-            {loading?.phase === "upload" && (
-              <span className={decoderMemory === null ? "ml-auto" : ""}>
-                {formatMB(loading.completed)} model data
-              </span>
+            {loading && (
+              <div className="ml-auto flex max-w-full flex-wrap justify-end gap-x-3 gap-y-1 text-right">
+                {previewMemory !== null ? (
+                  <span title="Host and decoder private working sets (resident private pages only). WebView2 and GPU memory are excluded.">
+                    Process memory {formatMB(previewMemory)}
+                  </span>
+                ) : (
+                  <span>Sampling memory…</span>
+                )}
+                {loading.phase === "upload" && (
+                  <span>{formatMB(loading.completed)} model data</span>
+                )}
+              </div>
             )}
             {!loading && bootstrap && <span className="ml-auto">v{bootstrap.version}</span>}
           </>

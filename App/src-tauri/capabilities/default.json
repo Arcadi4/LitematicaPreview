@@ -13,7 +13,7 @@
     "allow-choose-file",
     "allow-load-preview",
     "allow-read-preview",
-    "allow-decoder-working-set",
+    "allow-preview-memory",
     "allow-release-preview",
     "allow-cancel-load",
     "allow-register-associations",

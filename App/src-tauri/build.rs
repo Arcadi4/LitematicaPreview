@@ -26,7 +26,7 @@ fn main() {
                 "choose_file",
                 "load_preview",
                 "read_preview",
-                "decoder_working_set",
+                "preview_memory",
                 "release_preview",
                 "cancel_load",
                 "register_associations",

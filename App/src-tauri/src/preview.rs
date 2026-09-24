@@ -74,7 +74,7 @@ impl PreviewWorker {
         }
     }
 
-    pub fn decoder_working_set(&self, request_id: u64) -> Option<u64> {
+    pub fn preview_memory(&self, request_id: u64) -> Option<u64> {
         if self.generation.load(Ordering::Acquire) != request_id
             || self.active_request.load(Ordering::Acquire) != request_id
         {
@@ -84,11 +84,11 @@ impl PreviewWorker {
         if pid == 0 {
             return None;
         }
-        let bytes = crate::preview_process::working_set(pid)?;
+        let memory = crate::preview_process::preview_memory(pid)?;
         (self.generation.load(Ordering::Acquire) == request_id
             && self.active_request.load(Ordering::Acquire) == request_id
             && self.worker_pid.load(Ordering::Acquire) == pid)
-            .then_some(bytes)
+            .then_some(memory)
     }
 
     pub fn load(

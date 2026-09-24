@@ -202,18 +202,23 @@ impl Drop for DecoderProcess {
     }
 }
 
+pub(crate) fn preview_memory(decoder_pid: u32) -> Option<u64> {
+    let host = private_working_set(std::process::id())?;
+    let decoder = private_working_set(decoder_pid)?;
+    host.checked_add(decoder)
+}
+
 #[cfg(windows)]
-pub(crate) fn working_set(pid: u32) -> Option<u64> {
+fn private_working_set(pid: u32) -> Option<u64> {
     use std::mem::size_of;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
     use windows_sys::Win32::System::ProcessStatus::{
-        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX2,
     };
     use windows_sys::Win32::System::Threading::{
         OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
     };
-    // Standard access right required by WaitForSingleObject on process handles.
     const SYNCHRONIZE: u32 = 0x0010_0000;
 
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid) };
@@ -224,34 +229,25 @@ pub(crate) fn working_set(pid: u32) -> Option<u64> {
     if unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } != WAIT_TIMEOUT {
         return None;
     }
-    let mut counters = PROCESS_MEMORY_COUNTERS {
-        cb: size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
-        PageFaultCount: 0,
-        PeakWorkingSetSize: 0,
-        WorkingSetSize: 0,
-        QuotaPeakPagedPoolUsage: 0,
-        QuotaPagedPoolUsage: 0,
-        QuotaPeakNonPagedPoolUsage: 0,
-        QuotaNonPagedPoolUsage: 0,
-        PagefileUsage: 0,
-        PeakPagefileUsage: 0,
+    let mut counters = PROCESS_MEMORY_COUNTERS_EX2 {
+        cb: size_of::<PROCESS_MEMORY_COUNTERS_EX2>() as u32,
+        ..Default::default()
     };
     let ok = unsafe {
         GetProcessMemoryInfo(
             handle.as_raw_handle(),
-            &mut counters,
-            size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+            (&mut counters as *mut PROCESS_MEMORY_COUNTERS_EX2).cast(),
+            size_of::<PROCESS_MEMORY_COUNTERS_EX2>() as u32,
         )
     };
     (ok != 0 && unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } == WAIT_TIMEOUT)
-        .then_some(counters.WorkingSetSize as u64)
+        .then_some(counters.PrivateWorkingSetSize as u64)
 }
 
 #[cfg(not(windows))]
-pub(crate) fn working_set(_: u32) -> Option<u64> {
+fn private_working_set(_: u32) -> Option<u64> {
     None
 }
-
 pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
     let port: u16 = port
         .to_str()
@@ -434,9 +430,9 @@ mod tests {
     };
 
     #[test]
-    fn working_set_reads_live_process_and_rejects_missing_process() {
-        assert!(super::working_set(std::process::id()).is_some_and(|bytes| bytes > 0));
-        assert_eq!(super::working_set(0), None);
+    fn private_working_set_reads_live_process_and_rejects_missing_process() {
+        assert!(super::private_working_set(std::process::id()).is_some_and(|bytes| bytes > 0));
+        assert_eq!(super::private_working_set(0), None);
     }
 
     #[test]

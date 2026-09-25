@@ -4,6 +4,12 @@
   <p><strong>Offline Minecraft schematic viewer for Windows</strong></p>
 </div>
 
+<!-- README-I18N:START -->
+
+**English** | [中文](./README.zh.md)
+
+<!-- README-I18N:END -->
+
 Litematica Preview is a Windows desktop viewer for Minecraft schematics and structures, adapted from [LitematicaQL](https://github.com/Arcadi4/LitematicaQL). It previews `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, and `.nusn` files locally in 3D.
 
 ## Install

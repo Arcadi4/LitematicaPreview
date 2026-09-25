@@ -43,7 +43,7 @@ Run frontend and Rust checks:
 
 ```powershell
 pnpm --prefix App run build
-cargo test --manifest-path Native/Cargo.toml --release --locked
+cargo test --manifest-path Mesher/Cargo.toml --release --locked
 cargo test --manifest-path App/src-tauri/Cargo.toml --release --locked
 ```
 

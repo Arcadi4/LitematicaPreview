@@ -97,8 +97,8 @@ const LOCATIONS: VersionLocation[] = [
     },
   },
   {
-    id: "Native/Cargo.toml",
-    file: path.join(ROOT_DIR, "Native/Cargo.toml"),
+    id: "Mesher/Cargo.toml",
+    file: path.join(ROOT_DIR, "Mesher/Cargo.toml"),
     read(file: string): string | null {
       const content = fs.readFileSync(file, "utf8");
       const match = content.match(
@@ -163,8 +163,8 @@ const LOCATIONS: VersionLocation[] = [
     },
   },
   {
-    id: "Native/Cargo.lock (litematica-preview-native)",
-    file: path.join(ROOT_DIR, "Native/Cargo.lock"),
+    id: "Mesher/Cargo.lock (litematica-preview-native)",
+    file: path.join(ROOT_DIR, "Mesher/Cargo.lock"),
     read(file: string): string | null {
       const content = fs.readFileSync(file, "utf8");
       const match = content.match(
@@ -371,10 +371,10 @@ Locations updated:
   - App/package.json
   - App/src-tauri/tauri.conf.json
   - App/src-tauri/Cargo.toml
-  - Native/Cargo.toml
+  - Mesher/Cargo.toml
   - App/src-tauri/Cargo.lock (litematica-preview)
   - App/src-tauri/Cargo.lock (litematica-preview-native)
-  - Native/Cargo.lock (litematica-preview-native)
+  - Mesher/Cargo.lock (litematica-preview-native)
 `);
 }
 

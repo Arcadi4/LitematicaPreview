@@ -32,17 +32,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
-            Native -> target
+            Mesher -> target
             App/src-tauri -> target
       - name: Check Rust format
         shell: pwsh
         run: |
-          cargo fmt --manifest-path Native/Cargo.toml -- --check
+          cargo fmt --manifest-path Mesher/Cargo.toml -- --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo fmt --manifest-path App/src-tauri/Cargo.toml -- --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Test Native
-        run: cargo test --manifest-path Native/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
+      - name: Test Mesher
+        run: cargo test --manifest-path Mesher/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
       - name: Build packages
         shell: pwsh
         run: ./scripts/build.ps1 -NonInteractive

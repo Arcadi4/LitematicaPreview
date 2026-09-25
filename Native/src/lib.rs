@@ -54,11 +54,6 @@ impl PreviewOptions {
             if self.thread_count.is_none() {
                 return Err("Speed-first preview requires multithreading to be enabled.".into());
             }
-            if self.memory_limit_mb.is_some() {
-                return Err(
-                    "Speed-first preview requires the decoder memory limit to be disabled.".into(),
-                );
-            }
         }
         Ok(())
     }

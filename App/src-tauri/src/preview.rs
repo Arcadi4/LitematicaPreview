@@ -868,7 +868,7 @@ mod tests {
     }
 
     #[test]
-    fn speed_first_requires_multithreading_without_a_decoder_memory_cap() {
+    fn speed_first_requires_multithreading_but_preserves_decoder_memory_cap() {
         use serde_json::json;
         let mut request = json!({"memoryLimitMB": null, "chunkSize": 64, "threadCount": null, "speedFirst": true});
         assert!(options(request.clone()).is_err());
@@ -878,7 +878,9 @@ mod tests {
         request["threadCount"] = json!(2);
         assert!(options(request.clone()).unwrap().speed_first);
         request["memoryLimitMB"] = json!(2048);
-        assert!(options(request.clone()).is_err());
+        let capped = options(request.clone()).unwrap();
+        assert!(capped.speed_first);
+        assert_eq!(capped.memory_limit_mb, Some(2048));
         request["speedFirst"] = json!(false);
         assert_eq!(options(request).unwrap().memory_limit_mb, Some(2048));
     }

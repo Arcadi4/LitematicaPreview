@@ -461,7 +461,7 @@ fn decoder_job(memory_limit_mb: Option<u16>) -> Result<std::os::windows::io::Own
 fn process_limit_message(memory_limit_mb: Option<u16>) -> String {
     match memory_limit_mb {
         Some(mb) if cfg!(windows) => {
-            format!(" Decoder memory is limited to {mb} MB to protect the app and the system.")
+            format!(" Decoder memory was limited to {mb} MB; the exit alone cannot confirm whether that limit was reached.")
         }
         None => " The decoder memory limit is disabled.".into(),
         Some(_) => String::new(),

@@ -325,7 +325,7 @@ export default function App({ initialError }: { initialError?: string }) {
       const settings = previewSettingsRef.current
       const speedFirst = settings.multithreadingEnabled && settings.speedFirst
       const options = {
-        memoryLimitMB: settings.memoryLimitEnabled && !speedFirst ? settings.memoryLimitMB : null,
+        memoryLimitMB: settings.memoryLimitEnabled ? settings.memoryLimitMB : null,
         chunkSize: settings.chunkingEnabled ? settings.chunkSize : null,
         threadCount: settings.multithreadingEnabled ? settings.threadCount : null,
         speedFirst,
@@ -720,7 +720,6 @@ export default function App({ initialError }: { initialError?: string }) {
     rendererRef.current?.setGrid(visible)
   }
   const stageActive = Boolean(loaded || loading)
-  const speedFirstActive = previewSettings.multithreadingEnabled && previewSettings.speedFirst
   const size = loaded?.metadata.max
     .map((maximum, axis) => dimensions.format(maximum - loaded.metadata.min[axis]))
     .join(" × ")
@@ -1173,8 +1172,7 @@ export default function App({ initialError }: { initialError?: string }) {
                     <div className="flex items-center justify-between gap-4">
                       <Switch
                         label="Limit decoder memory"
-                        checked={previewSettings.memoryLimitEnabled && !speedFirstActive}
-                        disabled={speedFirstActive}
+                        checked={previewSettings.memoryLimitEnabled}
                         aria-describedby="memory-limit-description"
                         onChange={(_, data) =>
                           updatePreviewSettings({ memoryLimitEnabled: data.checked })
@@ -1186,7 +1184,7 @@ export default function App({ initialError }: { initialError?: string }) {
                           min={2048}
                           max={8192}
                           step={1}
-                          disabled={!previewSettings.memoryLimitEnabled || speedFirstActive}
+                          disabled={!previewSettings.memoryLimitEnabled}
                           aria-label="Decoder memory limit (MB)"
                           aria-describedby="memory-limit-description"
                           className="w-32"
@@ -1213,9 +1211,9 @@ export default function App({ initialError }: { initialError?: string }) {
                       className="m-0 text-sm leading-relaxed text-muted"
                     >
                       Limits the isolated decoder process, not graphics or total application memory.
-                      Disabling this limit may exhaust system memory.
-                      {speedFirstActive &&
-                        " Speed-first mode overrides this limit; turning it off restores your saved limit preference."}
+                      If the decoder stops while this limit is enabled, loading returns to Home and
+                      shows an error; the limit may be involved, but a crash cannot confirm it was
+                      reached. Disabling the limit may exhaust system memory.
                     </p>
                   </div>
                   <div className="flex flex-col gap-3">
@@ -1306,7 +1304,7 @@ export default function App({ initialError }: { initialError?: string }) {
                       />
                     </Field>
                     <Switch
-                      label="Speed first (no decoder memory limit)"
+                      label="Speed first"
                       checked={previewSettings.speedFirst}
                       disabled={!previewSettings.multithreadingEnabled}
                       aria-describedby="speed-first-description"
@@ -1318,8 +1316,8 @@ export default function App({ initialError }: { initialError?: string }) {
                     >
                       Off by default. Uses the selected worker count without memory-first
                       throttling, refills computation as results are consumed and allows more queued
-                      batches and upload reads. The decoder memory limit is disabled in this mode.
-                      Large schematics may exhaust system memory or crash the decoder. Thread-count
+                      batches and upload pages. A separate decoder memory limit remains effective
+                      when enabled; reaching it may stop the decoder and fail the load. Thread-count
                       and transfer-size bounds still apply.
                     </p>
                     <p

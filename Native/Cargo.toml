@@ -15,8 +15,6 @@ codegen-units = 1
 panic = "unwind"
 
 [dependencies]
-# Preserve the source app's pin: later published meshing releases require
-# an unavailable gltf_build API. Upgrade only with seven-format verification.
 nucleation = { version = "=0.10.14", default-features = false, features = ["meshing"] }
 schematic-mesher = "=0.2.0"
 quartz_nbt = { version = "0.2.9", features = ["preserve_order"] }

@@ -36,18 +36,15 @@ jobs:
             exit 1
           fi
 
-          # Ensure tag follows semantic versioning with 'v' prefix
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::Tag '$tag' is malformed. Expected format: vMAJOR.MINOR.PATCH[-PRERELEASE] (e.g. v0.1.0 or v0.1.0-rc.1)"
             exit 1
           fi
 
-          # Verify that all version numbers match across project files and the release tag
           if ! node scripts/bump-version.ts --check "$tag"; then
             exit 1
           fi
 
-          # Check if release already exists on GitHub
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release '$tag' already exists on GitHub. Skipping build and release publication."
             echo "exists=true" >> "$GITHUB_OUTPUT"
@@ -55,7 +52,6 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-          # Record whether tag is a prerelease
           if [[ "$tag" =~ - ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else

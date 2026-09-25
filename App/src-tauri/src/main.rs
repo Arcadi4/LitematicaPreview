@@ -271,8 +271,8 @@ fn open_folder(path: &std::path::Path) -> Result<(), String> {
 
     let folder: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let open: Vec<u16> = "open\0".encode_utf16().collect();
-    // ShellExecute receives the directory as a separate UTF-16 argument, never
-    // an interpolated shell command. Resource paths may contain spaces.
+    // Pass the directory as a separate UTF-16 argument. ShellExecute does not
+    // execute an interpolated command, and resource paths may contain spaces.
     let result = unsafe {
         ShellExecuteW(
             std::ptr::null_mut(),
@@ -355,9 +355,8 @@ fn run() -> Result<(), String> {
 fn main() {
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
-    // The private decoder mode never constructs Tauri, WebView2 or a dialog.
-    // Authentication is supplied through an inherited pipe, not command-line
-    // arguments or a frontend-accessible command.
+    // Decoder mode bypasses Tauri and WebView2. It receives authentication
+    // through the inherited stdin pipe, not process arguments or a Tauri command.
     if first
         .as_deref()
         .is_some_and(|argument| argument == "--preview-worker")
@@ -389,8 +388,8 @@ fn main() {
         }
         _ => None,
     };
-    // Installer hooks must finish without constructing WebView2 or opening
-    // Settings/a modal dialog; NSIS reports their nonzero exit status itself.
+    // Installer hooks must exit before Tauri, WebView2, or the Settings dialog
+    // starts; NSIS reports the nonzero process status.
     if let Some(result) = registration {
         if let Err(error) = result {
             eprintln!("{error}");

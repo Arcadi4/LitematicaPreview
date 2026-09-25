@@ -1,4 +1,4 @@
-//! Bounded geometry emission through schematic-mesher's original public API.
+//! Bounded geometry emission through schematic-mesher's public API.
 
 use rustc_hash::FxHashMap;
 use schematic_mesher::mesh_output::GreedyMaterialOutput;
@@ -12,9 +12,9 @@ use schematic_mesher::{
 };
 use std::collections::HashSet;
 
-/// Original greedy materials have no alpha-test layer. Keep states that can emit
-/// a binary-alpha face in the atlas builder; their opaque faces remain identical.
-/// Missing textures also need the atlas sentinel rather than an empty greedy PNG.
+/// Greedy materials have no alpha-test layer. States that can emit a binary-alpha
+/// face remain in the atlas builder, while their opaque faces stay identical.
+/// Missing textures use the atlas sentinel rather than an empty greedy texture.
 pub(super) fn atlas_only(pack: &ResourcePack, block: &InputBlock) -> bool {
     let Ok(models) = resolve_block(pack, block) else {
         return true;
@@ -112,10 +112,9 @@ pub(super) fn mesh(
             builder.texture_refs(),
             &mut output.animated_textures,
         )?;
-        // build(Some) can silently repack when a generated texture was missed.
-        // Preserve the exact pixel allocation as well as all regions; upstream
-        // allocates its replacement before dropping the supplied atlas, so pointer
-        // identity detects replacement without repeatedly scanning atlas pixels.
+        // `build(Some)` can silently repack when a generated texture was missed.
+        // Its replacement is allocated before the supplied atlas is dropped, so
+        // pointer identity detects replacement without repeatedly scanning pixels.
         let supplied = std::mem::replace(
             &mut output.atlas,
             TextureAtlas {
@@ -159,11 +158,9 @@ pub(super) fn mesh(
     Ok(output)
 }
 
-// The original culler allocates a dense, padded byte grid even for sparse input.
-// Do not impose a content quota or silently partition an unseparated mesh, but
-// reject arithmetic/addressability overflow before entering its unchecked code.
-// A representable grid can still exhaust physical memory; the host's optional
-// worker memory limit is the only memory budget.
+/// Reject padded culler bounds, dimensions, and address space that cannot be
+/// represented before entering the dense unchecked culler. The host's optional
+/// worker memory limit remains the physical-memory budget.
 fn validate_culler_grid(context: &[(BlockPosition, &InputBlock)]) -> Result<(), String> {
     if context.is_empty() {
         return Ok(());

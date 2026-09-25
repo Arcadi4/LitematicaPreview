@@ -26,8 +26,8 @@ impl Resources {
         if path.exists() {
             return Ok(path);
         }
-        // Development fallback is anchored to the crate, never the process
-        // working directory. Release builds use only installed resources.
+        // Development builds fall back to the crate-relative source path. Release
+        // builds use only installed resources.
         #[cfg(dev)]
         {
             let path = Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -121,7 +121,7 @@ fn litematic(regions: Vec<(&str, NbtCompound)>) -> NbtCompound {
     root
 }
 
-// Independent bit-at-a-time reference packer, including values crossing words.
+/// Pack values bit-by-bit as an independent reference, including values that cross words.
 fn pack(values: &[usize], bits: usize) -> Vec<i64> {
     let mut packed = vec![0u64; (values.len() * bits).div_ceil(64)];
     for (index, value) in values.iter().enumerate() {
@@ -137,8 +137,7 @@ fn pack(values: &[usize], bits: usize) -> Vec<i64> {
 
 #[test]
 fn litematic_continuous_packed_stream_preserves_states_at_each_bit_width() {
-    // Ports the original vendor unpack regression through the real Native decoder.
-    // Divisible and crossing-word widths exercise different packing boundaries.
+    // Both word-aligned and crossing-word widths exercise distinct packing boundaries.
     for bits in 2..=14 {
         let palette_len = 1usize << bits;
         let palette: Vec<_> = (0..palette_len)

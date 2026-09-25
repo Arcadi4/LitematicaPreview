@@ -1,4 +1,4 @@
-//! Discover shared atlas tiles through the unmodified mesher's public APIs.
+//! Discover shared atlas tiles through the mesher's public APIs.
 
 use schematic_mesher::atlas::{AtlasBuilder, AtlasRegion, TextureAtlas};
 use schematic_mesher::mesher::{element::MeshBuilder, entity};
@@ -6,8 +6,8 @@ use schematic_mesher::resource_pack::TextureData;
 use schematic_mesher::{BlockPosition, InputBlock, MesherConfig, ResourcePack};
 use std::collections::HashSet;
 
-/// These original mesher texture keys include the world position. The scheduler
-/// must visit their actual positions instead of using one palette representative.
+/// Texture keys for these states include world position, so they require
+/// discovery at each actual position rather than one palette representative.
 pub(super) fn position_dependent(block: &InputBlock) -> bool {
     matches!(entity::detect_mob(block), Some(entity::MobType::Player))
         || matches!(
@@ -29,7 +29,7 @@ pub(super) fn build<'a>(
     config: &MesherConfig,
     blocks: impl Iterator<Item = (BlockPosition, &'a InputBlock)>,
 ) -> Result<TextureAtlas, String> {
-    // Do not clone config.pre_built_atlas, which may already own a large image.
+    // Discovery must not duplicate a potentially large prebuilt atlas.
     let discovery = MesherConfig {
         cull_hidden_faces: false,
         cull_occluded_blocks: false,
@@ -49,8 +49,8 @@ pub(super) fn build<'a>(
     let mut atlas = AtlasBuilder::new(config.atlas_max_size, config.atlas_padding);
     let mut discovered = HashSet::new();
 
-    // Obtain the upstream sentinel itself: TextureData::placeholder() uses a
-    // different checkerboard. Even an empty schematic needs the correct tile.
+    // `MeshBuilder` provides the canonical missing-texture sentinel, which
+    // differs from `TextureData::placeholder()` and is required for empty inputs.
     let (_, _, _, missing, _, _) = MeshBuilder::new(pack, &discovery, None, None, None)
         .build(None)
         .map_err(|error| error.to_string())?;
@@ -70,8 +70,8 @@ pub(super) fn build<'a>(
             if discovered.contains(path) {
                 continue;
             }
-            // Synthetic keys begin with '_'. Let the original builder select
-            // their dynamic texture before any same-named resource-pack entry.
+            // Synthetic `_` keys must use generated textures rather than
+            // resource-pack entries with the same name.
             if !path.starts_with('_') {
                 if let Some(texture) = pack.get_texture(path) {
                     atlas.add_texture(path.clone(), texture.first_frame());
@@ -82,15 +82,15 @@ pub(super) fn build<'a>(
             needs_local_atlas = true;
         }
         if needs_local_atlas {
-            // Dynamic textures are private, but their atlas pixels and regions
-            // are public. Destructuring drops discarded geometry immediately.
+            // Dynamic textures are private, but their pixels and regions are
+            // public. Destructuring drops discarded geometry immediately.
             let (_, _, _, local, _, _) = representative
                 .build(None)
                 .map_err(|error| error.to_string())?;
             collect_tiles(local, &mut atlas, &mut discovered)?;
         }
     }
-    // AtlasBuilder sorts by height and key, independent of discovery order.
+    // Final placement is deterministic by height and key, independent of discovery order.
     atlas.build().map_err(|error| error.to_string())
 }
 
@@ -109,10 +109,9 @@ fn collect_tiles(
 }
 
 fn extract_tile(atlas: &TextureAtlas, region: &AtlasRegion) -> Result<TextureData, String> {
-    // Regions delimit the unpadded integer pixel rectangle, with no half-texel
-    // inset. The original builder uses power-of-two atlas dimensions, so these
-    // normalized boundaries recover the exact integers. Global packing then
-    // regenerates edge-clamped padding from the original interior pixels.
+    // Regions delimit the unpadded integer pixel rectangle without a half-texel
+    // inset. Power-of-two atlas dimensions make these normalized boundaries exact;
+    // global packing regenerates edge-clamped padding from the interior pixels.
     let edge = |uv: f32, extent: u32| -> Result<u32, String> {
         let pixel = uv * extent as f32;
         if !pixel.is_finite() || pixel < 0.0 || pixel > extent as f32 || pixel.fract() != 0.0 {

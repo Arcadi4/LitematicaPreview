@@ -1,5 +1,5 @@
 param(
-    # Retained for existing callers; setup and portable packages are always built.
+    # Accepted for caller compatibility; this script always builds setup and portable packages.
     [switch]$Installer,
     [switch]$NonInteractive
 )
@@ -52,7 +52,7 @@ try {
 
     Push-Location $root
     $locationPushed = $true
-    # Prevent dependency tools from prompting; only the final folder prompt is interactive.
+    # Keep dependency tools non-interactive; $interactive separately gates the final folder prompt.
     $env:CI = 'true'
     & $node.Source --version | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Node.js could not start. Reinstall Node.js 24 LTS and reopen the terminal.' }
@@ -84,9 +84,9 @@ try {
         }
     }
 
-    # Keep output predictable even when the caller has a shared Cargo target dir.
+    # Keep build output local even when the caller configured a shared Cargo target directory.
     $env:CARGO_TARGET_DIR = $targetRoot
-    # Ship without a separate Visual C++ runtime installer.
+    # Link the Visual C++ runtime statically so packages do not require a separate runtime installer.
     if ($env:RUSTFLAGS -notlike '*target-feature=+crt-static*') {
         $env:RUSTFLAGS = if ($originalFlags) { "$originalFlags -C target-feature=+crt-static" } else { '-C target-feature=+crt-static' }
     }
@@ -102,7 +102,6 @@ try {
     foreach ($oldPackage in @($setupPath, $portableZip)) {
         if (Test-Path -LiteralPath $oldPackage) { Remove-Item -LiteralPath $oldPackage -Force }
     }
-    # Tauri builds the frontend. Arguments after the separator go to Cargo.
     & $pnpm.Source --prefix App exec tauri build --target $target --ci --bundles nsis -- --locked | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Tauri release build failed. Check the compiler/bundler output in the log; confirm the MSVC C++ tools, Windows SDK, and Rust target are installed.' }
 
@@ -116,7 +115,7 @@ try {
     New-Item -ItemType Directory -Path $portableRoot -Force | Out-Null
     Copy-Item -LiteralPath $executable -Destination $portableRoot
 
-    # Use the same resource map as NSIS. Frontend assets are embedded in the exe.
+    # Stage resources with the same destination map used by NSIS; the executable already embeds frontend assets.
     foreach ($resource in $config.bundle.resources.PSObject.Properties) {
         $source = Join-Path $tauriRoot $resource.Name
         $destination = Join-Path $portableRoot $resource.Value

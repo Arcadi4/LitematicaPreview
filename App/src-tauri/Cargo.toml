@@ -39,6 +39,6 @@ windows-sys = { version = "0.61", features = [
 [profile.release]
 lto = "thin"
 codegen-units = 1
-# A bad schematic must not terminate the window or poison the cached pack.
+# Keep decoder panics unwindable so catch_unwind can isolate them and discard mutable native state.
 panic = "unwind"
 strip = "debuginfo"

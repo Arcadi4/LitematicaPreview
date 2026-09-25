@@ -95,8 +95,8 @@ struct Summary {
     max: [f32; 3],
 }
 
-// One logical renderer payload; allocation-sized segments never flatten into
-// another full model. Only a requested packed IPC page is copied (at most 1 MiB).
+/// Stores one logical renderer payload as allocation-sized segments without
+/// flattening it into a contiguous model. Packed IPC reads copy at most 1 MiB per page.
 pub struct Payload {
     pub metadata: Metadata,
     buffers: Vec<Buffer>,
@@ -210,7 +210,7 @@ impl Payload {
             let group = if let Some(index) = existing {
                 index
             } else {
-                // Keep GPU-addressable draw batches rather than limiting the model.
+                // Keep each merged draw batch within the renderer's i32::MAX counts.
                 let index = merged.len();
                 let base = buffers.len();
                 buffers.extend((0..5).map(|_| Buffer::default()));
@@ -456,9 +456,11 @@ pub fn finish(stream: &mut impl Write, result: Result<PreviewInfo, String>) -> i
     }
 }
 
-// Non-terminal packets require an acknowledgement. Cancellation is observed at
-// the next packet, and the decoder emits an ERROR terminator before accepting
-// another request. Malformed streams instead invalidate the worker connection.
+/// Receives and assembles one logical renderer payload.
+///
+/// Every non-terminal packet requires an acknowledgement. Cancellation is observed
+/// before the next packet, after which the decoder emits an `ERROR` terminator before
+/// accepting another request. A malformed stream invalidates the connection.
 pub fn receive(
     stream: &mut (impl Read + Write),
     current: impl Fn() -> bool,

@@ -12,7 +12,8 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct DecoderProcess {
     child: Child,
     stream: Option<TcpStream>,
-    // Kept open for the child's lifetime watchdog, including during native calls.
+    // Retain the child's stdin so its host-lifetime watchdog remains active
+    // during native calls.
     input: Option<ChildStdin>,
     memory_limit_mb: Option<u16>,
     #[cfg(windows)]
@@ -42,8 +43,8 @@ impl DecoderProcess {
             .arg("--preview-worker")
             .arg(address.port().to_string())
             .stdin(Stdio::piped())
-            // Native decoding may write to stdout. Neither output stream carries
-            // protocol data or has a pipe that could fill and deadlock decoding.
+            // Decoder output carries no protocol data. Null streams prevent native
+            // writes from filling a pipe and deadlocking the decoder.
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         #[cfg(windows)]
@@ -132,8 +133,10 @@ impl DecoderProcess {
         self.child.id()
     }
 
-    // The outer error invalidates the process; an inner decoder error leaves
-    // the connection and resource-pack cache available for the next request.
+    /// Loads one preview request from the isolated decoder.
+    ///
+    /// An outer error invalidates the decoder process. An inner error preserves
+    /// the connection and resource-pack cache for the next request.
     pub fn load(
         &mut self,
         path: &Path,
@@ -216,8 +219,8 @@ impl DecoderProcess {
     }
 
     fn failure(&mut self, error: io::Error) -> String {
-        // EOF may reach us just before the OS records the exit code. Allow that
-        // short teardown to finish, but never wait forever for a broken peer.
+        // EOF can precede the operating system's exit notification. Allow brief
+        // teardown, but bound the wait if the peer remains stuck.
         let deadline = Instant::now() + Duration::from_millis(250);
         loop {
             match self.child.try_wait() {
@@ -235,8 +238,8 @@ impl DecoderProcess {
 
 impl Drop for DecoderProcess {
     fn drop(&mut self) {
-        // Closing stdin also terminates a child that is still inside native
-        // code. kill/wait ensures ordinary replacement does not leave zombies.
+        // Closing stdin makes the child watchdog terminate the process, including
+        // during native calls. kill/wait prevents zombies during ordinary replacement.
         self.input.take();
         self.stream.take();
         let _ = self.child.kill();
@@ -300,7 +303,8 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
     io::stdin()
         .read_exact(&mut token)
         .map_err(|e| format!("Unable to read decoder authentication: {e}"))?;
-    // Read the launch cap only from the inherited host pipe, never a load request.
+    // Accept the launch memory cap only from the inherited host pipe, never from
+    // a request packet.
     let mut cap = [0; 2];
     io::stdin()
         .read_exact(&mut cap)
@@ -311,8 +315,8 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
         ..PreviewOptions::default()
     }
     .validate()?;
-    // A host can exit while a native call is active and cannot unwind. The
-    // inherited pipe closes on host exit; do not leave that decoder orphaned.
+    // The child may be stuck in native code that cannot unwind. Its watchdog exits
+    // when the host closes stdin, preventing an orphaned decoder.
     std::thread::Builder::new()
         .name("preview-host-lifetime".into())
         .spawn(|| {
@@ -423,8 +427,8 @@ fn decoder_job(memory_limit_mb: Option<u16>) -> Result<std::os::windows::io::Own
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         JOB_OBJECT_LIMIT_PROCESS_MEMORY,
     };
-    // No inheritable handle: abrupt host termination closes the last job
-    // handle. Refuse to decode unless confinement was established.
+    // Keep the job handle non-inheritable so host termination closes the last handle
+    // and triggers JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE. Refuse to decode if setup fails.
     let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
     if handle.is_null() {
         return Err(format!(

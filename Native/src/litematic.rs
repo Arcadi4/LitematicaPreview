@@ -1,8 +1,6 @@
 //! Bounded dense and direct compact Litematic import.
 //!
-//! Format and metadata handling adapted from Nucleation 0.10.14,
-//! Copyright (c) 2025 Schem-at, MIT licensed (see NOTICE).
-
+//! Nucleation 0.10.14 format handling; see NOTICE and ThirdParty/Nucleation-LICENSE.txt.
 use nucleation::block_entity::BlockEntity;
 use nucleation::formats::limits::DecodeLimits;
 use nucleation::BoundingBox;
@@ -33,8 +31,6 @@ pub(super) fn read(data: &[u8], limits: &DecodeLimits) -> Result<UniversalSchema
     metadata(&root, &mut schematic)?;
     let (default_name, regions) = prepare_regions(root, limits, &|| Ok(()))?;
     schematic.default_region_name = default_name;
-    // The explicit dense API still validates every index before allocating any
-    // volume-sized Region. The preview path validates while streaming instead.
     for prepared in &regions {
         visit_blocks(prepared, &|| Ok(()), |_, _| Ok(()))?;
     }
@@ -65,7 +61,7 @@ fn prepare_regions(
         return Err("missing Litematic Regions compound".into());
     };
     drop(root);
-    // Even a non-compound first entry names the default, matching the importer.
+    // The first serialized entry names the default even when it is not a compound.
     let default_name = regions
         .inner()
         .keys()
@@ -76,8 +72,8 @@ fn prepare_regions(
     Ok((default_name, regions))
 }
 
-// The dense reader validates region, palette and entity metadata before
-// allocating its volume-sized store; preview has a separate streaming scan.
+/// Validate region, palette, packed-state, and entity metadata before allocating
+/// the volume-sized dense store.
 fn preflight(
     regions: NbtCompound,
     default_name: &str,
@@ -155,8 +151,8 @@ fn preflight(
                 .ok_or("block-entity count overflow")?;
             for tag in entities.iter() {
                 if let NbtTag::Compound(entity) = tag {
-                    // BlockEntity::from_nbt indexes Pos directly; validate its
-                    // array and translated coordinates before calling that API.
+                    // `BlockEntity::from_nbt` indexes `Pos` directly, so validate
+                    // its length and translated coordinates before that API call.
                     let relative = block_entity_position(entity)?;
                     offset_position(relative, bounds.min)?;
                 }
@@ -178,8 +174,8 @@ fn preflight(
             nbt,
         });
     }
-    // Preserve the original empty/default-region behavior even when the first
-    // Regions entry is not a compound and gets skipped by the importer.
+    // Count the synthetic default region when the first serialized entry is
+    // absent or is not a compound.
     if !has_default {
         total_volume = total_volume.checked_add(1).ok_or("total volume overflow")?;
         if prepared.len() >= limits.max_regions || total_volume > limits.max_volume {
@@ -239,7 +235,7 @@ fn read_region(prepared: PreparedRegion) -> Result<Region, String> {
     drop(palette);
     for index in 0..volume {
         let palette_index = mapping[packed_index(&packed, bits, index)];
-        // The final dense allocation already contains ordinary air (index zero).
+        // The dense allocation is initialized to ordinary air at index zero.
         if palette_index != 0 {
             let (x, y, z) = region.index_to_coords(index);
             region.set_block_at_index_unchecked(palette_index, x, y, z);
@@ -281,8 +277,8 @@ fn read_region_extras(
                     current()?;
                     if let NbtTag::Compound(entity) = tag {
                         if let Ok(mut entity) = Entity::from_nbt(&entity) {
-                            // Ordinary entities use the signed origin, unlike
-                            // block entities, which use the minimum corner.
+                            // Entity positions use the signed region origin; block
+                            // entities use the region's minimum corner.
                             entity.position.0 += f64::from(origin.0);
                             entity.position.1 += f64::from(origin.1);
                             entity.position.2 += f64::from(origin.2);
@@ -363,8 +359,7 @@ fn offset_position(
     ))
 }
 
-// Metadata is mandatory; optional metadata fields are permissive and have no
-// preview effect. Share the mandatory validation without copying unused text.
+/// Return mandatory Litematic metadata; optional fields remain permissive.
 fn metadata_compound(root: &NbtCompound) -> Result<&NbtCompound, String> {
     root.get::<_, &NbtCompound>("Metadata")
         .map_err(|error| error.to_string())
@@ -612,7 +607,6 @@ mod tests {
             assert_eq!(packed_index(&[-1, 7], 64, 0), usize::MAX);
             assert_eq!(packed_index(&[-1, 7], 64, 1), 7);
         }
-        // A 63-bit value crossing the packed-word boundary.
         let packed = [i64::MIN, 3];
         assert_eq!(packed_index(&packed, 63, 1), 7);
     }

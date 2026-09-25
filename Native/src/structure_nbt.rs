@@ -1,7 +1,4 @@
-// Vanilla Java structure `.nbt` decoding.
-//
-// Nucleation reads the SNBT spelling; binary Java structures use the same
-// bounded NBT parser as the Native Litematic and Sponge readers.
+//! Vanilla Java structure `.nbt` decoding.
 
 use nucleation::block_entity::BlockEntity;
 use nucleation::block_position::BlockPosition;
@@ -12,7 +9,7 @@ use quartz_nbt::{NbtCompound, NbtList, NbtTag};
 
 use super::{bounded_nbt, DecodeFailure};
 
-// None means the input is not a binary Java structure.
+/// Return `None` when the input is not a binary Java structure.
 pub(super) fn try_load(
     bytes: &[u8],
     limits: &DecodeLimits,
@@ -88,8 +85,6 @@ fn load_structure_nbt(
         let Some(position) = triple(entry, "pos") else {
             return Err(unreadable());
         };
-        // Positions are validated against `size` in shape above only; a
-        // malformed file can still point outside the grid.
         if position
             .iter()
             .enumerate()
@@ -136,8 +131,7 @@ fn load_structure_nbt(
             let Some(NbtTag::Compound(nbt)) = entry.inner().get("nbt") else {
                 continue;
             };
-            // Vanilla ignores entity records with no type id; so do we, and we
-            // do not let one odd record fail the whole load.
+            // Vanilla structures ignore entity records without a type id.
             if !nbt.contains_key("id") && !nbt.contains_key("Id") {
                 continue;
             }
@@ -156,7 +150,7 @@ fn load_structure_nbt(
     Ok(schematic)
 }
 
-// Read an `[i32; 3]` from an int array or a list of int-ish tags.
+/// Read an `[i32; 3]` from an int array or a list of integer-like tags.
 fn triple(compound: &NbtCompound, key: &str) -> Option<[i32; 3]> {
     match compound.inner().get(key)? {
         NbtTag::IntArray(values) => values.as_slice().try_into().ok(),
@@ -176,7 +170,7 @@ fn triple(compound: &NbtCompound, key: &str) -> Option<[i32; 3]> {
     }
 }
 
-// Read an `[f64; 3]` from a list of float-ish tags.
+/// Read an `[f64; 3]` from a list of float-like tags.
 fn double_triple(compound: &NbtCompound, key: &str) -> Option<[f64; 3]> {
     let NbtTag::List(list) = compound.inner().get(key)? else {
         return None;
@@ -195,7 +189,7 @@ fn double_triple(compound: &NbtCompound, key: &str) -> Option<[f64; 3]> {
     Some(out)
 }
 
-// Read the block-state palette as canonical `id[property=value,…]` strings.
+/// Read the block-state palette as canonical `id[property=value,…]` strings.
 fn read_palette(root: &NbtCompound) -> Option<Vec<String>> {
     let NbtTag::List(palette) = root.inner().get("palette")? else {
         return None;

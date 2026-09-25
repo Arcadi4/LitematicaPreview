@@ -1,5 +1,4 @@
-# Continuous memory recording for the host and decoder processes.
-# Run from any directory. Stop with Ctrl+C. Does not start the application.
+# Records matching host and decoder processes until interrupted. Run from any directory; this script does not start the application.
 [CmdletBinding()]
 param(
     [ValidateRange(100, 5000)]
@@ -34,7 +33,7 @@ function Format-MiB([double]$Bytes) {
 }
 
 try {
-    # CreateNew prevents overwriting an earlier recording accidentally.
+    # CreateNew prevents an existing recording from being overwritten.
     $stream = [System.IO.FileStream]::new(
         $outputFile, [System.IO.FileMode]::CreateNew,
         [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read
@@ -69,7 +68,7 @@ try {
                 }
             }
             catch [System.InvalidOperationException] {
-                # Process exited while its counters were being read.
+                # A process can exit between enumeration and counter reads.
             }
             catch [System.ComponentModel.Win32Exception] {
                 Write-Warning "Cannot read a matching process: $($_.Exception.Message)"

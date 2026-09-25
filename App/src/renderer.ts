@@ -162,8 +162,8 @@ void main() {
     pixel = vec4(0.020, 0.030, 0.042, 1.0);
     return;
   }
-  // SRGB8_ALPHA8 textures are decoded by the sampler. Nucleation's tint/AO
-  // multiplier and lighting are applied in linear space, as in the native view.
+  // SRGB8_ALPHA8 textures are decoded by the sampler; tint, ambient occlusion,
+  // and lighting are applied in linear space.
   vec4 base = texture(blockTexture, textureUv) * tint;
   if (alphaMode == 1 && base.a < 0.5) discard;
   vec3 n = normalize(surfaceNormal) * (gl_FrontFacing ? 1.0 : -1.0);
@@ -242,7 +242,7 @@ export class SchematicRenderer {
   private preparation: PreparedUploads | null = null
   private stream: PreviewStream | null = null
   private preparationPool: PreparationWorkerPool | null = null
-  // Context recovery replaces the renderer but must still drain its old IPC reads.
+  // Context recovery replaces the renderer, but old IPC reads must drain first.
   private static pendingPreparationReads: Promise<void> = Promise.resolve()
   private readonly yieldChannel = new MessageChannel()
   private readonly pendingYields: (() => void)[] = []
@@ -533,7 +533,6 @@ export class SchematicRenderer {
           if (target.kind === "texture") {
             const source = metadata.textures[target.textureIndex]
             let texture = model.textures[firstTexture + target.textureIndex]
-            // Texture pages are emitted in source order, before any geometry pages.
             if (!texture) {
               texture = required(gl.createTexture(), "a block texture")
               model.textures.push(texture)
@@ -643,7 +642,6 @@ export class SchematicRenderer {
       preparation?.stop()
       if (this.preparation === preparation) this.preparation = null
     }
-    // Native storage remains leased until every read from this batch has settled.
     if (preparation) await preparation.drained
     guard()
   }
@@ -1085,9 +1083,7 @@ export class SchematicRenderer {
     const code = gl.getError()
     if (code === gl.NO_ERROR) return
     // Drain the finite error flags so a failed upload cannot poison a later load.
-    for (let i = 0; i < 8 && gl.getError() !== gl.NO_ERROR; i++) {
-      /* drain */
-    }
+    for (let i = 0; i < 8 && gl.getError() !== gl.NO_ERROR; i++) {}
     if (code === gl.CONTEXT_LOST_WEBGL)
       throw new Error(
         "The graphics context was lost. Reopen the schematic after the graphics device recovers.",

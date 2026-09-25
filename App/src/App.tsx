@@ -375,7 +375,7 @@ export default function App({ initialError }: { initialError?: string }) {
           )
         })
         if (!isCurrent(id)) return
-        // Serial mode still completes native generation before allocating GPU state.
+        // Serial mode completes native generation before allocating GPU state.
         const descriptor =
           options.threadCount === null
             ? await invoke<PreviewMetadata>("load_preview", { path, requestId: id, options })
@@ -477,7 +477,6 @@ export default function App({ initialError }: { initialError?: string }) {
         setLoading(null)
         setPreviewMemory(null)
         updateTitle(path, id)
-        // React has committed the active view before the native decode finishes.
         canvasRef.current?.focus({ preventScroll: true })
       } catch (error) {
         if (!isCurrent(id)) return
@@ -506,8 +505,8 @@ export default function App({ initialError }: { initialError?: string }) {
     if (!mounted.current || !bootstrapRef.current || choosingRef.current) return
     choosingRef.current = true
     setChoosing(true)
-    // Dismissing the picker must leave the current preview or load intact.
     const id = generation.current
+    // Do not replace the active preview if another generation starts while the picker is open.
     try {
       const path = await invoke<string | null>("choose_file")
       if (path && isCurrent(id)) void loadPath(path)
@@ -672,22 +671,19 @@ export default function App({ initialError }: { initialError?: string }) {
   }, [])
 
   const dark = theme === "dark" || (theme === "system" && systemDark)
+  // Storage failures do not change in-memory preferences.
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark)
     document.documentElement.style.colorScheme = dark ? "dark" : "light"
     try {
       localStorage.setItem("litematica-preview-theme", theme)
-    } catch {
-      /* Theme still works when storage is disabled. */
-    }
+    } catch {}
   }, [dark, theme])
 
   useEffect(() => {
     try {
       localStorage.setItem("litematica-preview-settings", JSON.stringify(previewSettings))
-    } catch {
-      /* Preview settings still work when storage is disabled. */
-    }
+    } catch {}
   }, [previewSettings])
 
   useEffect(() => {

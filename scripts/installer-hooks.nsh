@@ -2,8 +2,8 @@
 !include "nsDialogs.nsh"
 !include "${__FILEDIR__}\..\App\src-tauri\gen\installer-extensions.nsh"
 
-; The pinned installer template declares this options page after Welcome.
-; Keep callbacks independent of Tauri variables declared after this include.
+; installer.nsi inserts this file before defining PRODUCTNAME and other Tauri values.
+; Callbacks therefore use only these local variables and NSIS APIs.
 Var LPOptionsInitialized
 Var LPAssociationDialog
 Var LPRegisterControl
@@ -92,7 +92,7 @@ FunctionEnd
 
 Function LPOptionsChanged
   Pop $LPEventControl
-  ; Capture on every click so returning with Back restores the user's choices.
+  ; Capture every click so Back restores the user's choices.
   Call LPCaptureOptions
   Call LPUpdateEnabledControls
 FunctionEnd
@@ -104,7 +104,6 @@ Function LPAssociationPage
   ${OrIf} $LPPassiveMode == 1
     Abort
   ${EndIf}
-  ; Silent/passive installs retain their non-interactive opt-out behavior.
 
   !insertmacro MUI_HEADER_TEXT "Choose file associations" "Optional settings for Litematica Preview"
   nsDialogs::Create 1018
@@ -151,7 +150,6 @@ Function LPShowAssociationWarning
 FunctionEnd
 
 !macro NSIS_HOOK_PREINSTALL
-  ; Silent/passive installs have no options page and do not change defaults.
   Call LPInitializeOptions
   ${If} ${Silent}
   ${OrIf} $LPPassiveMode == 1
@@ -159,8 +157,8 @@ FunctionEnd
   ${EndIf}
 !macroend
 
-; Association ownership and Windows UserChoice handling belong to the app.
-; Commands run only after installation, never while the user can cancel a page.
+; The app owns associations and Windows UserChoice handling.
+; The postinstall hook runs only after the user can no longer cancel installation.
 !macro NSIS_HOOK_POSTINSTALL
   Push $0
   ClearErrors
@@ -202,8 +200,8 @@ FunctionEnd
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
-  ; Tauri's own running-app check occurs after this hook. Check before any
-  ; registry mutation so canceling removal leaves the installation untouched.
+  ; This hook runs before the built-in running-app check.
+  ; Check before any registry mutation so a canceled removal leaves the installation untouched.
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
   Push $0
   ClearErrors

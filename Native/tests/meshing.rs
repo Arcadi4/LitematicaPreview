@@ -37,8 +37,8 @@ fn public_preview_preserves_dense_fixture_counts_and_geometry_for_all_formats() 
         nucleation::formats::litematic::to_litematic(&seven).unwrap(),
     ));
 
-    // An unwrapped Sponge root may have both Version and Metadata. Those
-    // fields alone must not divert the public preview into the Litematic path.
+    // `Version` and `Metadata` alone must not classify an unwrapped Sponge root
+    // as Litematic.
     let sponge = &inputs
         .iter()
         .find(|(name, _)| *name == "Sponge.schem")
@@ -145,8 +145,8 @@ fn native_stream_counts_visible_bounds_and_stops_between_chunks() {
     .unwrap();
     assert_eq!(chunk_count, 2);
     assert_eq!(progress, [(0, 2), (1, 2), (2, 2)]);
-    // Decode counts retain their upstream meaning; cave/void air do not emit
-    // geometry, affect visible bounds, or create an extra streamed chunk.
+    // Cave and void air count as blocks but do not emit geometry, affect visible
+    // bounds, or create another streamed chunk.
     assert_eq!(info.block_count, 4);
     assert_eq!(info.block_entity_count, 1);
     assert_eq!(info.triangle_count, triangles);
@@ -207,7 +207,7 @@ fn negative_litematic_extents_preserve_entity_origin_and_visible_geometry() {
             .collect::<Vec<_>>(),
         ),
     );
-    // x + z * width + y * width * length, two bits per palette index.
+    // Packed order is x + z * width + y * width * length, with two bits per entry.
     region.insert(
         "BlockStates",
         NbtTag::LongArray(vec![1 | (1 << 22) | (2 << 10) | (3 << 12)]),

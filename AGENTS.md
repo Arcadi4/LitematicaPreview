@@ -3,7 +3,7 @@
 Windows x64 desktop app for offline Minecraft schematic and structure viewing.
 
 - `App/`: Tauri 2 desktop application with a Rust host (`App/src-tauri/`) and Fluent UI React v9 frontend (`App/src/`). Uses an on-demand WebGL 2 renderer with `gl-matrix`.
-- `Native/`: Rust library (`litematica_preview_native`) wrapping Nucleation 0.10.14 for decoding and meshing.
+- `Mesher/`: Rust library (`litematica_preview_native`) wrapping Nucleation 0.10.14 for decoding and meshing.
 - `Assets/`: Tracked inputs including default resource pack (`Assets/pack.zip`) and application icons.
 - `Fixtures/`: Seven demo schematics in `Demos/` and minimal format fixtures in `Formats/`.
 - `scripts/`: PowerShell build scripts (`build.ps1`), cross-platform version management script (`bump-version.ts`, `bump-version.ps1`), and NSIS installer configuration (`installer-hooks.nsh`).
@@ -65,14 +65,14 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
 - Check Rust formatting:
 
   ```bash
-  cargo fmt --manifest-path Native/Cargo.toml -- --check
+  cargo fmt --manifest-path Mesher/Cargo.toml -- --check
   cargo fmt --manifest-path App/src-tauri/Cargo.toml -- --check
   ```
 
-- Native decoder and mesher tests:
+- Mesher decoder and mesher tests:
 
   ```bash
-  cargo test --manifest-path Native/Cargo.toml --release --locked
+  cargo test --manifest-path Mesher/Cargo.toml --release --locked
   ```
 
 - Rust Tauri host compile check:
@@ -93,7 +93,7 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
   node scripts/bump-version.ts --check [tag_or_version]
   ```
 
-- Bump version numbers across all project files (`App/package.json`, `App/src-tauri/tauri.conf.json`, `App/src-tauri/Cargo.toml`, `Native/Cargo.toml`, and lockfiles):
+- Bump version numbers across all project files (`App/package.json`, `App/src-tauri/tauri.conf.json`, `App/src-tauri/Cargo.toml`, `Mesher/Cargo.toml`, and lockfiles):
 
   ```bash
   node scripts/bump-version.ts <version | major | minor | patch>

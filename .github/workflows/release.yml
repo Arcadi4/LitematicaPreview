@@ -78,21 +78,21 @@ jobs:
         if: steps.check_tag.outputs.exists != 'true'
         with:
           workspaces: |
-            Native -> target
+            Mesher -> target
             App/src-tauri -> target
 
       - name: Check Rust formatting
         if: steps.check_tag.outputs.exists != 'true'
         shell: pwsh
         run: |
-          cargo fmt --manifest-path Native/Cargo.toml -- --check
+          cargo fmt --manifest-path Mesher/Cargo.toml -- --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo fmt --manifest-path App/src-tauri/Cargo.toml -- --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test schematic decoding and meshing
         if: steps.check_tag.outputs.exists != 'true'
-        run: cargo test --manifest-path Native/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
+        run: cargo test --manifest-path Mesher/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
 
       - name: Build setup and portable packages
         if: steps.check_tag.outputs.exists != 'true'

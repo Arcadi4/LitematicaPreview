@@ -1,4 +1,4 @@
-//! Shared bounded binary NBT parsing for the Native schematic readers.
+//! Shared bounded binary NBT parsing for the Mesher schematic readers.
 
 use std::io::{Cursor, Read};
 

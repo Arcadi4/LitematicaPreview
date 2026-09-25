@@ -154,6 +154,52 @@ jobs:
           path: artifacts/logs/
           if-no-files-found: ignore
 
+      - name: Prepare release notes
+        if: steps.check_tag.outputs.exists != 'true'
+        shell: bash
+        run: |
+          node --input-type=module - "$GITHUB_REF_NAME" "$RUNNER_TEMP/release-notes.md" <<'NODE'
+          import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+
+          const [, , tag, output] = process.argv
+          let notes = ''
+          if (existsSync('CHANGELOG.md')) {
+            const lines = readFileSync('CHANGELOG.md', 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/)
+            const start = lines.findIndex((line) => line.trimEnd() === `# ${tag}`)
+            if (start !== -1) {
+              const section = []
+              let fence = null
+              for (const line of lines.slice(start + 1)) {
+                const marker = line.match(/^ {0,3}(`{3,}|~{3,})/)
+                if (fence) {
+                  section.push(line)
+                  if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length &&
+                      /^ {0,3}(?:`{3,}|~{3,})[ \t]*$/.test(line)) fence = null
+                } else if (marker) {
+                  fence = marker[1]
+                  section.push(line)
+                } else if (/^#(?:[ \t]|$)/.test(line)) {
+                  break
+                } else {
+                  section.push(line.replace(/^#{2,6}(?=[ \t])/, (heading) => heading.slice(1)))
+                }
+              }
+              while (section.length && !section[0].trim()) section.shift()
+              while (section.length && !section.at(-1).trim()) section.pop()
+              notes = section.join('\n')
+            }
+          }
+
+          const install = `# How to install
+
+          There are two options for you to install, pick the one you prefer:
+
+          - A one-click installer (\`LitematicaPreview-<version>-win-x64-setup.exe\`): Installs per-user without requiring administrator privileges.
+          - A portable .zip package (\`LitematicaPreview-<version>-win-x64-portable.zip\`): Download and extract the portable archive and run LitematicaPreview.exe.`
+
+          writeFileSync(output, `${notes ? `${notes}\n\n` : ''}${install}\n`)
+          NODE
+
       - name: Publish GitHub Release
         if: steps.check_tag.outputs.exists != 'true'
         shell: bash
@@ -192,6 +238,7 @@ jobs:
             "$zip_file" \
             "$checksum_file" \
             --title "Litematica Preview $tag" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
             --generate-notes \
             --verify-tag \
             "${extra_flags[@]}"

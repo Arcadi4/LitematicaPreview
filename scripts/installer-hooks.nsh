@@ -149,17 +149,7 @@ Function LPShowAssociationWarning
   ${EndIf}
 FunctionEnd
 
-!macro NSIS_HOOK_PREINSTALL
-  Call LPInitializeOptions
-  ${If} ${Silent}
-  ${OrIf} $LPPassiveMode == 1
-    StrCpy $LPRegisterState ${BST_UNCHECKED}
-  ${EndIf}
-!macroend
-
-; The app owns associations and Windows UserChoice handling.
-; The postinstall hook runs only after the user can no longer cancel installation.
-!macro NSIS_HOOK_POSTINSTALL
+Function LPApplyPostInstall
   Push $0
   ClearErrors
   ${If} $LPRegisterState == ${BST_CHECKED}
@@ -197,12 +187,23 @@ FunctionEnd
   ${EndIf}
   ClearErrors
   Pop $0
+FunctionEnd
+
+!macro NSIS_HOOK_PREINSTALL
+  Call LPInitializeOptions
+  ${If} ${Silent}
+  ${OrIf} $LPPassiveMode == 1
+    StrCpy $LPRegisterState ${BST_UNCHECKED}
+  ${EndIf}
 !macroend
 
-!macro NSIS_HOOK_PREUNINSTALL
-  ; This hook runs before the built-in running-app check.
-  ; Check before any registry mutation so a canceled removal leaves the installation untouched.
-  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+; The app owns associations and Windows UserChoice handling.
+; The postinstall hook runs only after the user can no longer cancel installation.
+!macro NSIS_HOOK_POSTINSTALL
+  Call LPApplyPostInstall
+!macroend
+
+Function LPCleanupAssociationsBeforeUninstall
   Push $0
   ClearErrors
   ExecWait '"$INSTDIR\LitematicaPreview.exe" --unregister' $0
@@ -215,4 +216,11 @@ FunctionEnd
   ${EndIf}
   ClearErrors
   Pop $0
+FunctionEnd
+
+!macro NSIS_HOOK_PREUNINSTALL
+  ; This hook runs before the built-in running-app check.
+  ; Check before any registry mutation so a canceled removal leaves the installation untouched.
+  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  Call LPCleanupAssociationsBeforeUninstall
 !macroend

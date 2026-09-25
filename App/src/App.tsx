@@ -73,7 +73,7 @@ type PreviewSettings = {
   chunkSize: number
   multithreadingEnabled: boolean
   threadCount: number
-  speedFirst: boolean
+  conservativeMemoryScheduling: boolean
 }
 type Loading = {
   path: string
@@ -102,7 +102,7 @@ const defaultPreviewSettings: PreviewSettings = {
   chunkSize: 64,
   multithreadingEnabled: false,
   threadCount: 2,
-  speedFirst: false,
+  conservativeMemoryScheduling: true,
 }
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -118,7 +118,7 @@ function savedTheme(): ThemePreference {
   }
 }
 
-function savedPreviewSettings(): PreviewSettings {
+export function savedPreviewSettings(): PreviewSettings {
   try {
     const value: unknown = JSON.parse(localStorage.getItem("litematica-preview-settings") || "null")
     if (value === null || typeof value !== "object" || Array.isArray(value))
@@ -158,7 +158,10 @@ function savedPreviewSettings(): PreviewSettings {
         settings.threadCount <= 8
           ? settings.threadCount
           : defaultPreviewSettings.threadCount,
-      speedFirst: settings.speedFirst === true,
+      conservativeMemoryScheduling:
+        typeof settings.conservativeMemoryScheduling === "boolean"
+          ? settings.conservativeMemoryScheduling
+          : settings.speedFirst !== true,
     }
   } catch {
     return defaultPreviewSettings
@@ -323,7 +326,7 @@ export default function App({ initialError }: { initialError?: string }) {
       // Read current settings without rebuilding startup and drag-and-drop subscriptions.
       // This request keeps its own snapshot even if settings change during decoding.
       const settings = previewSettingsRef.current
-      const speedFirst = settings.multithreadingEnabled && settings.speedFirst
+      const speedFirst = settings.multithreadingEnabled && !settings.conservativeMemoryScheduling
       const options = {
         memoryLimitMB: settings.memoryLimitEnabled ? settings.memoryLimitMB : null,
         chunkSize: settings.chunkingEnabled ? settings.chunkSize : null,
@@ -1304,21 +1307,22 @@ export default function App({ initialError }: { initialError?: string }) {
                       />
                     </Field>
                     <Switch
-                      label="Speed first"
-                      checked={previewSettings.speedFirst}
+                      label="Conservative memory scheduling"
+                      checked={previewSettings.conservativeMemoryScheduling}
                       disabled={!previewSettings.multithreadingEnabled}
-                      aria-describedby="speed-first-description"
-                      onChange={(_, data) => updatePreviewSettings({ speedFirst: data.checked })}
+                      aria-describedby="conservative-memory-description"
+                      onChange={(_, data) =>
+                        updatePreviewSettings({ conservativeMemoryScheduling: data.checked })
+                      }
                     />
                     <p
-                      id="speed-first-description"
+                      id="conservative-memory-description"
                       className="m-0 text-sm leading-relaxed text-muted"
                     >
-                      Off by default. Uses the selected worker count without memory-first
-                      throttling, refills computation as results are consumed and allows more queued
-                      batches and upload pages. A separate decoder memory limit remains effective
-                      when enabled; reaching it may stop the decoder and fail the load. Thread-count
-                      and transfer-size bounds still apply.
+                      Enabled by default. Reduces concurrent mesh work and the number of queued
+                      batches and upload pages. This may reduce decoding speed. Turning it off uses
+                      the selected worker count more aggressively and may use more memory. A
+                      separate decoder memory limit remains effective in either mode.
                     </p>
                     <p
                       id="thread-count-description"

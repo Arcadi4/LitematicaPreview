@@ -443,12 +443,6 @@ fn invalid_options_fail_before_decoding_or_consuming_input() {
             ..PreviewOptions::default()
         },
         PreviewOptions {
-            thread_count: Some(2),
-            speed_first: true,
-            memory_limit_mb: Some(2048),
-            ..PreviewOptions::default()
-        },
-        PreviewOptions {
             chunk_size: None,
             thread_count: Some(2),
             speed_first: true,
@@ -472,6 +466,16 @@ fn invalid_options_fail_before_decoding_or_consuming_input() {
             chunk_size: None,
             thread_count: None,
             speed_first: false,
+        }
+        .validate()
+        .unwrap();
+    }
+    if litematica_preview_native::max_worker_threads() >= 2 {
+        PreviewOptions {
+            thread_count: Some(2),
+            speed_first: true,
+            memory_limit_mb: Some(2048),
+            ..PreviewOptions::default()
         }
         .validate()
         .unwrap();

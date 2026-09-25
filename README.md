@@ -18,6 +18,14 @@
 
 Litematica Preview is a Windows desktop viewer for Minecraft schematics and structures, adapted from [LitematicaQL](https://github.com/Arcadi4/LitematicaQL). It previews `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, and `.nusn` files locally in 3D.
 
+## Highlights
+
+- Preview seven Minecraft schematic and structure formats offline in textured 3D with WebGL 2 and Nucleation.
+- Load large `.litematic` files with compact decoding and chunked previews that avoid retaining the full decompressed file.
+- Generate and upload geometry concurrently with configurable chunk size, worker threads, and memory scheduling.
+- Isolate decoding in a separate process, with an optional memory limit and loading progress.
+- Choose an installer with optional file associations or a portable ZIP that needs no installation.
+
 ## Install
 
 Download the latest release from the [release page](https://github.com/Arcadi4/LitematicaPreview/releases):

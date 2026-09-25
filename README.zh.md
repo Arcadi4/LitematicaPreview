@@ -18,6 +18,14 @@
 
 Litematica Preview 是一款适用于 Windows 桌面的 Minecraft 投影与结构查看器，改编自 [LitematicaQL](https://github.com/Arcadi4/LitematicaQL)。它支持在本地以 3D 方式预览 `.litematic`、`.schem`、`.schematic`、`.nbt`、`.snbt`、`.mcstructure` 和 `.nusn` 文件。
 
+## 亮点
+
+- 使用 WebGL 2 和 Nucleation，在本地以带纹理的 3D 视图预览七种 Minecraft 投影与结构格式。
+- 通过紧凑解码和分块预览加载大型 `.litematic` 文件，避免常驻完整解压后的文件内容。
+- 并行生成与上传几何数据，可调整分块大小、工作线程数和内存调度方式。
+- 在独立进程中解码，可选内存限制，并显示加载进度。
+- 可选择支持文件关联的安装包，或无需安装的便携版 ZIP。
+
 ## 安装
 
 从 [发布页面](https://github.com/Arcadi4/LitematicaPreview/releases) 下载最新版本：

@@ -333,6 +333,8 @@ fn requested_chunk_sizes_and_disabled_separation_control_delivered_groups() {
             PreviewOptions {
                 memory_limit_mb: None,
                 chunk_size,
+                thread_count: None,
+                speed_first: false,
             },
             |preview| {
                 assert_eq!(preview.mesh.chunk_coord.is_some(), chunk_size.is_some());
@@ -396,22 +398,61 @@ fn invalid_options_fail_before_decoding_or_consuming_input() {
         PreviewOptions {
             memory_limit_mb: Some(2047),
             chunk_size: Some(64),
+            thread_count: None,
+            speed_first: false,
         },
         PreviewOptions {
             memory_limit_mb: Some(8193),
             chunk_size: Some(64),
+            thread_count: None,
+            speed_first: false,
         },
         PreviewOptions {
             memory_limit_mb: Some(2048),
             chunk_size: Some(0),
+            thread_count: None,
+            speed_first: false,
         },
         PreviewOptions {
             memory_limit_mb: Some(2048),
             chunk_size: Some(48),
+            thread_count: None,
+            speed_first: false,
         },
         PreviewOptions {
             memory_limit_mb: Some(2048),
             chunk_size: Some(512),
+            thread_count: None,
+            speed_first: false,
+        },
+        PreviewOptions {
+            thread_count: Some(1),
+            ..PreviewOptions::default()
+        },
+        PreviewOptions {
+            thread_count: Some(litematica_preview_native::max_worker_threads() + 1),
+            ..PreviewOptions::default()
+        },
+        PreviewOptions {
+            chunk_size: None,
+            thread_count: Some(2),
+            ..PreviewOptions::default()
+        },
+        PreviewOptions {
+            speed_first: true,
+            ..PreviewOptions::default()
+        },
+        PreviewOptions {
+            thread_count: Some(2),
+            speed_first: true,
+            memory_limit_mb: Some(2048),
+            ..PreviewOptions::default()
+        },
+        PreviewOptions {
+            chunk_size: None,
+            thread_count: Some(2),
+            speed_first: true,
+            ..PreviewOptions::default()
         },
     ] {
         let expected = options.validate().unwrap_err();
@@ -429,6 +470,8 @@ fn invalid_options_fail_before_decoding_or_consuming_input() {
         PreviewOptions {
             memory_limit_mb: Some(limit),
             chunk_size: None,
+            thread_count: None,
+            speed_first: false,
         }
         .validate()
         .unwrap();
@@ -436,6 +479,8 @@ fn invalid_options_fail_before_decoding_or_consuming_input() {
     PreviewOptions {
         memory_limit_mb: None,
         chunk_size: None,
+        thread_count: None,
+        speed_first: false,
     }
     .validate()
     .unwrap();

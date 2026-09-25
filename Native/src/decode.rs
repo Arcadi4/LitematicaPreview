@@ -99,26 +99,47 @@ pub fn decode(bytes: &[u8]) -> Result<UniversalSchematic, DecodeFailure> {
 pub(crate) fn decode_preview(
     bytes: &[u8],
     chunk_size: Option<i32>,
+    thread_count: Option<u8>,
+    speed_first: bool,
     current: &impl Fn() -> Result<(), String>,
 ) -> Result<CompactBlocks, String> {
     let limits = preview_limits();
     limits
         .check_input(bytes)
         .map_err(|error| error.to_string())?;
-    if let Some(source) = litematic::read_compact(bytes, &limits, chunk_size, current)? {
+    if let Some(source) = litematic::read_compact(
+        bytes,
+        &limits,
+        chunk_size,
+        thread_count,
+        speed_first,
+        current,
+    )? {
         return Ok(source);
     }
     current()?;
     let result = read_other_bounded(bytes, &limits);
     current()?;
     if let Ok(schematic) = result {
-        return CompactBlocks::from_schematic(schematic, chunk_size);
+        return CompactBlocks::from_schematic(
+            schematic,
+            chunk_size,
+            thread_count,
+            speed_first,
+            current,
+        );
     }
     if let Some(normalized) = normalize_structure_snbt(bytes) {
         let result = read_other_bounded(&normalized, &limits);
         current()?;
         if let Ok(schematic) = result {
-            return CompactBlocks::from_schematic(schematic, chunk_size);
+            return CompactBlocks::from_schematic(
+                schematic,
+                chunk_size,
+                thread_count,
+                speed_first,
+                current,
+            );
         }
     }
     let result = structure_nbt::try_load(bytes, &limits);
@@ -127,7 +148,13 @@ pub(crate) fn decode_preview(
         let schematic = result.map_err(|error| match error {
             DecodeFailure::Format(message) | DecodeFailure::Limit(message) => message,
         })?;
-        return CompactBlocks::from_schematic(schematic, chunk_size);
+        return CompactBlocks::from_schematic(
+            schematic,
+            chunk_size,
+            thread_count,
+            speed_first,
+            current,
+        );
     }
     Err("This file is not a readable Minecraft schematic, or its data exceeds supported representation or nesting bounds.".into())
 }
@@ -206,7 +233,7 @@ mod tests {
         let mut samples = Vec::new();
         for iteration in 0..6 {
             let start = std::time::Instant::now();
-            let source = decode_preview(&bytes, Some(64), &|| Ok(())).unwrap();
+            let source = decode_preview(&bytes, Some(64), None, false, &|| Ok(())).unwrap();
             let seconds = start.elapsed().as_secs_f64();
             println!("compact_decode iteration={iteration} seconds={seconds:.6} blocks={} block_entities={}", source.block_count(), source.block_entity_count());
             if iteration != 0 {

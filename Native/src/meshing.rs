@@ -187,6 +187,9 @@ impl CompactBlocks {
     pub(crate) fn from_schematic(
         schematic: UniversalSchematic,
         chunk_size: Option<i32>,
+        thread_count: Option<u8>,
+        speed_first: bool,
+        current: &impl Fn() -> Result<(), String>,
     ) -> Result<Self, String> {
         let mut builder = CompactBlocksBuilder::new(chunk_size)?;
         let UniversalSchematic {
@@ -197,6 +200,7 @@ impl CompactBlocks {
         let mut regions: Vec<_> = other_regions.into_iter().collect();
         regions.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
         for region in std::iter::once(default_region).chain(regions.into_iter().map(|(_, r)| r)) {
+            current()?;
             builder.block_count = builder
                 .block_count
                 .checked_add(
@@ -204,13 +208,52 @@ impl CompactBlocks {
                 )
                 .ok_or("Block count exceeds i64.")?;
             let remap = builder.register_palette(&region.get_palette())?;
-            for (index, &state) in region.blocks.iter().enumerate() {
-                let entry = remap
-                    .get(state)
-                    .ok_or("The schematic contains an invalid palette index.")?;
-                if let Some(state) = entry.index {
-                    let (x, y, z) = region.index_to_coords(index);
-                    builder.push_index(BlockPosition::new(x, y, z), state)?;
+            if let Some(count) = thread_count {
+                let jobs = region
+                    .blocks
+                    .chunks(crate::parallel::BATCH_BLOCKS)
+                    .enumerate()
+                    .map(|(batch, blocks)| Ok((batch * crate::parallel::BATCH_BLOCKS, blocks)));
+                crate::parallel::ordered(
+                    jobs,
+                    usize::from(count),
+                    speed_first,
+                    |(start, blocks), cancelled| {
+                        let mut converted = Vec::new();
+                        converted
+                            .try_reserve_exact(blocks.len())
+                            .map_err(|e| e.to_string())?;
+                        for (offset, &state) in blocks.iter().enumerate() {
+                            if offset % 1024 == 0 {
+                                crate::parallel::check_cancelled(cancelled)?;
+                            }
+                            let entry = remap
+                                .get(state)
+                                .ok_or("The schematic contains an invalid palette index.")?;
+                            if let Some(state) = entry.index {
+                                let (x, y, z) = region.index_to_coords(start + offset);
+                                converted.push((BlockPosition::new(x, y, z), state));
+                            }
+                        }
+                        Ok(converted)
+                    },
+                    |converted| {
+                        for (position, state) in converted {
+                            builder.push_index(position, state)?;
+                        }
+                        Ok(())
+                    },
+                    current,
+                )?;
+            } else {
+                for (index, &state) in region.blocks.iter().enumerate() {
+                    let entry = remap
+                        .get(state)
+                        .ok_or("The schematic contains an invalid palette index.")?;
+                    if let Some(state) = entry.index {
+                        let (x, y, z) = region.index_to_coords(index);
+                        builder.push_index(BlockPosition::new(x, y, z), state)?;
+                    }
                 }
             }
             for entity in &region.entities {
@@ -363,7 +406,7 @@ impl<'a> ChunkMeshes<'a> {
         chunk_size: Option<i32>,
         current: impl Fn() -> Result<(), String>,
     ) -> Result<Self, String> {
-        let source = CompactBlocks::from_schematic(schematic, chunk_size)?;
+        let source = CompactBlocks::from_schematic(schematic, chunk_size, None, false, &current)?;
         Self::from_source(source, pack, config, chunk_size, current)
     }
 
@@ -393,14 +436,70 @@ impl<'a> ChunkMeshes<'a> {
             atlas_only,
         })
     }
-}
 
-impl Iterator for ChunkMeshes<'_> {
-    type Item = Result<MeshOutput, String>;
+    /// Memory-first windows share a 128K-entry context-allocation budget; speed
+    /// mode uses the requested workers and refills consumed slots immediately.
+    /// Both modes retain at most N outputs, including the one being consumed.
+    /// Models have no fixed output-byte bound. Source, atlas and pack are
+    /// borrowed, never copied.
+    pub(super) fn consume(
+        &mut self,
+        thread_count: Option<u8>,
+        speed_first: bool,
+        mut consume: impl FnMut(MeshOutput) -> Result<(), String>,
+        current: &impl Fn() -> Result<(), String>,
+    ) -> Result<(), String> {
+        let Some(count) = thread_count else {
+            loop {
+                current()?;
+                let Some(mesh) = self.next() else {
+                    return Ok(());
+                };
+                let mesh = mesh.map_err(|error| {
+                    format!("This schematic is too detailed to preview: {error}")
+                })?;
+                consume(mesh)?;
+            }
+        };
+        let admission = self.worker_admission(count, speed_first);
+        crate::parallel::ordered(
+            (self.index..self.source.chunks.len()).map(Ok),
+            admission,
+            speed_first,
+            |index, cancelled| {
+                crate::parallel::check_cancelled(cancelled)?;
+                let mesh = self.mesh_at(index).map_err(|error| {
+                    format!("This schematic is too detailed to preview: {error}")
+                })?;
+                crate::parallel::check_cancelled(cancelled)?;
+                Ok(mesh)
+            },
+            consume,
+            current,
+        )?;
+        self.index = self.source.chunks.len();
+        Ok(())
+    }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        let (coord, blocks) = self.source.chunks.get(self.index)?;
-        self.index += 1;
+    fn worker_admission(&self, count: u8, speed_first: bool) -> usize {
+        if speed_first {
+            return usize::from(count);
+        }
+        let max_chunk = self
+            .source
+            .chunks
+            .iter()
+            .map(|(_, blocks)| blocks.len())
+            .max()
+            .unwrap_or(0);
+        // Largest core times 27 neighbors times two for Vec growth; an
+        // oversize chunk runs alone in memory-first mode.
+        let context_bound = max_chunk.saturating_mul(54).max(1);
+        usize::from(count).min((128 * 1024 / context_bound).max(1))
+    }
+
+    fn mesh_at(&self, index: usize) -> Result<MeshOutput, String> {
+        let (coord, blocks) = &self.source.chunks[index];
         let bounds = if let Some(size) = self.chunk_size {
             let (min, max) = chunk_bounds(*coord, size);
             BoundingBox::new(min.map(|value| value as f32), max.map(|value| value as f32))
@@ -412,25 +511,32 @@ impl Iterator for ChunkMeshes<'_> {
             )
             .expect("Only occupied groups are retained")
         };
-        // Context and output both borrow the palette. No full InputBlock map or
-        // geometry is retained after this one chunk has been consumed.
         let context = self.source.context(*coord, self.chunk_size);
-        Some(
-            builder::mesh(
-                self.pack,
-                &self.config,
-                &self.atlas,
-                &self.source.palette,
-                &self.atlas_only,
-                blocks,
-                &context,
-                bounds,
-            )
-            .map(|mut mesh| {
-                mesh.chunk_coord = self.chunk_size.map(|_| *coord);
-                mesh
-            }),
-        )
+        let mut mesh = builder::mesh(
+            self.pack,
+            &self.config,
+            &self.atlas,
+            &self.source.palette,
+            &self.atlas_only,
+            blocks,
+            &context,
+            bounds,
+        )?;
+        mesh.chunk_coord = self.chunk_size.map(|_| *coord);
+        Ok(mesh)
+    }
+}
+
+impl Iterator for ChunkMeshes<'_> {
+    type Item = Result<MeshOutput, String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index == self.source.chunks.len() {
+            return None;
+        }
+        let result = self.mesh_at(self.index);
+        self.index += 1;
+        Some(result)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

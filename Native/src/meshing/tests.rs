@@ -258,7 +258,9 @@ fn halo_handles_negative_division_and_extreme_coordinate_boundaries() {
         schematic.other_regions.insert(name, region);
     }
     for size in [1, 64] {
-        let source = CompactBlocks::from_schematic(schematic.clone(), Some(size)).unwrap();
+        let source =
+            CompactBlocks::from_schematic(schematic.clone(), Some(size), None, false, &|| Ok(()))
+                .unwrap();
         for &(coord, _) in &source.chunks {
             let (min, max) = chunk_bounds(coord, size);
             let mut expected: Vec<_> = positions
@@ -545,4 +547,88 @@ fn unseparated_dense_culler_rejects_unrepresentable_sparse_bounds_before_allocat
             .unwrap();
         assert!(error.starts_with("Culling"), "{error}");
     }
+}
+
+#[test]
+fn parallel_dense_conversion_preserves_coordinates_and_palette_order_across_windows() {
+    let schematic = schematic(&[
+        (-20_000, -1, -2, "minecraft:stone"),
+        (0, -1, -2, "minecraft:glass"),
+        (20_000, -1, -2, "minecraft:torch"),
+    ]);
+    let serial =
+        CompactBlocks::from_schematic(schematic.clone(), Some(16), None, false, &|| Ok(()))
+            .unwrap();
+    let signature = |source: &CompactBlocks| {
+        source
+            .chunks
+            .iter()
+            .map(|(coord, blocks)| {
+                (
+                    *coord,
+                    blocks
+                        .iter()
+                        .map(|(pos, state)| {
+                            (
+                                pos.x,
+                                pos.y,
+                                pos.z,
+                                source.palette[*state as usize].name.clone(),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    for speed_first in [false, true] {
+        let parallel = CompactBlocks::from_schematic(
+            schematic.clone(),
+            Some(16),
+            Some(2),
+            speed_first,
+            &|| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(serial.block_count(), parallel.block_count());
+        assert_eq!(signature(&serial), signature(&parallel));
+    }
+}
+
+#[test]
+fn speed_first_admits_requested_mesh_workers_despite_large_contexts() {
+    let pack = test_pack();
+    let config = MeshConfig::new().with_greedy_meshing(true);
+    let mut model = UniversalSchematic::new("dense chunks".into());
+    let stone = BlockState::new("minecraft:stone");
+    for x in 0..64 {
+        for y in 0..16 {
+            for z in 0..16 {
+                model.set_block(x, y, z, &stone);
+            }
+        }
+    }
+    let mut meshes = ChunkMeshes::new(model, &pack, &config, Some(16), || Ok(())).unwrap();
+    // Each full chunk exceeds the memory-first context admission budget.
+    assert_eq!(meshes.worker_admission(4, false), 1);
+    assert_eq!(meshes.worker_admission(4, true), 4);
+    let expected: Vec<_> = (0..meshes.source.chunk_count())
+        .map(|index| {
+            let mesh = meshes.mesh_at(index).unwrap();
+            (mesh.chunk_coord, triangles(&mesh))
+        })
+        .collect();
+    let mut actual = Vec::new();
+    meshes
+        .consume(
+            Some(4),
+            true,
+            |mesh| {
+                actual.push((mesh.chunk_coord, triangles(&mesh)));
+                Ok(())
+            },
+            &|| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(actual, expected);
 }

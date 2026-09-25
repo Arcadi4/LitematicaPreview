@@ -49,9 +49,11 @@ pub(super) fn read_compact(
     data: &[u8],
     limits: &DecodeLimits,
     chunk_size: Option<i32>,
+    thread_count: Option<u8>,
+    speed_first: bool,
     current: &impl Fn() -> Result<(), String>,
 ) -> Result<Option<CompactBlocks>, String> {
-    stream::read(data, limits, chunk_size, current)
+    stream::read(data, limits, chunk_size, thread_count, speed_first, current)
 }
 
 fn prepare_regions(
@@ -476,12 +478,17 @@ mod tests {
         root.insert("Palette", palette);
         root.insert("BlockData", NbtTag::ByteArray(vec![0]));
         let bytes = gzip(&root);
-        assert!(
-            read_compact(&bytes, &super::super::preview_limits(), None, &|| Ok(()))
-                .unwrap()
-                .is_none()
-        );
-        let compact = super::super::decode_preview(&bytes, None, &|| Ok(())).unwrap();
+        assert!(read_compact(
+            &bytes,
+            &super::super::preview_limits(),
+            None,
+            None,
+            false,
+            &|| Ok(())
+        )
+        .unwrap()
+        .is_none());
+        let compact = super::super::decode_preview(&bytes, None, None, false, &|| Ok(())).unwrap();
         assert_eq!(compact.block_count(), 1);
     }
 
@@ -516,7 +523,8 @@ mod tests {
         );
         let bytes = gzip(&root);
         let dense = read(&bytes, &super::super::preview_limits()).unwrap();
-        let compact = super::super::decode_preview(&bytes, Some(16), &|| Ok(())).unwrap();
+        let compact =
+            super::super::decode_preview(&bytes, Some(16), None, false, &|| Ok(())).unwrap();
         assert_eq!(compact.block_count(), 26);
         assert_eq!(compact.block_count(), i64::from(dense.total_blocks()));
         assert_eq!(compact.block_entity_count(), 2);
@@ -531,10 +539,17 @@ mod tests {
         let palette = [BlockState::new("minecraft:air")];
         let root = root_with_indices(&palette, &[0, 0, 1]);
         let bytes = gzip(&root);
-        let error = read_compact(&bytes, &super::super::preview_limits(), None, &|| Ok(()))
-            .err()
-            .expect("out-of-range packed index must be rejected");
-        let preview_error = super::super::decode_preview(&bytes, None, &|| Ok(()))
+        let error = read_compact(
+            &bytes,
+            &super::super::preview_limits(),
+            None,
+            None,
+            false,
+            &|| Ok(()),
+        )
+        .err()
+        .expect("out-of-range packed index must be rejected");
+        let preview_error = super::super::decode_preview(&bytes, None, None, false, &|| Ok(()))
             .err()
             .unwrap();
         assert_eq!(preview_error, error);
@@ -544,6 +559,8 @@ mod tests {
             &gzip(&missing_metadata),
             &super::super::preview_limits(),
             None,
+            None,
+            false,
             &|| Ok(())
         )
         .is_err());
@@ -551,6 +568,8 @@ mod tests {
             &gzip(&NbtCompound::new()),
             &super::super::preview_limits(),
             None,
+            None,
+            false,
             &|| Ok(())
         )
         .unwrap()
@@ -580,9 +599,10 @@ mod tests {
         );
         assert_eq!(result, Err("cancelled".into()));
         assert_eq!(visited.get(), 65_536);
-        let result = super::super::decode_preview(&gzip(&NbtCompound::new()), None, &|| {
-            Err("cancelled".into())
-        });
+        let result =
+            super::super::decode_preview(&gzip(&NbtCompound::new()), None, None, false, &|| {
+                Err("cancelled".into())
+            });
         assert_eq!(result.err().as_deref(), Some("cancelled"));
     }
 

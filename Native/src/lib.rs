@@ -5,12 +5,15 @@ use schematic_mesher::BoundingBox;
 
 mod decode;
 mod meshing;
+mod parallel;
 pub use decode::{decode, DecodeFailure};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PreviewOptions {
     pub memory_limit_mb: Option<u16>,
     pub chunk_size: Option<u16>,
+    pub thread_count: Option<u8>,
+    pub speed_first: bool,
 }
 
 impl Default for PreviewOptions {
@@ -18,6 +21,8 @@ impl Default for PreviewOptions {
         Self {
             memory_limit_mb: None,
             chunk_size: Some(64),
+            thread_count: None,
+            speed_first: false,
         }
     }
 }
@@ -36,8 +41,32 @@ impl PreviewOptions {
         {
             return Err("The chunk size must be 16, 32, 64, 128 or 256 blocks.".into());
         }
+        let max = max_worker_threads();
+        if let Some(count) = self.thread_count {
+            if self.chunk_size.is_none() {
+                return Err("Parallel preview requires chunking to be enabled.".into());
+            }
+            if !(2..=max).contains(&count) {
+                return Err(format!("The worker thread count must be from 2 to {max}."));
+            }
+        }
+        if self.speed_first {
+            if self.thread_count.is_none() {
+                return Err("Speed-first preview requires multithreading to be enabled.".into());
+            }
+            if self.memory_limit_mb.is_some() {
+                return Err(
+                    "Speed-first preview requires the decoder memory limit to be disabled.".into(),
+                );
+            }
+        }
         Ok(())
     }
+}
+
+/// Maximum supported worker count for opt-in parallel preparation and meshing.
+pub fn max_worker_threads() -> u8 {
+    std::thread::available_parallelism().map_or(1, |count| count.get().min(8)) as u8
 }
 
 pub struct Preview {
@@ -107,7 +136,13 @@ pub fn load_chunks(
         return Err("Choose a nonempty schematic.".into());
     }
     let chunk_size = options.chunk_size.map(i32::from);
-    let source = decode::decode_preview(data, chunk_size, &current)?;
+    let source = decode::decode_preview(
+        data,
+        chunk_size,
+        options.thread_count,
+        options.speed_first,
+        &current,
+    )?;
     current()?;
     let block_count = source.block_count();
     let block_entity_count = source.block_entity_count();
@@ -131,42 +166,42 @@ pub fn load_chunks(
         ..PreviewInfo::default()
     };
     let mut completed = 0;
-    loop {
-        current()?;
-        let Some(mesh) = chunks.next() else {
-            break;
-        };
-        let mesh = mesh.map_err(|e| format!("This schematic is too detailed to preview: {e}"))?;
-        completed += 1;
-        if parts(&mesh).next().is_none() {
+    chunks.consume(
+        options.thread_count,
+        options.speed_first,
+        |mesh| {
+            completed += 1;
+            if parts(&mesh).next().is_none() {
+                if completed < total {
+                    on_progress(completed, total)?;
+                }
+                return Ok(());
+            }
+            let preview = prepare(mesh, block_count, block_entity_count)?;
+            info.triangle_count = info
+                .triangle_count
+                .checked_add(preview.info.triangle_count)
+                .ok_or("The schematic has too many triangles.")?;
+            info.part_count = info
+                .part_count
+                .checked_add(preview.info.part_count)
+                .ok_or("The schematic has too many mesh parts.")?;
+            info.texture_count = info
+                .texture_count
+                .checked_add(preview.info.texture_count - 1)
+                .ok_or("The schematic has too many textures.")?;
+            for axis in 0..3 {
+                info.min[axis] = info.min[axis].min(preview.info.min[axis]);
+                info.max[axis] = info.max[axis].max(preview.info.max[axis]);
+            }
+            consume(preview)?;
             if completed < total {
                 on_progress(completed, total)?;
             }
-            continue;
-        }
-        let preview = prepare(mesh, block_count, block_entity_count)?;
-        info.triangle_count = info
-            .triangle_count
-            .checked_add(preview.info.triangle_count)
-            .ok_or("The schematic has too many triangles.")?;
-        info.part_count = info
-            .part_count
-            .checked_add(preview.info.part_count)
-            .ok_or("The schematic has too many mesh parts.")?;
-        info.texture_count = info
-            .texture_count
-            .checked_add(preview.info.texture_count - 1)
-            .ok_or("The schematic has too many textures.")?;
-        for axis in 0..3 {
-            info.min[axis] = info.min[axis].min(preview.info.min[axis]);
-            info.max[axis] = info.max[axis].max(preview.info.max[axis]);
-        }
-        consume(preview)?;
-        if completed < total {
-            on_progress(completed, total)?;
-        }
-        current()?;
-    }
+            current()
+        },
+        &current,
+    )?;
     if info.part_count == 0 {
         return Err("The schematic contains no visible geometry.".into());
     }

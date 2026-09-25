@@ -577,3 +577,161 @@ fn cancellation_interrupts_early_and_late_scans_without_delivering_partial_geome
         }
     }
 }
+
+fn threaded_preview(
+    bytes: &[u8],
+    pack: &ResourcePackSource,
+    thread_count: Option<u8>,
+    speed_first: bool,
+) -> (PreviewInfo, Vec<(Option<(i32, i32, i32)>, Vec<Triangle>)>) {
+    let mut chunks = Vec::new();
+    let info = load_chunks(
+        bytes,
+        pack,
+        PreviewOptions {
+            chunk_size: Some(16),
+            thread_count,
+            speed_first,
+            ..PreviewOptions::default()
+        },
+        |preview| {
+            chunks.push((preview.mesh.chunk_coord, triangles(&preview.mesh)));
+            Ok(())
+        },
+        |_, _| Ok(()),
+        || Ok(()),
+    )
+    .unwrap();
+    (info, chunks)
+}
+
+#[test]
+fn parallel_preview_matches_serial_for_all_formats_and_keeps_chunk_order() {
+    if litematica_preview_native::max_worker_threads() < 2 {
+        return;
+    }
+    let fixture_root =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../Fixtures/Formats");
+    let pack = fixtures::test_pack();
+    let mut inputs = [
+        "Classic.schematic",
+        "Sponge.schem",
+        "Bedrock.mcstructure",
+        "Snapshot.nusn",
+        "Structure.nbt",
+        "Structure.snbt",
+    ]
+    .into_iter()
+    .map(|name| std::fs::read(fixture_root.join(name)).unwrap())
+    .collect::<Vec<_>>();
+    // Cross block-word, batch and worker-window boundaries with negative extents.
+    let mut palette = vec!["minecraft:air"; 512];
+    palette[1] = "minecraft:stone";
+    palette[511] = "minecraft:glass";
+    inputs.push(encoded(&root(vec![(
+        "packed",
+        region(
+            [-70_000, 1, 1],
+            [35_000, 0, 0],
+            &palette,
+            &[
+                (7, 511),
+                (16_383, 1),
+                (16_384, 511),
+                (32_768, 1),
+                (69_999, 511),
+            ],
+        ),
+    )])));
+    inputs.push(encoded(&overlap_root(&["default", "Z", "M", "A"])));
+    for bytes in inputs {
+        let serial = threaded_preview(&bytes, &pack, None, false);
+        for speed_first in [false, true] {
+            let parallel = threaded_preview(&bytes, &pack, Some(2), speed_first);
+            assert_eq!(parallel.1, serial.1);
+            assert_eq!(parallel.0.block_count, serial.0.block_count);
+            assert_eq!(parallel.0.block_entity_count, serial.0.block_entity_count);
+            assert_eq!(parallel.0.triangle_count, serial.0.triangle_count);
+            assert_eq!(parallel.0.min, serial.0.min);
+            assert_eq!(parallel.0.max, serial.0.max);
+        }
+    }
+}
+
+#[test]
+fn parallel_preview_rejects_invalid_packed_states_and_gzip_crc_before_publish() {
+    if litematica_preview_native::max_worker_threads() < 2 {
+        return;
+    }
+    let pack = fixtures::test_pack();
+    let invalid = encoded(&root(vec![(
+        "invalid",
+        region(
+            [70_000, 1, 1],
+            [0, 0, 0],
+            &["minecraft:air", "minecraft:stone"],
+            &[(0, 1), (40_000, 3)],
+        ),
+    )]));
+    let mut crc = encoded(&single_block());
+    let checksum = crc.len() - 8;
+    crc[checksum] ^= 1;
+    for bytes in [invalid, crc] {
+        for speed_first in [false, true] {
+            let result = load_chunks(
+                &bytes,
+                &pack,
+                PreviewOptions {
+                    thread_count: Some(2),
+                    speed_first,
+                    ..PreviewOptions::default()
+                },
+                |_| panic!("malformed input must not publish geometry"),
+                |_, _| Ok(()),
+                || Ok(()),
+            );
+            assert!(result.is_err());
+        }
+    }
+}
+
+#[test]
+fn parallel_cancel_after_first_chunk_never_publishes_stale_work() {
+    if litematica_preview_native::max_worker_threads() < 2 {
+        return;
+    }
+    let pack = fixtures::test_pack();
+    let model = fixtures::schematic(&[
+        (0, 0, 0, "minecraft:stone"),
+        (64, 0, 0, "minecraft:stone"),
+        (128, 0, 0, "minecraft:stone"),
+        (192, 0, 0, "minecraft:stone"),
+    ]);
+    let bytes = nucleation::formats::litematic::to_litematic(&model).unwrap();
+    for speed_first in [false, true] {
+        let consumed = Cell::new(0);
+        let result = load_chunks(
+            &bytes,
+            &pack,
+            PreviewOptions {
+                thread_count: Some(2),
+                speed_first,
+                ..PreviewOptions::default()
+            },
+            |_| {
+                consumed.set(consumed.get() + 1);
+                Ok(())
+            },
+            |_, _| Ok(()),
+            || {
+                if consumed.get() > 0 {
+                    Err("cancelled by caller".into())
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert_eq!(result.err().as_deref(), Some("cancelled by caller"));
+        assert_eq!(consumed.get(), 1);
+    }
+}

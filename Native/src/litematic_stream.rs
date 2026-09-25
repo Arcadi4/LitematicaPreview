@@ -624,6 +624,8 @@ pub(super) fn read(
     data: &[u8],
     limits: &DecodeLimits,
     chunk_size: Option<i32>,
+    thread_count: Option<u8>,
+    speed_first: bool,
     current: &impl Fn() -> Result<(), String>,
 ) -> Result<Option<CompactBlocks>, String> {
     current()?;
@@ -660,7 +662,18 @@ pub(super) fn read(
                 .checked_sub(input.offset)
                 .ok_or("overlapping packed spans")?,
         )?;
-        visit(&mut input, &region, &mut builder, current)?;
+        if let Some(count) = thread_count {
+            visit_parallel(
+                &mut input,
+                &region,
+                &mut builder,
+                usize::from(count),
+                speed_first,
+                current,
+            )?;
+        } else {
+            visit(&mut input, &region, &mut builder, current)?;
+        }
     }
     input.finish()?;
     current()?;
@@ -816,4 +829,77 @@ fn visit<F: Fn() -> Result<(), String>>(
         builder.push_block(position, &region.mapping[palette_index])?;
     }
     Ok(())
+}
+
+fn visit_parallel<F: Fn() -> Result<(), String>>(
+    input: &mut Input<'_, F>,
+    region: &PreparedRegion,
+    builder: &mut CompactBlocksBuilder,
+    workers: usize,
+    speed_first: bool,
+    current: &F,
+) -> Result<(), String> {
+    // Batches begin on a 64-bit boundary (BATCH_BLOCKS is divisible by 64).
+    // Only the last batch may end inside a word; every packed word is read once.
+    let jobs = (0..region.volume)
+        .step_by(crate::parallel::BATCH_BLOCKS)
+        .map(|start| {
+            let count = (region.volume - start).min(crate::parallel::BATCH_BLOCKS);
+            let word_count = (count * region.bits as usize).div_ceil(64);
+            let mut words = Vec::new();
+            words
+                .try_reserve_exact(word_count)
+                .map_err(|e| e.to_string())?;
+            for _ in 0..word_count {
+                words.push(u64::from_be_bytes(input.number()?));
+            }
+            Ok((start, count, words))
+        });
+    crate::parallel::ordered(
+        jobs,
+        workers,
+        speed_first,
+        |(start, count, words), cancelled| {
+            let mask = 1u64.checked_shl(region.bits).unwrap_or(0).wrapping_sub(1);
+            let mut blocks = Vec::new();
+            blocks.try_reserve_exact(count).map_err(|e| e.to_string())?;
+            for offset in 0..count {
+                if offset % 1024 == 0 {
+                    crate::parallel::check_cancelled(cancelled)?;
+                }
+                let bit = offset * region.bits as usize;
+                let word = bit / 64;
+                let shift = bit % 64;
+                let mut value = words[word] >> shift;
+                if shift + region.bits as usize > 64 {
+                    value |= words[word + 1] << (64 - shift);
+                }
+                let palette_index = (value & mask) as usize;
+                let state = region
+                    .palette
+                    .get(palette_index)
+                    .ok_or("packed block palette index out of range")?;
+                if state.name == "minecraft:air" && state.properties.is_empty() {
+                    continue;
+                }
+                let index = start + offset;
+                let position = BlockPosition::new(
+                    region.min.0 + (index % region.width) as i32,
+                    region.min.1 + (index / region.plane) as i32,
+                    region.min.2 + ((index / region.width) % region.length) as i32,
+                );
+                let palette_index = u32::try_from(palette_index)
+                    .map_err(|_| "packed block palette index exceeds u32")?;
+                blocks.push((position, palette_index));
+            }
+            Ok(blocks)
+        },
+        |blocks| {
+            for (position, palette_index) in blocks {
+                builder.push_block(position, &region.mapping[palette_index as usize])?;
+            }
+            Ok(())
+        },
+        current,
+    )
 }

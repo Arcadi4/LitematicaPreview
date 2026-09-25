@@ -12,12 +12,15 @@ test("saved scheduling preference retains its actual behavior across the inverte
     setItem: (name, value) => saved.set(name, value),
   }
   try {
-    assert.equal(savedPreviewSettings().conservativeMemoryScheduling, true)
+    assert.equal(savedPreviewSettings().conservativeMemoryScheduling, false)
     assert.equal(savedPreviewSettings().multithreadingEnabled, true)
     assert.equal(savedPreviewSettings().threadCount, 4)
     saved.set(key, JSON.stringify({ multithreadingEnabled: false, threadCount: 2 }))
     assert.equal(savedPreviewSettings().multithreadingEnabled, false)
     assert.equal(savedPreviewSettings().threadCount, 2)
+    saved.delete(key)
+    saved.set(key, JSON.stringify({ multithreadingEnabled: true, threadCount: 4 }))
+    assert.equal(savedPreviewSettings().conservativeMemoryScheduling, false)
     saved.delete(key)
     for (const [oldValue, conservative] of [
       [false, true],

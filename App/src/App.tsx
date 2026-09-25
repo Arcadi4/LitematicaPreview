@@ -102,7 +102,7 @@ const defaultPreviewSettings: PreviewSettings = {
   chunkSize: 64,
   multithreadingEnabled: true,
   threadCount: 4,
-  conservativeMemoryScheduling: true,
+  conservativeMemoryScheduling: false,
 }
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -161,7 +161,9 @@ export function savedPreviewSettings(): PreviewSettings {
       conservativeMemoryScheduling:
         typeof settings.conservativeMemoryScheduling === "boolean"
           ? settings.conservativeMemoryScheduling
-          : settings.speedFirst !== true,
+          : typeof settings.speedFirst === "boolean"
+            ? !settings.speedFirst
+            : defaultPreviewSettings.conservativeMemoryScheduling,
     }
   } catch {
     return defaultPreviewSettings
@@ -1319,10 +1321,10 @@ export default function App({ initialError }: { initialError?: string }) {
                       id="conservative-memory-description"
                       className="m-0 text-sm leading-relaxed text-muted"
                     >
-                      Enabled by default. Reduces concurrent mesh work and the number of queued
-                      batches and upload pages. This may reduce decoding speed. Turning it off uses
-                      the selected worker count more aggressively and may use more memory. A
-                      separate decoder memory limit remains effective in either mode.
+                      Disabled by default. Enable it to reduce concurrent mesh work and the number
+                      of queued batches and upload pages; this may reduce decoding speed. Leaving it
+                      disabled uses the selected worker count more aggressively and may use more
+                      memory. A separate decoder memory limit remains effective in either mode.
                     </p>
                     <p
                       id="thread-count-description"

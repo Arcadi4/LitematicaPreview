@@ -203,7 +203,7 @@ FunctionEnd
   Call LPApplyPostInstall
 !macroend
 
-Function LPCleanupAssociationsBeforeUninstall
+Function un.LPCleanupAssociationsBeforeUninstall
   Push $0
   ClearErrors
   ExecWait '"$INSTDIR\LitematicaPreview.exe" --unregister' $0
@@ -222,5 +222,5 @@ FunctionEnd
   ; This hook runs before the built-in running-app check.
   ; Check before any registry mutation so a canceled removal leaves the installation untouched.
   !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
-  Call LPCleanupAssociationsBeforeUninstall
+  Call un.LPCleanupAssociationsBeforeUninstall
 !macroend

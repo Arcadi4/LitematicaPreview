@@ -100,8 +100,8 @@ const defaultPreviewSettings: PreviewSettings = {
   memoryLimitMB: 2048,
   chunkingEnabled: true,
   chunkSize: 64,
-  multithreadingEnabled: false,
-  threadCount: 2,
+  multithreadingEnabled: true,
+  threadCount: 4,
   conservativeMemoryScheduling: true,
 }
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path

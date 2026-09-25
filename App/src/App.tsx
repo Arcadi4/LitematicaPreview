@@ -54,7 +54,8 @@ import { invoke } from "@tauri-apps/api/core"
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import icon from "../../Assets/app-ui.png"
-import { SchematicRenderer, type PreviewMetadata } from "./renderer"
+import { SchematicRenderer, type PreviewMetadata, type PreviewStreamEvent } from "./renderer"
+import type { PreviewReadRange } from "./upload-layout"
 
 type Bootstrap = {
   extensions: string[]
@@ -62,6 +63,7 @@ type Bootstrap = {
   initialPath: string | null
   version: string
   requestId: number
+  maxWorkerThreads: number
 }
 type ThemePreference = "system" | "light" | "dark"
 type PreviewSettings = {
@@ -69,13 +71,17 @@ type PreviewSettings = {
   memoryLimitMB: number
   chunkingEnabled: boolean
   chunkSize: number
+  multithreadingEnabled: boolean
+  threadCount: number
+  speedFirst: boolean
 }
 type Loading = {
   path: string
   requestId: number
-  phase: "decode" | "mesh" | "upload"
+  phase: "decode" | "mesh" | "upload" | "stream"
   completed: number
   total: number
+  uploadedBytes: number
 }
 type MeshProgress = { requestId: number; phase: "mesh"; completed: number; total: number }
 type Loaded = { path: string; metadata: PreviewMetadata; seconds: number }
@@ -94,6 +100,9 @@ const defaultPreviewSettings: PreviewSettings = {
   memoryLimitMB: 2048,
   chunkingEnabled: true,
   chunkSize: 64,
+  multithreadingEnabled: false,
+  threadCount: 2,
+  speedFirst: false,
 }
 const fileName = (path: string) => path.split(/[\\/]/).pop() || path
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -140,6 +149,16 @@ function savedPreviewSettings(): PreviewSettings {
         typeof settings.chunkSize === "number" && chunkSizes.includes(settings.chunkSize)
           ? settings.chunkSize
           : defaultPreviewSettings.chunkSize,
+      multithreadingEnabled:
+        settings.multithreadingEnabled === true && settings.chunkingEnabled !== false,
+      threadCount:
+        typeof settings.threadCount === "number" &&
+        Number.isInteger(settings.threadCount) &&
+        settings.threadCount >= 2 &&
+        settings.threadCount <= 8
+          ? settings.threadCount
+          : defaultPreviewSettings.threadCount,
+      speedFirst: settings.speedFirst === true,
     }
   } catch {
     return defaultPreviewSettings
@@ -179,11 +198,11 @@ export default function App({ initialError }: { initialError?: string }) {
   const titleQueue = useRef<Promise<void>>(Promise.resolve())
   const previewReadQueue = useRef<Promise<void>>(Promise.resolve())
 
-  const updatePreviewSettings = (patch: Partial<PreviewSettings>) => {
+  const updatePreviewSettings = useCallback((patch: Partial<PreviewSettings>) => {
     const settings = { ...previewSettingsRef.current, ...patch }
     previewSettingsRef.current = settings
     setPreviewSettings(settings)
-  }
+  }, [])
 
   const isCurrent = useCallback((id: number) => mounted.current && generation.current === id, [])
 
@@ -304,9 +323,12 @@ export default function App({ initialError }: { initialError?: string }) {
       // Read current settings without rebuilding startup and drag-and-drop subscriptions.
       // This request keeps its own snapshot even if settings change during decoding.
       const settings = previewSettingsRef.current
+      const speedFirst = settings.multithreadingEnabled && settings.speedFirst
       const options = {
-        memoryLimitMB: settings.memoryLimitEnabled ? settings.memoryLimitMB : null,
+        memoryLimitMB: settings.memoryLimitEnabled && !speedFirst ? settings.memoryLimitMB : null,
         chunkSize: settings.chunkingEnabled ? settings.chunkSize : null,
+        threadCount: settings.multithreadingEnabled ? settings.threadCount : null,
+        speedFirst,
       }
       const id = ++generation.current
       clearView()
@@ -323,7 +345,7 @@ export default function App({ initialError }: { initialError?: string }) {
         })
         return
       }
-      setLoading({ path, requestId: id, phase: "decode", completed: 0, total: 0 })
+      setLoading({ path, requestId: id, phase: "decode", completed: 0, total: 0, uploadedBytes: 0 })
       const started = performance.now()
       let unlistenProgress: (() => void) | undefined
       try {
@@ -337,26 +359,23 @@ export default function App({ initialError }: { initialError?: string }) {
           )
             return
           setLoading((previous) =>
-            previous?.requestId === id && (previous.phase === "decode" || previous.phase === "mesh")
-              ? { ...previous, phase: "mesh", completed: payload.completed, total: payload.total }
+            previous?.requestId === id && previous.phase !== "upload"
+              ? {
+                  ...previous,
+                  phase: options.threadCount === null ? "mesh" : "stream",
+                  completed: payload.completed,
+                  total: payload.total,
+                }
               : previous,
           )
         })
         if (!isCurrent(id)) return
-        // load_preview advances the native generation itself; an older IPC call can never supersede it.
-        const descriptor = await invoke<PreviewMetadata>("load_preview", {
-          path,
-          requestId: id,
-          options,
-        })
+        // Serial mode still completes native generation before allocating GPU state.
+        const descriptor =
+          options.threadCount === null
+            ? await invoke<PreviewMetadata>("load_preview", { path, requestId: id, options })
+            : null
         if (!isCurrent(id)) return
-        setLoading({
-          path,
-          requestId: id,
-          phase: "upload",
-          completed: 0,
-          total: descriptor.byteLength,
-        })
         let renderer = rendererRef.current
         if (!renderer) {
           if (!canvasRef.current) throw new Error("The preview canvas is unavailable.")
@@ -368,39 +387,82 @@ export default function App({ initialError }: { initialError?: string }) {
           rendererRef.current = renderer
           renderer.setGrid(gridRef.current)
         }
+        const readRanges = (batchId: number | null, ranges: readonly PreviewReadRange[]) => {
+          if (!isCurrent(id)) return Promise.reject(new Error("Cancelled"))
+          return invoke<ArrayBuffer>("read_preview", {
+            requestId: id,
+            batchId,
+            ranges: ranges.map(({ bufferId, offset, length }) => ({ bufferId, offset, length })),
+          })
+        }
         let lastUploadUpdate = 0
-        const metadata = await renderer.load(
-          descriptor,
-          (bufferId, offset, length) => {
-            // Keep a single read in flight even while an older load is being cancelled.
-            const read = previewReadQueue.current.then(() => {
+        let metadata: PreviewMetadata
+        if (options.threadCount !== null) {
+          // The producer starts before the first pull and runs ahead only within its bounded queue.
+          await invoke("start_preview", { path, requestId: id, options })
+          if (!isCurrent(id)) return
+          metadata = await renderer.loadStream(
+            async (previousBatchId) => {
               if (!isCurrent(id)) throw new Error("Cancelled")
-              return invoke<ArrayBuffer>("read_preview", {
+              const event = await invoke<PreviewStreamEvent>("next_preview", {
                 requestId: id,
-                bufferId,
-                offset,
-                length,
+                previousBatchId,
               })
-            })
-            previewReadQueue.current = read.then(
-              () => {},
-              () => {},
-            )
-            return read
-          },
-          () => isCurrent(id),
-          (completed, total) => {
-            if (!isCurrent(id)) return
-            const now = performance.now()
-            if (completed !== total && now - lastUploadUpdate < 150) return
-            lastUploadUpdate = now
-            setLoading((previous) =>
-              previous?.requestId === id && previous.phase === "upload"
-                ? { ...previous, completed, total }
-                : previous,
-            )
-          },
-        )
+              if (!isCurrent(id)) throw new Error("Cancelled")
+              return event
+            },
+            readRanges,
+            () => isCurrent(id),
+            (uploadedBytes) => {
+              if (!isCurrent(id)) return
+              const now = performance.now()
+              if (now - lastUploadUpdate < 150) return
+              lastUploadUpdate = now
+              setLoading((previous) =>
+                previous?.requestId === id
+                  ? { ...previous, phase: "stream", uploadedBytes }
+                  : previous,
+              )
+            },
+            options.threadCount,
+            options.speedFirst,
+          )
+        } else {
+          if (!descriptor) throw new Error("The preview metadata is unavailable.")
+          setLoading({
+            path,
+            requestId: id,
+            phase: "upload",
+            completed: 0,
+            total: descriptor.byteLength,
+            uploadedBytes: 0,
+          })
+          metadata = await renderer.load(
+            descriptor,
+            (ranges) => {
+              const read = previewReadQueue.current.then(() => readRanges(null, ranges))
+              previewReadQueue.current = read.then(
+                () => {},
+                () => {},
+              )
+              return read
+            },
+            () => isCurrent(id),
+            (completed, total) => {
+              if (!isCurrent(id)) return
+              const now = performance.now()
+              if (completed !== total && now - lastUploadUpdate < 150) return
+              lastUploadUpdate = now
+              setLoading((previous) =>
+                previous?.requestId === id && previous.phase === "upload"
+                  ? { ...previous, completed, total, uploadedBytes: completed }
+                  : previous,
+              )
+            },
+            null,
+            false,
+          )
+        }
         if (!isCurrent(id)) return
         setLoaded({
           path,
@@ -498,6 +560,14 @@ export default function App({ initialError }: { initialError?: string }) {
         generation.current = Math.max(generation.current, result.requestId)
         bootstrapRef.current = result
         setBootstrap(result)
+        const settings = previewSettingsRef.current
+        updatePreviewSettings({
+          multithreadingEnabled:
+            settings.multithreadingEnabled &&
+            settings.chunkingEnabled &&
+            result.maxWorkerThreads >= 2,
+          threadCount: Math.max(2, Math.min(settings.threadCount, result.maxWorkerThreads)),
+        })
         if (!initialPathConsumed.current) {
           initialPathConsumed.current = true
           if (result.initialPath && openInitialPath) void loadPath(result.initialPath)
@@ -562,7 +632,7 @@ export default function App({ initialError }: { initialError?: string }) {
       rendererRef.current = null
       canvas?.removeEventListener("webglcontextlost", allowContextRestore)
     }
-  }, [cancelNative, isCurrent, loadPath])
+  }, [cancelNative, isCurrent, loadPath, updatePreviewSettings])
 
   useEffect(() => {
     if (!loading) return
@@ -650,6 +720,7 @@ export default function App({ initialError }: { initialError?: string }) {
     rendererRef.current?.setGrid(visible)
   }
   const stageActive = Boolean(loaded || loading)
+  const speedFirstActive = previewSettings.multithreadingEnabled && previewSettings.speedFirst
   const size = loaded?.metadata.max
     .map((maximum, axis) => dimensions.format(maximum - loaded.metadata.min[axis]))
     .join(" × ")
@@ -959,17 +1030,31 @@ export default function App({ initialError }: { initialError?: string }) {
                 <p className="mt-0 mb-3 text-sm leading-relaxed text-muted">
                   {loading.phase === "decode"
                     ? "Reading blocks locally."
-                    : loading.phase === "mesh"
-                      ? `Generating geometry: ${numbers.format(loading.completed)} / ${numbers.format(loading.total)} chunks (${Math.round((loading.completed / loading.total) * 100)}%).`
+                    : loading.phase === "mesh" || loading.phase === "stream"
+                      ? loading.total > 0
+                        ? `Generating geometry: ${numbers.format(loading.completed)} / ${numbers.format(loading.total)} chunks (${Math.round((loading.completed / loading.total) * 100)}%).`
+                        : "Generating geometry and uploading ready batches."
                       : `Uploading geometry and textures: ${formatMB(loading.completed)} / ${formatMB(loading.total)} (${Math.round((loading.completed / loading.total) * 100)}%).`}
                 </p>
+                {loading.phase === "stream" && (
+                  <p className="mt-0 mb-3 text-sm leading-relaxed text-muted">
+                    Uploaded {formatMB(loading.uploadedBytes)} model data. Generation and upload
+                    overlap; the preview appears only when both finish.
+                  </p>
+                )}
                 <ProgressBar
-                  value={loading.phase === "decode" ? undefined : loading.completed}
-                  max={loading.phase === "decode" ? undefined : loading.total}
+                  value={
+                    loading.phase === "decode" || loading.total === 0
+                      ? undefined
+                      : loading.completed
+                  }
+                  max={
+                    loading.phase === "decode" || loading.total === 0 ? undefined : loading.total
+                  }
                   aria-label={
                     loading.phase === "decode"
                       ? "Reading blocks"
-                      : loading.phase === "mesh"
+                      : loading.phase === "mesh" || loading.phase === "stream"
                         ? "Generating geometry"
                         : "Uploading model data"
                   }
@@ -1024,8 +1109,12 @@ export default function App({ initialError }: { initialError?: string }) {
               {!loading && !choosing && <ShieldCheckmark20Regular className="shrink-0" />}
               {loading
                 ? loading.phase === "decode"
-                  ? "Decoding and meshing…"
-                  : "Uploading to graphics device…"
+                  ? "Decoding…"
+                  : loading.phase === "mesh"
+                    ? "Generating geometry…"
+                    : loading.phase === "stream"
+                      ? "Generating and uploading…"
+                      : "Uploading to graphics device…"
                 : choosing
                   ? "Choose a schematic in the file dialog"
                   : "Everything works offline."}
@@ -1039,8 +1128,8 @@ export default function App({ initialError }: { initialError?: string }) {
                 ) : (
                   <span>Sampling memory…</span>
                 )}
-                {loading.phase === "upload" && (
-                  <span>{formatMB(loading.completed)} model data</span>
+                {(loading.phase === "upload" || loading.phase === "stream") && (
+                  <span>{formatMB(loading.uploadedBytes)} model data uploaded</span>
                 )}
               </div>
             )}
@@ -1084,7 +1173,8 @@ export default function App({ initialError }: { initialError?: string }) {
                     <div className="flex items-center justify-between gap-4">
                       <Switch
                         label="Limit decoder memory"
-                        checked={previewSettings.memoryLimitEnabled}
+                        checked={previewSettings.memoryLimitEnabled && !speedFirstActive}
+                        disabled={speedFirstActive}
                         aria-describedby="memory-limit-description"
                         onChange={(_, data) =>
                           updatePreviewSettings({ memoryLimitEnabled: data.checked })
@@ -1096,7 +1186,7 @@ export default function App({ initialError }: { initialError?: string }) {
                           min={2048}
                           max={8192}
                           step={1}
-                          disabled={!previewSettings.memoryLimitEnabled}
+                          disabled={!previewSettings.memoryLimitEnabled || speedFirstActive}
                           aria-label="Decoder memory limit (MB)"
                           aria-describedby="memory-limit-description"
                           className="w-32"
@@ -1124,12 +1214,15 @@ export default function App({ initialError }: { initialError?: string }) {
                     >
                       Limits the isolated decoder process, not graphics or total application memory.
                       Disabling this limit may exhaust system memory.
+                      {speedFirstActive &&
+                        " Speed-first mode overrides this limit; turning it off restores your saved limit preference."}
                     </p>
                   </div>
                   <div className="flex flex-col gap-3">
                     <Switch
                       label="Separate geometry into chunks"
                       checked={previewSettings.chunkingEnabled}
+                      disabled={previewSettings.multithreadingEnabled}
                       aria-describedby="chunk-size-description"
                       onChange={(_, data) =>
                         updatePreviewSettings({ chunkingEnabled: data.checked })
@@ -1170,6 +1263,74 @@ export default function App({ initialError }: { initialError?: string }) {
                       Smaller chunks reduce peak meshing memory and allow cancellation between
                       chunks. Disabling chunk separation increases peak memory use and cancellation
                       latency.
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    <Switch
+                      label="Enable multithreading"
+                      checked={previewSettings.multithreadingEnabled}
+                      disabled={
+                        !previewSettings.chunkingEnabled ||
+                        !bootstrap ||
+                        bootstrap.maxWorkerThreads < 2
+                      }
+                      aria-describedby="thread-count-description"
+                      onChange={(_, data) =>
+                        updatePreviewSettings({ multithreadingEnabled: data.checked })
+                      }
+                    />
+                    <Field label="Worker threads">
+                      <SpinButton
+                        value={previewSettings.threadCount}
+                        min={2}
+                        max={Math.max(2, bootstrap?.maxWorkerThreads ?? 2)}
+                        step={1}
+                        disabled={!previewSettings.multithreadingEnabled}
+                        aria-label="Worker threads"
+                        aria-describedby="thread-count-description"
+                        className="w-32"
+                        onChange={(_, data) => {
+                          const value =
+                            data.value ??
+                            (data.displayValue && /^\d+$/.test(data.displayValue)
+                              ? Number(data.displayValue)
+                              : null)
+                          if (
+                            value !== null &&
+                            Number.isInteger(value) &&
+                            value >= 2 &&
+                            value <= (bootstrap?.maxWorkerThreads ?? 1)
+                          )
+                            updatePreviewSettings({ threadCount: value })
+                        }}
+                      />
+                    </Field>
+                    <Switch
+                      label="Speed first (no decoder memory limit)"
+                      checked={previewSettings.speedFirst}
+                      disabled={!previewSettings.multithreadingEnabled}
+                      aria-describedby="speed-first-description"
+                      onChange={(_, data) => updatePreviewSettings({ speedFirst: data.checked })}
+                    />
+                    <p
+                      id="speed-first-description"
+                      className="m-0 text-sm leading-relaxed text-muted"
+                    >
+                      Off by default. Uses the selected worker count without memory-first
+                      throttling, refills computation as results are consumed and allows more queued
+                      batches and upload reads. The decoder memory limit is disabled in this mode.
+                      Large schematics may exhaust system memory or crash the decoder. Thread-count
+                      and transfer-size bounds still apply.
+                    </p>
+                    <p
+                      id="thread-count-description"
+                      className="m-0 text-sm leading-relaxed text-muted"
+                    >
+                      Requires chunk separation and at least two available logical processors. Uses
+                      up to {bootstrap?.maxWorkerThreads ?? 1} workers for parallel decoding,
+                      meshing and upload preparation. Memory-first scheduling may use fewer workers;
+                      additional working buffers can still increase peak memory. GPU submission
+                      remains on the main thread.
                     </p>
                   </div>
                 </div>

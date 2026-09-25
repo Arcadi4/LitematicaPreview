@@ -25,6 +25,8 @@ fn main() {
                 "bootstrap",
                 "choose_file",
                 "load_preview",
+                "start_preview",
+                "next_preview",
                 "read_preview",
                 "preview_memory",
                 "release_preview",

@@ -6,6 +6,7 @@ use litematica_preview_native::{parts, Preview, PreviewInfo};
 use serde::{Deserialize, Serialize};
 
 pub const FRAME_BYTES: usize = 1024 * 1024;
+pub const MAX_READ_RANGES: usize = 256;
 const END: u8 = 0;
 const ERROR: u8 = 1;
 const TEXTURE: u8 = 2;
@@ -13,6 +14,7 @@ const PART: u8 = 3;
 const DATA: u8 = 4;
 const CHECKPOINT: u8 = 5;
 const PROGRESS: u8 = 6;
+const CHUNK: u8 = 7;
 const CONTINUE: u8 = 1;
 const CANCEL: u8 = 0;
 const TOO_LARGE: &str = "The preview is too large to transfer to the graphics device.";
@@ -31,6 +33,21 @@ pub struct Metadata {
     pub byte_length: usize,
     pub textures: Vec<TextureMetadata>,
     pub parts: Vec<PartMetadata>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Batch {
+    pub batch_id: u64,
+    pub texture_offset: usize,
+    pub metadata: Metadata,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum StreamEvent {
+    Batch { batch: Batch },
+    Complete { metadata: Metadata },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -79,7 +96,7 @@ struct Summary {
 }
 
 // One logical renderer payload; allocation-sized segments never flatten into
-// another full model. Only a requested IPC range is copied (at most 1 MiB).
+// another full model. Only a requested packed IPC page is copied (at most 1 MiB).
 pub struct Payload {
     pub metadata: Metadata,
     buffers: Vec<Buffer>,
@@ -92,34 +109,71 @@ struct Buffer {
     length: usize,
 }
 
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReadRange {
+    pub buffer_id: usize,
+    pub offset: usize,
+    pub length: usize,
+}
+
+fn align4(value: usize) -> Option<usize> {
+    value.checked_add(3).map(|value| value & !3)
+}
+
 impl Payload {
-    pub fn read(&self, id: usize, offset: usize, length: usize) -> Result<Vec<u8>, String> {
-        let buffer = self
-            .buffers
-            .get(id)
-            .ok_or("The preview buffer is unavailable.")?;
-        let end = offset.checked_add(length).ok_or("Invalid preview range.")?;
-        if length == 0 || length > FRAME_BYTES || end > buffer.length {
+    pub fn read_ranges(&self, ranges: &[ReadRange]) -> Result<Vec<u8>, String> {
+        if ranges.is_empty() || ranges.len() > MAX_READ_RANGES {
             return Err("Invalid preview range.".into());
         }
+        let mut total = 0usize;
+        for range in ranges {
+            let buffer = self
+                .buffers
+                .get(range.buffer_id)
+                .ok_or("Invalid preview range.")?;
+            let end = range
+                .offset
+                .checked_add(range.length)
+                .ok_or("Invalid preview range.")?;
+            if range.length == 0 || end > buffer.length {
+                return Err("Invalid preview range.".into());
+            }
+            total = align4(total)
+                .and_then(|total| total.checked_add(range.length))
+                .filter(|total| *total <= FRAME_BYTES)
+                .ok_or("Invalid preview range.")?;
+        }
+
         let mut bytes = Vec::new();
         bytes
-            .try_reserve_exact(length)
+            .try_reserve_exact(total)
             .map_err(|_| "There is not enough memory to upload this preview.")?;
-        let mut cursor = offset;
-        let mut index = buffer.ends.partition_point(|end| *end <= offset);
-        while cursor < end {
-            let base = if index == 0 {
-                0
-            } else {
-                buffer.ends[index - 1]
-            };
-            let segment = &buffer.segments[index];
-            let start = cursor - base;
-            let count = (segment.len() - start).min(end - cursor);
-            bytes.extend_from_slice(&segment[start..start + count]);
-            cursor += count;
-            index += 1;
+        bytes.resize(total, 0);
+        let mut destination = 0usize;
+        for range in ranges {
+            destination = align4(destination).expect("Validated page offset");
+            let buffer = &self.buffers[range.buffer_id];
+            let end = range.offset + range.length;
+            let mut cursor = range.offset;
+            let mut index = buffer
+                .ends
+                .partition_point(|segment_end| *segment_end <= cursor);
+            while cursor < end {
+                let base = if index == 0 {
+                    0
+                } else {
+                    buffer.ends[index - 1]
+                };
+                let segment = &buffer.segments[index];
+                let start = cursor - base;
+                let count = (segment.len() - start).min(end - cursor);
+                bytes[destination..destination + count]
+                    .copy_from_slice(&segment[start..start + count]);
+                cursor += count;
+                destination += count;
+                index += 1;
+            }
         }
         Ok(bytes)
     }
@@ -340,7 +394,16 @@ impl<'a, S: Read + Write> Encoder<'a, S> {
             self.quantized(part.colors.iter().flatten().copied(), false)?;
             self.bytes(bytemuck::cast_slice(&part.indices))?;
         }
-        Ok(())
+        self.record(
+            CHUNK,
+            &Summary {
+                block_count: preview.info.block_count,
+                block_entity_count: preview.info.block_entity_count,
+                triangle_count: preview.info.triangle_count,
+                min: preview.info.min,
+                max: preview.info.max,
+            },
+        )
     }
 
     fn quantized(&mut self, values: impl Iterator<Item = f32>, signed: bool) -> Result<(), String> {
@@ -399,8 +462,25 @@ pub fn finish(stream: &mut impl Write, result: Result<PreviewInfo, String>) -> i
 pub fn receive(
     stream: &mut (impl Read + Write),
     current: impl Fn() -> bool,
-    mut on_progress: impl FnMut(u64, u64),
+    on_progress: impl FnMut(u64, u64),
 ) -> io::Result<Result<Payload, String>> {
+    let mut buffers = Vec::new();
+    let result = receive_stream(stream, &current, on_progress, |_, payload| {
+        buffers.extend(payload.buffers);
+        Ok(())
+    })?;
+    match result {
+        Ok(metadata) => Payload::assemble(metadata, buffers, current).map(Ok),
+        Err(error) => Ok(Err(error)),
+    }
+}
+
+pub fn receive_stream(
+    stream: &mut (impl Read + Write),
+    current: impl Fn() -> bool,
+    mut on_progress: impl FnMut(u64, u64),
+    mut on_chunk: impl FnMut(usize, Payload) -> Result<(), String>,
+) -> io::Result<Result<Metadata, String>> {
     let mut textures = Vec::new();
     let mut parts = Vec::new();
     let mut buffers: Vec<Buffer> = Vec::new();
@@ -408,69 +488,128 @@ pub fn receive(
     let mut total = 0usize;
     let mut cancelled = false;
     let mut progress = None;
+    let mut published: Option<Metadata> = None;
+    let mut buffer_offset = 0usize;
+    let mut texture_offset = 0usize;
+    let mut consumer_error = None;
     loop {
         let (kind, bytes) = read_packet(stream)?;
         cancelled |= !current();
         if kind == ERROR {
-            return Ok(Err(if cancelled {
-                "Cancelled".into()
-            } else {
-                String::from_utf8(bytes).map_err(|_| invalid("Invalid decoder error text."))?
-            }));
+            let error =
+                String::from_utf8(bytes).map_err(|_| invalid("Invalid decoder error text."))?;
+            return Ok(Err(consumer_error.unwrap_or_else(|| {
+                if cancelled {
+                    "Cancelled".into()
+                } else {
+                    error
+                }
+            })));
         }
         if kind == END {
             if cancelled {
-                return Ok(Err("Cancelled".into()));
+                return Ok(Err(consumer_error.unwrap_or_else(|| "Cancelled".into())));
             }
-            if !pending.is_empty() {
+            if !pending.is_empty() || !buffers.is_empty() {
                 return Err(invalid("The decoder preview is truncated."));
             }
             if progress.is_some_and(|(completed, total)| completed != total) {
                 return Err(invalid("The decoder mesh progress is incomplete."));
             }
-            let summary: Summary =
-                serde_json::from_slice(&bytes).map_err(|e| invalid(e.to_string()))?;
-            let counted = parts
-                .iter()
-                .try_fold(0u64, |total, p: &PartMetadata| {
-                    total.checked_add(u64::from(p.index_count / 3))
-                })
-                .ok_or_else(|| invalid(TOO_LARGE))?;
-            if summary.block_count <= 0
-                || summary.block_entity_count < 0
-                || counted == 0
-                || summary.triangle_count != counted
-                || !summary
-                    .min
-                    .iter()
-                    .chain(&summary.max)
-                    .all(|v| v.is_finite())
-                || (0..3).any(|i| summary.min[i] > summary.max[i])
+            let metadata = published.ok_or_else(|| invalid("The decoder returned no chunks."))?;
+            let summary = parse_summary(&bytes, metadata.triangle_count)?;
+            if summary.block_count != metadata.block_count
+                || summary.block_entity_count != metadata.block_entity_count
+                || summary.min != metadata.min
+                || summary.max != metadata.max
             {
-                return Err(invalid("The decoder returned invalid preview metadata."));
+                return Err(invalid("The decoder summary does not match its chunks."));
             }
-            let metadata = Metadata {
-                block_count: summary.block_count,
-                block_entity_count: summary.block_entity_count,
-                triangle_count: counted,
-                min: summary.min,
-                max: summary.max,
-                byte_length: total,
-                textures,
-                parts,
-            };
-            return Payload::assemble(metadata, buffers, current).map(Ok);
+            return Ok(Ok(metadata));
         }
         if cancelled {
             buffers.clear();
             textures.clear();
             parts.clear();
             pending.clear();
+            published = None;
             stream.write_all(&[CANCEL])?;
             continue;
         }
         match kind {
-            TEXTURE if pending.is_empty() => {
+            CHUNK if pending.is_empty() => {
+                let counted = parts
+                    .iter()
+                    .try_fold(0u64, |count, part: &PartMetadata| {
+                        count.checked_add(u64::from(part.index_count / 3))
+                    })
+                    .ok_or_else(|| invalid(TOO_LARGE))?;
+                let summary = parse_summary(&bytes, counted)?;
+                let metadata = Metadata {
+                    block_count: summary.block_count,
+                    block_entity_count: summary.block_entity_count,
+                    triangle_count: counted,
+                    min: summary.min,
+                    max: summary.max,
+                    byte_length: std::mem::take(&mut total),
+                    textures: std::mem::take(&mut textures),
+                    parts: std::mem::take(&mut parts),
+                };
+                let aggregate = published.get_or_insert_with(|| Metadata {
+                    block_count: metadata.block_count,
+                    block_entity_count: metadata.block_entity_count,
+                    triangle_count: 0,
+                    min: metadata.min,
+                    max: metadata.max,
+                    byte_length: 0,
+                    textures: Vec::new(),
+                    parts: Vec::new(),
+                });
+                if aggregate.block_count != metadata.block_count
+                    || aggregate.block_entity_count != metadata.block_entity_count
+                {
+                    return Err(invalid("The decoder chunk source counts changed."));
+                }
+                aggregate.triangle_count = aggregate
+                    .triangle_count
+                    .checked_add(counted)
+                    .ok_or_else(|| invalid(TOO_LARGE))?;
+                aggregate.byte_length = aggregate
+                    .byte_length
+                    .checked_add(metadata.byte_length)
+                    .ok_or_else(|| invalid(TOO_LARGE))?;
+                for axis in 0..3 {
+                    aggregate.min[axis] = aggregate.min[axis].min(metadata.min[axis]);
+                    aggregate.max[axis] = aggregate.max[axis].max(metadata.max[axis]);
+                }
+                let next_buffer_offset = buffer_offset
+                    .checked_add(buffers.len())
+                    .ok_or_else(|| invalid(TOO_LARGE))?;
+                for texture in &metadata.textures {
+                    let mut texture = texture.clone();
+                    texture.buffer_id += buffer_offset;
+                    aggregate.textures.push(texture);
+                }
+                for part in &metadata.parts {
+                    let mut part = part.clone();
+                    for id in &mut part.buffers {
+                        *id += buffer_offset;
+                    }
+                    aggregate.parts.push(part);
+                }
+                buffer_offset = next_buffer_offset;
+                let previous_textures = texture_offset;
+                texture_offset = aggregate.textures.len();
+                let payload = Payload {
+                    metadata,
+                    buffers: std::mem::take(&mut buffers),
+                };
+                if let Err(error) = on_chunk(previous_textures, payload) {
+                    consumer_error = Some(error);
+                    cancelled = true;
+                }
+            }
+            TEXTURE if pending.is_empty() && parts.is_empty() => {
                 let record: TextureRecord =
                     serde_json::from_slice(&bytes).map_err(|e| invalid(e.to_string()))?;
                 let size = (record.width as usize)
@@ -497,7 +636,7 @@ pub fn receive(
                     || record.index_count == 0
                     || record.index_count > i32::MAX as u32
                     || record.index_count % 3 != 0
-                    || record.texture_index as usize >= textures.len()
+                    || record.texture_index as usize >= texture_offset + textures.len()
                     || record.alpha_mode > 2
                 {
                     return Err(invalid("The decoder returned an invalid mesh part."));
@@ -576,8 +715,26 @@ pub fn receive(
             CHECKPOINT if pending.is_empty() && bytes.is_empty() => {}
             _ => return Err(invalid("Unexpected decoder record.")),
         }
-        stream.write_all(&[CONTINUE])?;
+        stream.write_all(&[if cancelled { CANCEL } else { CONTINUE }])?;
     }
+}
+
+fn parse_summary(bytes: &[u8], counted: u64) -> io::Result<Summary> {
+    let summary: Summary = serde_json::from_slice(bytes).map_err(|e| invalid(e.to_string()))?;
+    if summary.block_count <= 0
+        || summary.block_entity_count < 0
+        || counted == 0
+        || summary.triangle_count != counted
+        || !summary
+            .min
+            .iter()
+            .chain(&summary.max)
+            .all(|value| value.is_finite())
+        || (0..3).any(|axis| summary.min[axis] > summary.max[axis])
+    {
+        return Err(invalid("The decoder returned invalid preview metadata."));
+    }
+    Ok(summary)
 }
 
 fn add_buffer(buffers: &mut Vec<Buffer>, total: &mut usize, length: usize) -> io::Result<usize> {
@@ -597,8 +754,282 @@ fn add_buffer(buffers: &mut Vec<Buffer>, total: &mut usize, length: usize) -> io
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    fn range(buffer_id: usize, offset: usize, length: usize) -> ReadRange {
+        ReadRange {
+            buffer_id,
+            offset,
+            length,
+        }
+    }
+
+    #[test]
+    fn native_mesh_encoder_delivers_reusable_textures_before_completion() {
+        use litematica_preview_native::{load_chunks, PreviewOptions};
+        use nucleation::{BlockState, UniversalSchematic};
+        use std::net::{TcpListener, TcpStream};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+
+        let mut schematic = UniversalSchematic::new("pipeline regression".into());
+        for x in [0, 16, 32] {
+            schematic.set_block(x, 0, 0, &BlockState::new("minecraft:stone"));
+            schematic.set_block(x + 1, 0, 0, &BlockState::new("minecraft:glass"));
+        }
+        let input = nucleation::formats::litematic::to_litematic(&schematic).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut sender = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut receiver, _) = listener.accept().unwrap();
+        sender
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        receiver
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let ended = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let producer = scope.spawn(|| {
+                let pack_bytes = std::fs::read(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Assets/pack.zip"),
+                )
+                .unwrap();
+                let pack =
+                    nucleation::meshing::ResourcePackSource::from_bytes(&pack_bytes).unwrap();
+                let mut encoder = Encoder::new(&mut sender);
+                let mut native_alpha = std::collections::BTreeSet::new();
+                let info = load_chunks(
+                    &input,
+                    &pack,
+                    PreviewOptions {
+                        chunk_size: Some(16),
+                        thread_count: (litematica_preview_native::max_worker_threads() >= 2)
+                            .then_some(2),
+                        ..PreviewOptions::default()
+                    },
+                    |preview| {
+                        native_alpha.extend(parts(&preview.mesh).map(|(_, _, alpha)| alpha));
+                        encoder.chunk(preview)
+                    },
+                    |_, _| Ok(()),
+                    || Ok(()),
+                );
+                drop(encoder);
+                finish(&mut sender, info).unwrap();
+                ended.store(true, Ordering::Release);
+                native_alpha
+            });
+            let mut chunks = 0;
+            let mut textures = 0;
+            let mut bytes = 0;
+            let mut triangles = 0;
+            let mut alpha = std::collections::BTreeSet::new();
+            let complete = receive_stream(
+                &mut receiver,
+                || true,
+                |_, _| {},
+                |offset, payload| {
+                    if chunks == 0 {
+                        assert!(!ended.load(Ordering::Acquire));
+                    } else {
+                        assert!(
+                            payload.metadata.textures.is_empty(),
+                            "shared textures were sent again"
+                        );
+                    }
+                    assert_eq!(offset, textures);
+                    textures += payload.metadata.textures.len();
+                    bytes += payload.metadata.byte_length;
+                    triangles += payload.metadata.triangle_count;
+                    for part in &payload.metadata.parts {
+                        assert!((part.texture_index as usize) < textures);
+                        alpha.insert(part.alpha_mode);
+                        let ranges: Vec<_> = part
+                            .buffers
+                            .iter()
+                            .map(|&id| range(id, 0, payload.buffers[id].length))
+                            .collect();
+                        let page = payload.read_ranges(&ranges).unwrap();
+                        let mut cursor = 0;
+                        for descriptor in ranges {
+                            cursor = align4(cursor).unwrap();
+                            let source = &payload.buffers[descriptor.buffer_id];
+                            let expected: Vec<_> =
+                                source.segments.iter().flatten().copied().collect();
+                            assert_eq!(&page[cursor..cursor + descriptor.length], expected);
+                            cursor += descriptor.length;
+                        }
+                        assert_eq!(page.len(), cursor);
+                        let indices = payload
+                            .read_ranges(&[range(
+                                part.buffers[4],
+                                0,
+                                part.index_count as usize * 4,
+                            )])
+                            .unwrap();
+                        assert!(indices
+                            .chunks_exact(4)
+                            .all(|bytes| u32::from_le_bytes(bytes.try_into().unwrap())
+                                < part.vertex_count));
+                    }
+                    chunks += 1;
+                    Ok(())
+                },
+            )
+            .unwrap()
+            .unwrap();
+            let native_alpha = producer.join().unwrap();
+            assert_eq!(chunks, 3);
+            assert_eq!(complete.block_count, 6);
+            assert_eq!(complete.triangle_count, triangles);
+            assert_eq!(complete.byte_length, bytes);
+            assert_eq!(complete.textures.len(), textures);
+            assert_eq!(alpha, native_alpha);
+        });
+    }
+
+    pub(crate) fn chunk_payload() -> Payload {
+        receive(&mut wire(part_packets(0)), || true, |_, _| {})
+            .unwrap()
+            .unwrap()
+    }
+
+    pub(crate) fn stream_fixture(chunks: usize) -> Vec<u8> {
+        let mut source = io::Cursor::new(part_packets(0));
+        let mut first = Vec::new();
+        let mut reused = Vec::new();
+        loop {
+            let (kind, bytes) = read_packet(&mut source).unwrap();
+            if kind == END {
+                break;
+            }
+            write_packet(&mut first, kind, &bytes).unwrap();
+            if kind != TEXTURE && !(kind == DATA && reused.is_empty()) {
+                write_packet(&mut reused, kind, &bytes).unwrap();
+            }
+        }
+        let mut bytes = first;
+        for _ in 1..chunks {
+            bytes.extend_from_slice(&reused);
+        }
+        finish(
+            &mut bytes,
+            Ok(PreviewInfo {
+                block_count: 1,
+                triangle_count: chunks as u64,
+                max: [1.0; 3],
+                ..PreviewInfo::default()
+            }),
+        )
+        .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn streamed_chunks_reuse_textures_and_preserve_global_buffer_descriptors() {
+        let mut batches = Vec::new();
+        let metadata = receive_stream(
+            &mut wire(stream_fixture(2)),
+            || true,
+            |_, _| {},
+            |offset, payload| {
+                batches.push((offset, payload));
+                Ok(())
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(batches[0].0, 0);
+        assert_eq!(batches[1].0, 1);
+        assert_eq!(batches[0].1.metadata.textures.len(), 1);
+        assert!(batches[1].1.metadata.textures.is_empty());
+        assert_eq!(batches[1].1.metadata.parts[0].texture_index, 0);
+        assert_eq!(batches[1].1.metadata.parts[0].buffers, [0, 1, 2, 3, 4]);
+        assert_eq!(metadata.parts[1].buffers, [6, 7, 8, 9, 10]);
+        assert_eq!(metadata.byte_length, 4 + 2 * 39);
+        assert_eq!(metadata.triangle_count, 2);
+    }
+
+    #[test]
+    fn serial_receiver_still_merges_completed_chunks_and_rebases_indices() {
+        let payload = receive(&mut wire(stream_fixture(2)), || true, |_, _| {})
+            .unwrap()
+            .unwrap();
+        assert_eq!(payload.metadata.textures.len(), 1);
+        assert_eq!(payload.metadata.parts.len(), 1);
+        let part = &payload.metadata.parts[0];
+        assert_eq!((part.vertex_count, part.index_count), (2, 6));
+        let indices: Vec<_> = payload
+            .read_ranges(&[range(part.buffers[4], 0, 24)])
+            .unwrap()
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect();
+        assert_eq!(indices, [0, 0, 0, 1, 1, 1]);
+    }
+
+    #[test]
+    fn rejected_chunk_acknowledges_cancel_and_drains_before_next_request() {
+        let mut input = io::Cursor::new(stream_fixture(1));
+        let mut bytes = Vec::new();
+        loop {
+            let (kind, data) = read_packet(&mut input).unwrap();
+            write_packet(&mut bytes, kind, &data).unwrap();
+            if kind == CHUNK {
+                break;
+            }
+        }
+        finish(&mut bytes, Err("Cancelled".into())).unwrap();
+        bytes.extend(stream_fixture(1));
+        let mut connection = wire(bytes);
+        let result = receive_stream(
+            &mut connection,
+            || true,
+            |_, _| {},
+            |_, _| Err("Upload failed".into()),
+        )
+        .unwrap();
+        assert!(matches!(result, Err(error) if error == "Upload failed"));
+        assert_eq!(connection.outgoing.last(), Some(&CANCEL));
+        let next = receive(&mut connection, || true, |_, _| {})
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.read_ranges(&[range(0, 0, 4)]).unwrap(), [255; 4]);
+    }
+
+    #[test]
+    fn malformed_late_terminator_never_completes_a_stream() {
+        let mut bytes = stream_fixture(2);
+        bytes.pop();
+        let mut batches = 0;
+        assert!(receive_stream(
+            &mut wire(bytes),
+            || true,
+            |_, _| {},
+            |_, _| {
+                batches += 1;
+                Ok(())
+            }
+        )
+        .is_err());
+        assert_eq!(batches, 2);
+    }
+
+    #[test]
+    fn encoder_texture_identity_survives_multiple_chunks() {
+        let mut connection = wire(vec![CONTINUE; 4]);
+        let mut encoder = Encoder::new(&mut connection);
+        assert_eq!(encoder.texture(1, 1, &[255; 4], false).unwrap(), 0);
+        assert_eq!(encoder.texture(1, 1, &[255; 4], false).unwrap(), 0);
+        assert_eq!(encoder.texture(1, 1, &[255; 4], true).unwrap(), 1);
+        let mut packets = io::Cursor::new(connection.outgoing);
+        assert_eq!(read_packet(&mut packets).unwrap().0, TEXTURE);
+        assert_eq!(read_packet(&mut packets).unwrap().0, DATA);
+        assert_eq!(read_packet(&mut packets).unwrap().0, TEXTURE);
+        assert_eq!(read_packet(&mut packets).unwrap().0, DATA);
+        assert_eq!(packets.position() as usize, packets.get_ref().len());
+    }
 
     #[test]
     fn declared_buffers_above_two_gib_wait_for_payload_without_eager_allocation() {
@@ -643,7 +1074,10 @@ mod tests {
             .unwrap();
         assert_eq!(payload.metadata.textures.len(), 100_001);
         let last = payload.metadata.textures.last().unwrap();
-        assert_eq!(payload.read(last.buffer_id, 0, 4).unwrap(), [255; 4]);
+        assert_eq!(
+            payload.read_ranges(&[range(last.buffer_id, 0, 4)]).unwrap(),
+            [255; 4]
+        );
         assert_eq!(payload.metadata.triangle_count, 1);
     }
 
@@ -710,12 +1144,136 @@ mod tests {
             }],
         };
         assert_eq!(
-            payload.read(0, FRAME_BYTES - 2, 5).unwrap(),
+            payload
+                .read_ranges(&[range(0, FRAME_BYTES - 2, 5)])
+                .unwrap(),
             [7, 7, 8, 9, 10]
         );
-        assert!(payload.read(0, usize::MAX, 1).is_err());
-        assert!(payload.read(0, 0, FRAME_BYTES + 1).is_err());
-        assert!(payload.read(1, 0, 1).is_err());
+        assert!(payload.read_ranges(&[range(0, usize::MAX, 1)]).is_err());
+        assert!(payload
+            .read_ranges(&[range(0, 0, FRAME_BYTES + 1)])
+            .is_err());
+        assert!(payload.read_ranges(&[range(1, 0, 1)]).is_err());
+    }
+
+    #[test]
+    fn packed_reads_align_ranges_cross_segments_and_preserve_sources() {
+        let payload = Payload {
+            metadata: Metadata {
+                block_count: 0,
+                block_entity_count: 0,
+                triangle_count: 0,
+                min: [0.0; 3],
+                max: [0.0; 3],
+                byte_length: 11,
+                textures: vec![],
+                parts: vec![],
+            },
+            buffers: vec![
+                Buffer {
+                    segments: vec![vec![1, 2], vec![3, 4, 5]],
+                    ends: vec![2, 5],
+                    length: 5,
+                },
+                Buffer {
+                    segments: vec![vec![6, 7, 8, 9]],
+                    ends: vec![4],
+                    length: 4,
+                },
+            ],
+        };
+        assert_eq!(
+            payload
+                .read_ranges(&[range(0, 0, 3), range(1, 0, 4)])
+                .unwrap(),
+            [1, 2, 3, 0, 6, 7, 8, 9]
+        );
+        assert_eq!(
+            payload
+                .read_ranges(&[range(0, 1, 3), range(0, 1, 3), range(1, 2, 2)])
+                .unwrap(),
+            [2, 3, 4, 0, 2, 3, 4, 0, 8, 9]
+        );
+        assert_eq!(
+            payload.read_ranges(&[range(0, 0, 5)]).unwrap(),
+            [1, 2, 3, 4, 5]
+        );
+    }
+
+    #[test]
+    fn packed_reads_validate_every_range_before_returning_a_page() {
+        let payload = Payload {
+            metadata: Metadata {
+                block_count: 0,
+                block_entity_count: 0,
+                triangle_count: 0,
+                min: [0.0; 3],
+                max: [0.0; 3],
+                byte_length: FRAME_BYTES,
+                textures: vec![],
+                parts: vec![],
+            },
+            buffers: vec![Buffer {
+                segments: vec![vec![42; FRAME_BYTES]],
+                ends: vec![FRAME_BYTES],
+                length: FRAME_BYTES,
+            }],
+        };
+        assert_eq!(
+            payload
+                .read_ranges(&[range(0, 0, FRAME_BYTES)])
+                .unwrap()
+                .len(),
+            FRAME_BYTES
+        );
+        assert_eq!(
+            payload
+                .read_ranges(&[range(0, 0, FRAME_BYTES - 3), range(0, 0, 1)])
+                .unwrap_err(),
+            "Invalid preview range."
+        );
+        assert_eq!(
+            payload.read_ranges(&[]).unwrap_err(),
+            "Invalid preview range."
+        );
+        assert_eq!(
+            payload
+                .read_ranges(&vec![range(0, 0, 1); MAX_READ_RANGES + 1])
+                .unwrap_err(),
+            "Invalid preview range."
+        );
+        for bad in [
+            range(0, 0, 0),
+            range(1, 0, 1),
+            range(0, FRAME_BYTES, 1),
+            range(0, usize::MAX, 2),
+        ] {
+            assert_eq!(
+                payload.read_ranges(&[range(0, 0, 1), bad]).unwrap_err(),
+                "Invalid preview range."
+            );
+        }
+        assert_eq!(
+            payload
+                .read_ranges(&[range(0, 0, 1); MAX_READ_RANGES])
+                .unwrap()
+                .len(),
+            MAX_READ_RANGES * 4 - 3
+        );
+    }
+
+    #[test]
+    fn read_ranges_rejects_invalid_json_fields_and_numeric_types() {
+        assert!(serde_json::from_str::<ReadRange>(
+            r#"{"bufferId":0,"offset":0,"length":1,"target":0}"#
+        )
+        .is_err());
+        assert!(
+            serde_json::from_str::<ReadRange>(r#"{"bufferId":-1,"offset":0,"length":1}"#).is_err()
+        );
+        assert!(
+            serde_json::from_str::<ReadRange>(r#"{"bufferId":0,"offset":0.5,"length":1}"#).is_err()
+        );
     }
 
     #[test]
@@ -760,8 +1318,15 @@ mod tests {
         let part = &payload.metadata.parts[0];
         assert_eq!(payload.metadata.parts.len(), 1);
         assert_eq!((part.vertex_count, part.index_count), (2, 6));
-        assert_eq!(payload.read(part.buffers[1], 2, 3).unwrap(), [10, 20, 20]);
-        let indices = payload.read(part.buffers[4], 0, 24).unwrap();
+        assert_eq!(
+            payload
+                .read_ranges(&[range(part.buffers[1], 2, 3)])
+                .unwrap(),
+            [10, 20, 20]
+        );
+        let indices = payload
+            .read_ranges(&[range(part.buffers[4], 0, 24)])
+            .unwrap();
         let values: Vec<_> = indices
             .chunks_exact(4)
             .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
@@ -823,6 +1388,19 @@ mod tests {
         ] {
             write_packet(&mut bytes, DATA, &data).unwrap();
         }
+        write_packet(
+            &mut bytes,
+            CHUNK,
+            &serde_json::to_vec(&Summary {
+                block_count: 1,
+                block_entity_count: 0,
+                triangle_count: 1,
+                min: [0.0; 3],
+                max: [1.0; 3],
+            })
+            .unwrap(),
+        )
+        .unwrap();
         finish(
             &mut bytes,
             Ok(PreviewInfo {
@@ -862,7 +1440,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             payload
-                .read(payload.metadata.parts[0].buffers[4], 0, 12)
+                .read_ranges(&[range(payload.metadata.parts[0].buffers[4], 0, 12)])
                 .unwrap(),
             [0; 12]
         );
@@ -927,17 +1505,56 @@ mod tests {
             .unwrap();
         worker.publish(10, payload).unwrap();
         worker.release(9);
-        assert_eq!(worker.read(10, 0, 0, 4).unwrap(), [255; 4]);
+        assert_eq!(worker.read(10, None, &[range(0, 0, 4)]).unwrap(), [255; 4]);
         worker.advance(11);
-        assert!(worker.read(10, 0, 0, 4).is_err());
+        assert!(worker.read(10, None, &[range(0, 0, 4)]).is_err());
         let payload = receive(&mut wire(part_packets(0)), || true, |_, _| {})
             .unwrap()
             .unwrap();
         worker.publish(11, payload).unwrap();
         worker.release(10);
-        assert_eq!(worker.read(11, 0, 0, 4).unwrap(), [255; 4]);
+        assert_eq!(worker.read(11, None, &[range(0, 0, 4)]).unwrap(), [255; 4]);
         worker.release(11);
-        assert!(worker.read(11, 0, 0, 4).is_err());
+        assert!(worker.read(11, None, &[range(0, 0, 4)]).is_err());
+    }
+
+    #[test]
+    fn concurrent_upload_ranges_preserve_bytes_and_release_invalidates_reads() {
+        let worker = crate::preview::PreviewWorker::default();
+        worker.advance(10);
+        let payload = receive(&mut wire(part_packets(0)), || true, |_, _| {})
+            .unwrap()
+            .unwrap();
+        let texture = payload.metadata.textures[0].buffer_id;
+        let positions = payload.metadata.parts[0].buffers[0];
+        worker.publish(10, payload).unwrap();
+        let start = std::sync::Barrier::new(4);
+        std::thread::scope(|scope| {
+            let readers: Vec<_> = (0..4)
+                .map(|offset| {
+                    let worker = &worker;
+                    let start = &start;
+                    scope.spawn(move || {
+                        start.wait();
+                        assert_eq!(
+                            worker
+                                .read(
+                                    10,
+                                    None,
+                                    &[range(texture, offset, 1), range(positions, offset * 3, 3)]
+                                )
+                                .unwrap(),
+                            [255, 0, 0, 0, 0, 0, 0]
+                        );
+                    })
+                })
+                .collect();
+            for reader in readers {
+                reader.join().unwrap();
+            }
+        });
+        worker.release(10);
+        assert!(worker.read(10, None, &[range(texture, 0, 4)]).is_err());
     }
 
     #[test]

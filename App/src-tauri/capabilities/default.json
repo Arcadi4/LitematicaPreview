@@ -12,6 +12,8 @@
     "allow-bootstrap",
     "allow-choose-file",
     "allow-load-preview",
+    "allow-start-preview",
+    "allow-next-preview",
     "allow-read-preview",
     "allow-preview-memory",
     "allow-release-preview",

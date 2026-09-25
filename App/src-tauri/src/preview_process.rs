@@ -42,8 +42,8 @@ impl DecoderProcess {
             .arg("--preview-worker")
             .arg(address.port().to_string())
             .stdin(Stdio::piped())
-            // Nucleation writes to stdout. Neither log stream carries protocol
-            // data or has a pipe that could fill and deadlock native decoding.
+            // Native decoding may write to stdout. Neither output stream carries
+            // protocol data or has a pipe that could fill and deadlock decoding.
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         #[cfg(windows)]
@@ -139,10 +139,52 @@ impl DecoderProcess {
         path: &Path,
         pack_path: &Path,
         chunk_size: Option<u16>,
+        thread_count: Option<u8>,
+        speed_first: bool,
         current: impl Fn() -> bool,
         on_progress: impl FnMut(u64, u64),
     ) -> Result<Result<crate::protocol::Payload, String>, String> {
-        let request = serde_json::to_vec(&(path, pack_path, chunk_size))
+        self.request(
+            path,
+            pack_path,
+            chunk_size,
+            thread_count,
+            speed_first,
+            |stream| crate::protocol::receive(stream, current, on_progress),
+        )
+    }
+
+    pub fn load_stream(
+        &mut self,
+        path: &Path,
+        pack_path: &Path,
+        chunk_size: Option<u16>,
+        thread_count: Option<u8>,
+        speed_first: bool,
+        current: impl Fn() -> bool,
+        on_progress: impl FnMut(u64, u64),
+        on_chunk: impl FnMut(usize, crate::protocol::Payload) -> Result<(), String>,
+    ) -> Result<Result<crate::protocol::Metadata, String>, String> {
+        self.request(
+            path,
+            pack_path,
+            chunk_size,
+            thread_count,
+            speed_first,
+            |stream| crate::protocol::receive_stream(stream, current, on_progress, on_chunk),
+        )
+    }
+
+    fn request<T>(
+        &mut self,
+        path: &Path,
+        pack_path: &Path,
+        chunk_size: Option<u16>,
+        thread_count: Option<u8>,
+        speed_first: bool,
+        receive: impl FnOnce(&mut TcpStream) -> io::Result<Result<T, String>>,
+    ) -> Result<Result<T, String>, String> {
+        let request = serde_json::to_vec(&(path, pack_path, chunk_size, thread_count, speed_first))
             .map_err(|e| format!("Unable to describe the decoder request: {e}"))?;
         if request.len() > MAX_REQUEST_BYTES {
             return Ok(Err("The schematic or resource path is too long.".into()));
@@ -152,7 +194,7 @@ impl DecoderProcess {
                 io::Error::new(io::ErrorKind::NotConnected, "The decoder is not connected")
             })?;
             write_frame(stream, &request)?;
-            crate::protocol::receive(stream, current, on_progress)
+            receive(stream)
         })();
         result.map_err(|error| self.failure(error))
     }
@@ -295,12 +337,19 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
     loop {
         let request = read_frame(&mut stream, MAX_REQUEST_BYTES)
             .map_err(|e| format!("Unable to read the decoder request: {e}"))?;
-        let (path, pack_path, chunk_size): (PathBuf, PathBuf, Option<u16>) =
-            serde_json::from_slice(&request)
-                .map_err(|e| format!("Invalid decoder request: {e}"))?;
+        let (path, pack_path, chunk_size, thread_count, speed_first): (
+            PathBuf,
+            PathBuf,
+            Option<u16>,
+            Option<u8>,
+            bool,
+        ) = serde_json::from_slice(&request)
+            .map_err(|e| format!("Invalid decoder request: {e}"))?;
         let options = PreviewOptions {
             memory_limit_mb,
             chunk_size,
+            thread_count,
+            speed_first,
         };
         let result = crate::preview::decode(&path, &pack_path, &mut pack, options, &mut stream);
         crate::protocol::finish(&mut stream, result)

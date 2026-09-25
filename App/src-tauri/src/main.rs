@@ -32,6 +32,7 @@ struct Bootstrap {
     initial_path: Option<String>,
     version: &'static str,
     request_id: u64,
+    max_worker_threads: u8,
 }
 
 #[tauri::command]
@@ -46,6 +47,7 @@ async fn bootstrap(state: State<'_, HostState>) -> Result<Bootstrap, String> {
             initial_path,
             version: env!("CARGO_PKG_VERSION"),
             request_id,
+            max_worker_threads: litematica_preview_native::max_worker_threads(),
         })
     })
     .await
@@ -74,6 +76,7 @@ async fn choose_file(app: AppHandle, window: WebviewWindow) -> Result<Option<Str
     .await
     .map_err(|e| format!("Unable to show the file picker: {e}"))?
 }
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewProgress {
@@ -83,18 +86,7 @@ struct PreviewProgress {
     total: u64,
 }
 
-#[tauri::command]
-async fn load_preview(
-    path: String,
-    request_id: u64,
-    app: AppHandle,
-    options: preview::LoadOptions,
-    state: State<'_, HostState>,
-) -> Result<protocol::Metadata, String> {
-    let options = options.validate()?;
-    let worker = Arc::clone(&state.worker);
-    worker.advance(request_id);
-    worker.ensure_current(request_id)?;
+fn preview_path(path: String) -> Result<PathBuf, String> {
     let path = PathBuf::from(path);
     let supported = path
         .extension()
@@ -110,6 +102,42 @@ async fn load_preview(
             EXTENSIONS.join(", ")
         ));
     }
+    Ok(path)
+}
+
+fn report_progress(
+    app: &AppHandle,
+    worker: &PreviewWorker,
+    request_id: u64,
+    completed: u64,
+    total: u64,
+) {
+    if worker.ensure_current(request_id).is_ok() {
+        let _ = app.emit(
+            "preview-progress",
+            PreviewProgress {
+                request_id,
+                phase: "mesh",
+                completed,
+                total,
+            },
+        );
+    }
+}
+
+#[tauri::command]
+async fn load_preview(
+    path: String,
+    request_id: u64,
+    app: AppHandle,
+    options: preview::LoadOptions,
+    state: State<'_, HostState>,
+) -> Result<protocol::Metadata, String> {
+    let options = options.validate()?;
+    let worker = Arc::clone(&state.worker);
+    worker.advance(request_id);
+    worker.ensure_current(request_id)?;
+    let path = preview_path(path)?;
     let resources = state.resources.clone();
     tauri::async_runtime::spawn_blocking(move || {
         worker.ensure_current(request_id)?;
@@ -119,19 +147,7 @@ async fn load_preview(
             &pack_path,
             request_id,
             options,
-            |completed, total| {
-                if worker.ensure_current(request_id).is_ok() {
-                    let _ = app.emit(
-                        "preview-progress",
-                        PreviewProgress {
-                            request_id,
-                            phase: "mesh",
-                            completed,
-                            total,
-                        },
-                    );
-                }
-            },
+            |completed, total| report_progress(&app, &worker, request_id, completed, total),
         )?;
         worker.ensure_current(request_id)?;
         Ok(metadata)
@@ -141,17 +157,70 @@ async fn load_preview(
 }
 
 #[tauri::command]
-fn read_preview(
+fn start_preview(
+    path: String,
     request_id: u64,
-    buffer_id: usize,
-    offset: usize,
-    length: usize,
+    app: AppHandle,
+    options: preview::LoadOptions,
+    state: State<'_, HostState>,
+) -> Result<(), String> {
+    let options = options.validate()?;
+    if options.thread_count.is_none() {
+        return Err("Streaming preview requires multithreading.".into());
+    }
+    let path = preview_path(path)?;
+    let worker = Arc::clone(&state.worker);
+    worker.advance(request_id);
+    worker.begin_stream(request_id, options)?;
+    let resources = state.resources.clone();
+    tauri::async_runtime::spawn(async move {
+        let producer = Arc::clone(&worker);
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            let pack = resources.pack()?;
+            producer.load_stream(&path, &pack, request_id, options, |completed, total| {
+                report_progress(&app, &producer, request_id, completed, total)
+            })
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => worker.fail_stream(request_id, error),
+            Err(error) => worker.fail_stream(
+                request_id,
+                format!("The preview worker stopped unexpectedly: {error}"),
+            ),
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+async fn next_preview(
+    request_id: u64,
+    previous_batch_id: Option<u64>,
+    state: State<'_, HostState>,
+) -> Result<protocol::StreamEvent, String> {
+    let worker = Arc::clone(&state.worker);
+    tauri::async_runtime::spawn_blocking(move || worker.next(request_id, previous_batch_id))
+        .await
+        .map_err(|e| format!("Unable to receive the next preview batch: {e}"))?
+}
+
+#[tauri::command]
+async fn read_preview(
+    request_id: u64,
+    batch_id: Option<u64>,
+    ranges: Vec<protocol::ReadRange>,
     state: State<'_, HostState>,
 ) -> Result<tauri::ipc::Response, String> {
-    state
-        .worker
-        .read(request_id, buffer_id, offset, length)
-        .map(tauri::ipc::Response::new)
+    let worker = Arc::clone(&state.worker);
+    tauri::async_runtime::spawn_blocking(move || {
+        worker
+            .read(request_id, batch_id, &ranges)
+            .map(tauri::ipc::Response::new)
+    })
+    .await
+    .map_err(|e| format!("Unable to read the preview buffer: {e}"))?
 }
 
 #[tauri::command]
@@ -269,6 +338,8 @@ fn run() -> Result<(), String> {
             bootstrap,
             choose_file,
             load_preview,
+            start_preview,
+            next_preview,
             read_preview,
             preview_memory,
             release_preview,

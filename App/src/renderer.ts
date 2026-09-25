@@ -1,31 +1,29 @@
 import { mat4, vec3 } from "gl-matrix"
+import {
+  PreparedUploads,
+  PreparationWorkerPool,
+  validateUpload,
+  type PreparationWorker,
+} from "./upload-preparation"
+import {
+  buildUploadLayout,
+  UPLOAD_CHUNK,
+  type PreviewReadRange,
+  type UploadPage,
+} from "./upload-layout"
 
-export type PreviewMetadata = {
-  blockCount: number
-  blockEntityCount: number
-  triangleCount: number
-  min: [number, number, number]
-  max: [number, number, number]
-  byteLength: number
-  textures: {
-    width: number
-    height: number
-    byteLength: number
-    bufferId: number
-    repeat: boolean
-  }[]
-  parts: {
-    vertexCount: number
-    indexCount: number
-    textureIndex: number
-    alphaMode: 0 | 1 | 2
-    buffers: [number, number, number, number, number]
-  }[]
-}
+import {
+  BUFFER_FORMATS,
+  PreviewStream,
+  validateMetadata,
+  type PreviewMetadata,
+  type PreviewStreamEvent,
+} from "./preview-stream"
+export type { PreviewBatch, PreviewMetadata, PreviewStreamEvent } from "./preview-stream"
 
 type Part = {
   vao: WebGLVertexArrayObject
-  buffers: WebGLBuffer[]
+  indexByteOffset: number
   texture: WebGLTexture
   count: number
   alphaMode: 0 | 1 | 2
@@ -33,6 +31,7 @@ type Part = {
 
 type Model = {
   textures: WebGLTexture[]
+  buffers: WebGLBuffer[]
   parts: Part[]
   gridVao: WebGLVertexArrayObject | null
   gridBuffer: WebGLBuffer | null
@@ -61,18 +60,10 @@ type Targets = {
 }
 
 type UploadBudget = { bytes: number; started: number }
-type ReadBuffer = (bufferId: number, offset: number, length: number) => Promise<ArrayBuffer>
+type ReadBuffer = (ranges: readonly PreviewReadRange[]) => Promise<ArrayBuffer>
 
 const FOV = (28 * Math.PI) / 180
 const HALF_FOV_TAN = Math.tan(FOV / 2)
-const BUFFER_FORMATS = [
-  { size: 3, array: Float32Array, normalized: false },
-  { size: 3, array: Int8Array, normalized: true },
-  { size: 2, array: Float32Array, normalized: false },
-  { size: 4, array: Uint8Array, normalized: true },
-  { size: 1, array: Uint32Array, normalized: false },
-] as const
-const UPLOAD_CHUNK = 1024 * 1024
 const MAX_RENDER_PIXELS = 16 * 1024 * 1024
 const UP = new Float32Array([0, 1, 0])
 
@@ -88,110 +79,55 @@ function errorOf(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error))
 }
 
-function integer(
-  value: unknown,
-  name: string,
-  maximum = Number.MAX_SAFE_INTEGER,
-  minimum = 0,
-): number {
-  if (
-    typeof value !== "number" ||
-    !Number.isSafeInteger(value) ||
-    value < minimum ||
-    value > maximum
-  ) {
-    throw new Error(`Invalid preview ${name}.`)
+function createPreparationWorker(onError: (error: Error) => void): PreparationWorker {
+  const worker = new Worker(new URL("./upload-worker.ts", import.meta.url), { type: "module" })
+  let pending: { resolve: (buffer: ArrayBuffer) => void; reject: (error: Error) => void } | null =
+    null
+  let failure: Error | null = null
+  const fail = (error: Error, notify = true) => {
+    failure = error
+    const task = pending
+    pending = null
+    task?.reject(error)
+    if (notify) onError(error)
   }
-  return value
-}
-
-function record(value: unknown, name: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    throw new Error(`Invalid preview ${name}.`)
-  return value as Record<string, unknown>
-}
-
-function validateMetadata(metadata: PreviewMetadata, maxTextureSize: number): void {
-  const root = record(metadata, "metadata")
-  const byteLength = integer(root.byteLength, "payload byte length", Number.MAX_SAFE_INTEGER, 1)
-  integer(root.blockCount, "block count", Number.MAX_SAFE_INTEGER, 1)
-  integer(root.blockEntityCount, "block entity count")
-  integer(root.triangleCount, "triangle count", Number.MAX_SAFE_INTEGER, 1)
-  for (const bound of [root.min, root.max]) {
-    if (
-      !Array.isArray(bound) ||
-      bound.length !== 3 ||
-      bound.some((v: unknown) => typeof v !== "number" || !Number.isFinite(v))
-    ) {
-      throw new Error("The preview geometry bounds are invalid.")
+  worker.onmessage = (event: MessageEvent<{ buffer?: ArrayBuffer; error?: string }>) => {
+    const task = pending
+    if (!task) return
+    if (event.data?.buffer instanceof ArrayBuffer) {
+      pending = null
+      task.resolve(event.data.buffer)
+    } else {
+      fail(new Error(event.data?.error || "Preview preparation failed."))
     }
   }
-  const min = root.min as number[]
-  const max = root.max as number[]
-  for (let axis = 0; axis < 3; axis++) {
-    if (min[axis] > max[axis]) throw new Error("The preview geometry bounds are reversed.")
+  worker.onerror = (event) => {
+    event.preventDefault()
+    fail(new Error(event.message || "Preview preparation failed."))
   }
-  if (
-    !Array.isArray(root.textures) ||
-    root.textures.length === 0 ||
-    !Array.isArray(root.parts) ||
-    root.parts.length === 0
-  ) {
-    throw new Error("The preview must contain textures and renderable mesh parts.")
+  worker.onmessageerror = () => fail(new Error("The preview worker returned unreadable data."))
+  return {
+    prepare: (buffer, page) =>
+      new Promise<ArrayBuffer>((resolve, reject) => {
+        if (failure) {
+          reject(failure)
+          return
+        }
+        pending = { resolve, reject }
+        try {
+          worker.postMessage({ buffer, page }, [buffer])
+        } catch (error) {
+          fail(errorOf(error))
+        }
+      }),
+    terminate: () => {
+      fail(new Error("Cancelled"), false)
+      worker.onmessage = null
+      worker.onerror = null
+      worker.onmessageerror = null
+      worker.terminate()
+    },
   }
-  const bufferCount = integer(
-    root.textures.length + root.parts.length * 5,
-    "buffer count",
-    0xffffffff,
-    1,
-  )
-  const bufferIds = new Set<number>()
-  let totalBytes = 0
-  const consume = (id: unknown, bytes: number) => {
-    const bufferId = integer(id, "buffer ID", bufferCount - 1)
-    if (bufferIds.has(bufferId)) throw new Error("The preview contains a duplicate buffer ID.")
-    if (!Number.isSafeInteger(bytes) || bytes <= 0 || bytes > byteLength - totalBytes) {
-      throw new Error("The preview contains truncated or oversized geometry.")
-    }
-    bufferIds.add(bufferId)
-    totalBytes += bytes
-  }
-  for (const value of root.textures) {
-    const texture = record(value, "texture")
-    const width = integer(texture.width, "texture width", 0x7fffffff, 1)
-    const height = integer(texture.height, "texture height", 0x7fffffff, 1)
-    if (width > maxTextureSize || height > maxTextureSize) {
-      throw new Error(
-        `A block texture exceeds the graphics device's ${maxTextureSize}-pixel texture limit.`,
-      )
-    }
-    const bytes = integer(texture.byteLength, "texture byte length")
-    if (bytes !== width * height * 4)
-      throw new Error("A block texture has an invalid RGBA byte length.")
-    if (typeof texture.repeat !== "boolean")
-      throw new Error("A block texture has an invalid repeat mode.")
-    consume(texture.bufferId, bytes)
-  }
-  let triangles = 0
-  for (const value of root.parts) {
-    const part = record(value, "mesh part")
-    const vertices = integer(part.vertexCount, "vertex count", 0xffffffff, 1)
-    const indices = integer(part.indexCount, "index count", 0x7fffffff, 1)
-    integer(part.textureIndex, "texture index", root.textures.length - 1)
-    integer(part.alphaMode, "alpha mode", 2)
-    if (indices % 3 !== 0) throw new Error("A preview mesh contains an incomplete triangle.")
-    if (!Array.isArray(part.buffers) || part.buffers.length !== BUFFER_FORMATS.length)
-      throw new Error("A preview mesh has an invalid buffer list.")
-    for (let attribute = 0; attribute < BUFFER_FORMATS.length; attribute++) {
-      const format = BUFFER_FORMATS[attribute]
-      const count = attribute === 4 ? indices : vertices
-      consume(part.buffers[attribute], count * format.size * format.array.BYTES_PER_ELEMENT)
-    }
-    triangles = integer(triangles + indices / 3, "accumulated triangle count")
-  }
-  if (triangles !== root.triangleCount)
-    throw new Error("The preview triangle count does not match its mesh parts.")
-  if (totalBytes !== byteLength) throw new Error("The preview has an unexpected payload length.")
 }
 
 const VERTEX_SOURCE = `#version 300 es
@@ -303,6 +239,11 @@ export class SchematicRenderer {
   private targets: Targets | null = null
   private model: Model | null = null
   private readonly staged = new Set<Model>()
+  private preparation: PreparedUploads | null = null
+  private stream: PreviewStream | null = null
+  private preparationPool: PreparationWorkerPool | null = null
+  // Context recovery replaces the renderer but must still drain its old IPC reads.
+  private static pendingPreparationReads: Promise<void> = Promise.resolve()
   private readonly yieldChannel = new MessageChannel()
   private readonly pendingYields: (() => void)[] = []
   private readonly observer: ResizeObserver
@@ -401,12 +342,84 @@ export class SchematicRenderer {
     readBuffer: ReadBuffer,
     isCurrent: () => boolean,
     onUploadProgress: (uploadedBytes: number, totalBytes: number) => void,
+    threadCount: number | null,
+    speedFirst: boolean,
+  ): Promise<PreviewMetadata> {
+    return this.loadModel(isCurrent, async (model, guard) => {
+      validateMetadata(metadata, this.maxTextureSize)
+      let uploadedBytes = 0
+      onUploadProgress(0, metadata.byteLength)
+      await this.appendModel(
+        model,
+        metadata,
+        readBuffer,
+        guard,
+        (bytes) => {
+          uploadedBytes += bytes
+          onUploadProgress(uploadedBytes, metadata.byteLength)
+        },
+        threadCount,
+        speedFirst,
+      )
+      return metadata
+    })
+  }
+
+  async loadStream(
+    nextBatch: (previousBatchId: number | null) => Promise<PreviewStreamEvent>,
+    readBuffer: (batchId: number, ranges: readonly PreviewReadRange[]) => Promise<ArrayBuffer>,
+    isCurrent: () => boolean,
+    onUploadProgress: (uploadedBytes: number) => void,
+    threadCount: number,
+    speedFirst: boolean,
+  ): Promise<PreviewMetadata> {
+    return this.loadModel(isCurrent, async (model, guard) => {
+      const stream = new PreviewStream()
+      this.stream = stream
+      const pool = new PreparationWorkerPool(createPreparationWorker)
+      this.preparationPool = pool
+      let uploadedBytes = 0
+      try {
+        onUploadProgress(0)
+        return await stream.consume(
+          nextBatch,
+          async (batch) => {
+            await this.appendModel(
+              model,
+              batch.metadata,
+              (ranges) => readBuffer(batch.batchId, ranges),
+              guard,
+              (bytes) => {
+                uploadedBytes += bytes
+                onUploadProgress(uploadedBytes)
+              },
+              threadCount,
+              speedFirst,
+              pool,
+            )
+          },
+          guard,
+          this.maxTextureSize,
+        )
+      } finally {
+        stream.cancel()
+        pool.dispose()
+        if (this.preparationPool === pool) this.preparationPool = null
+        if (this.stream === stream) this.stream = null
+      }
+    })
+  }
+
+  private async loadModel(
+    isCurrent: () => boolean,
+    upload: (model: Model, guard: () => void) => Promise<PreviewMetadata>,
   ): Promise<PreviewMetadata> {
     if (this.disposed || !isCurrent()) throw new Error("Cancelled")
     const generation = ++this.generation
     this.cancelStaged()
     const model: Model = {
       textures: [],
+      buffers: [],
       parts: [],
       gridVao: null,
       gridBuffer: null,
@@ -425,119 +438,11 @@ export class SchematicRenderer {
           "The graphics renderer is unavailable. Reopen the application to initialize the graphics device.",
         )
     }
-    const read: ReadBuffer = async (bufferId, offset, length) => {
-      guard()
-      const chunk = await readBuffer(bufferId, offset, length)
-      guard()
-      if (!(chunk instanceof ArrayBuffer) || chunk.byteLength !== length)
-        throw new Error("The preview contains an incomplete data segment.")
-      return chunk
-    }
     this.staged.add(model)
     const gl = this.gl
-    const budget: UploadBudget = { bytes: 0, started: performance.now() }
-    let totalBytes = 0
-    let uploadedBytes = 0
-    const reportUploaded = (bytes: number) => {
-      uploadedBytes += bytes
-      onUploadProgress(uploadedBytes, totalBytes)
-    }
     try {
       guard()
-      validateMetadata(metadata, this.maxTextureSize)
-      totalBytes = metadata.byteLength
-      onUploadProgress(0, totalBytes)
-      for (const source of metadata.textures) {
-        guard()
-        const texture = required(gl.createTexture(), "a block texture")
-        model.textures.push(texture)
-        gl.activeTexture(gl.TEXTURE0)
-        gl.bindTexture(gl.TEXTURE_2D, texture)
-        gl.texStorage2D(gl.TEXTURE_2D, 1, gl.SRGB8_ALPHA8, source.width, source.height)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
-        const wrap = source.repeat ? gl.REPEAT : gl.CLAMP_TO_EDGE
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap)
-        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4)
-        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
-        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
-        gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE)
-        this.checkGraphics("allocate a block texture")
-        await this.checkpoint(budget, 0, guard)
-        guard()
-        const rowBytes = source.width * 4
-        const tileWidth = Math.min(source.width, UPLOAD_CHUNK / 4)
-        const rowsPerChunk = Math.max(1, Math.floor(UPLOAD_CHUNK / rowBytes))
-        for (let row = 0; row < source.height; row += rowsPerChunk) {
-          const rows = Math.min(rowsPerChunk, source.height - row)
-          for (let column = 0; column < source.width; column += tileWidth) {
-            const width = Math.min(tileWidth, source.width - column)
-            const length = width * rows * 4
-            const pixels = new Uint8Array(
-              await read(source.bufferId, row * rowBytes + column * 4, length),
-            )
-            guard()
-            gl.activeTexture(gl.TEXTURE0)
-            gl.bindTexture(gl.TEXTURE_2D, texture)
-            gl.texSubImage2D(
-              gl.TEXTURE_2D,
-              0,
-              column,
-              row,
-              width,
-              rows,
-              gl.RGBA,
-              gl.UNSIGNED_BYTE,
-              pixels,
-            )
-            this.checkGraphics("upload a block texture")
-            reportUploaded(pixels.byteLength)
-            await this.checkpoint(budget, length, guard)
-          }
-        }
-        this.checkGraphics("upload a block texture")
-      }
-      for (const source of metadata.parts) {
-        guard()
-        const part: Part = {
-          vao: required(gl.createVertexArray(), "a mesh vertex array"),
-          buffers: [],
-          texture: model.textures[source.textureIndex],
-          count: source.indexCount,
-          alphaMode: source.alphaMode,
-        }
-        model.parts.push(part)
-        for (let attribute = 0; attribute < BUFFER_FORMATS.length; attribute++) {
-          const format = BUFFER_FORMATS[attribute]
-          const isIndex = attribute === 4
-          const count = isIndex ? source.indexCount : source.vertexCount
-          const target = isIndex ? gl.ELEMENT_ARRAY_BUFFER : gl.ARRAY_BUFFER
-          const gpu = required(gl.createBuffer(), "a mesh buffer")
-          part.buffers.push(gpu)
-          await this.uploadBuffer(
-            part.vao,
-            gpu,
-            target,
-            source.buffers[attribute],
-            count,
-            format,
-            source.vertexCount,
-            read,
-            budget,
-            guard,
-            reportUploaded,
-          )
-          guard()
-          if (!isIndex) {
-            const type = attribute === 1 ? gl.BYTE : attribute === 3 ? gl.UNSIGNED_BYTE : gl.FLOAT
-            gl.bindVertexArray(part.vao)
-            gl.bindBuffer(gl.ARRAY_BUFFER, gpu)
-            gl.enableVertexAttribArray(attribute)
-            gl.vertexAttribPointer(attribute, format.size, type, format.normalized, 0, 0)
-          }
-        }
-      }
+      const metadata = await upload(model, guard)
       guard()
       this.buildGrid(model, metadata)
       this.checkGraphics("upload the schematic")
@@ -565,6 +470,182 @@ export class SchematicRenderer {
       if (failure.message !== "Cancelled") this.onError(failure.message)
       throw failure
     }
+  }
+
+  private async appendModel(
+    model: Model,
+    metadata: PreviewMetadata,
+    readBuffer: ReadBuffer,
+    guard: () => void,
+    reportUploaded: (bytes: number) => void,
+    threadCount: number | null,
+    speedFirst: boolean,
+    pool?: PreparationWorkerPool,
+  ): Promise<void> {
+    const layout = buildUploadLayout(metadata, threadCount !== null)
+    const pages = layout.pages[Symbol.iterator]()
+    const arenaBuffers: (WebGLBuffer[] | undefined)[] = []
+    const firstTexture = model.textures.length
+    const gl = this.gl
+    const budget: UploadBudget = { bytes: 0, started: performance.now() }
+    let preparation: PreparedUploads | null = null
+    try {
+      guard()
+      if (threadCount !== null) {
+        preparation = new PreparedUploads(
+          pages,
+          (page) => readBuffer(page.slices),
+          threadCount,
+          speedFirst,
+          guard,
+          pool ? (onError) => pool.acquire(onError) : createPreparationWorker,
+          SchematicRenderer.pendingPreparationReads,
+        )
+        this.preparation = preparation
+        SchematicRenderer.pendingPreparationReads = preparation.drained
+      } else {
+        await SchematicRenderer.pendingPreparationReads
+        guard()
+      }
+      while (true) {
+        let page: UploadPage
+        let buffer: ArrayBuffer
+        if (preparation) {
+          const prepared = await preparation.take()
+          if (!prepared) break
+          ;({ page, buffer } = prepared)
+        } else {
+          const next = pages.next()
+          if (next.done) break
+          page = next.value
+          const pendingRead = readBuffer(page.slices)
+          SchematicRenderer.pendingPreparationReads = pendingRead.then(
+            () => {},
+            () => {},
+          )
+          buffer = await pendingRead
+          guard()
+          validateUpload(buffer, page)
+        }
+        for (const slice of page.slices) {
+          guard()
+          const target = slice.target
+          if (target.kind === "texture") {
+            const source = metadata.textures[target.textureIndex]
+            let texture = model.textures[firstTexture + target.textureIndex]
+            // Texture pages are emitted in source order, before any geometry pages.
+            if (!texture) {
+              texture = required(gl.createTexture(), "a block texture")
+              model.textures.push(texture)
+              gl.activeTexture(gl.TEXTURE0)
+              gl.bindTexture(gl.TEXTURE_2D, texture)
+              gl.texStorage2D(gl.TEXTURE_2D, 1, gl.SRGB8_ALPHA8, source.width, source.height)
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+              const wrap = source.repeat ? gl.REPEAT : gl.CLAMP_TO_EDGE
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap)
+              gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap)
+              gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4)
+              gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+              gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
+              gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE)
+              this.checkGraphics("allocate a block texture")
+              await this.checkpoint(budget, 0, guard)
+            }
+            const pixels = new Uint8Array(buffer, slice.pageOffset, slice.length)
+            gl.activeTexture(gl.TEXTURE0)
+            gl.bindTexture(gl.TEXTURE_2D, texture)
+            gl.texSubImage2D(
+              gl.TEXTURE_2D,
+              0,
+              target.x,
+              target.y,
+              target.width,
+              target.height,
+              gl.RGBA,
+              gl.UNSIGNED_BYTE,
+              pixels,
+            )
+            this.checkGraphics("upload a block texture")
+          } else {
+            const partLayout = layout.parts[target.partIndex]
+            let buffers = arenaBuffers[partLayout.arenaIndex]
+            if (!buffers) {
+              buffers = []
+              arenaBuffers[partLayout.arenaIndex] = buffers
+              for (let attribute = 0; attribute < 5; attribute++) {
+                gl.bindVertexArray(null)
+                guard()
+                const gpu = required(gl.createBuffer(), "a mesh buffer")
+                buffers.push(gpu)
+                model.buffers.push(gpu)
+                const bindTarget = attribute === 4 ? gl.ELEMENT_ARRAY_BUFFER : gl.ARRAY_BUFFER
+                gl.bindBuffer(bindTarget, gpu)
+                gl.bufferData(
+                  bindTarget,
+                  layout.arenas[partLayout.arenaIndex].byteLengths[attribute],
+                  gl.STATIC_DRAW,
+                )
+                this.checkGraphics("allocate a mesh buffer")
+                await this.checkpoint(budget, 0, guard)
+              }
+            }
+            let part = model.parts[model.parts.length - 1]
+            const expected = metadata.parts[target.partIndex]
+            if (target.attribute === 0 && slice.offset === 0) {
+              part = {
+                vao: required(gl.createVertexArray(), "a mesh vertex array"),
+                indexByteOffset: partLayout.offsets[4],
+                texture: model.textures[expected.textureIndex],
+                count: expected.indexCount,
+                alphaMode: expected.alphaMode,
+              }
+              model.parts.push(part)
+              gl.bindVertexArray(part.vao)
+              for (let attribute = 0; attribute < 4; attribute++) {
+                const format = BUFFER_FORMATS[attribute]
+                const type =
+                  attribute === 1 ? gl.BYTE : attribute === 3 ? gl.UNSIGNED_BYTE : gl.FLOAT
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffers[attribute])
+                gl.enableVertexAttribArray(attribute)
+                gl.vertexAttribPointer(
+                  attribute,
+                  format.size,
+                  type,
+                  format.normalized,
+                  0,
+                  partLayout.offsets[attribute],
+                )
+              }
+              gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers[4])
+              this.checkGraphics("configure a mesh vertex array")
+            }
+            const attribute = target.attribute
+            const bindTarget = attribute === 4 ? gl.ELEMENT_ARRAY_BUFFER : gl.ARRAY_BUFFER
+            const format = BUFFER_FORMATS[attribute]
+            const values = new format.array(
+              buffer,
+              slice.pageOffset,
+              slice.length / format.array.BYTES_PER_ELEMENT,
+            )
+            gl.bindVertexArray(part.vao)
+            gl.bindBuffer(bindTarget, buffers[attribute])
+            gl.bufferSubData(bindTarget, target.gpuOffset, values)
+            this.checkGraphics("upload a mesh buffer")
+          }
+          reportUploaded(slice.length)
+          await this.checkpoint(budget, slice.length, guard)
+        }
+        preparation?.release()
+      }
+      guard()
+    } finally {
+      preparation?.stop()
+      if (this.preparation === preparation) this.preparation = null
+    }
+    // Native storage remains leased until every read from this batch has settled.
+    if (preparation) await preparation.drained
+    guard()
   }
 
   clear(): void {
@@ -693,56 +774,6 @@ export class SchematicRenderer {
       if (fullscreen) gl.deleteVertexArray(fullscreen)
       throw error
     }
-  }
-
-  private async uploadBuffer(
-    vao: WebGLVertexArrayObject,
-    gpu: WebGLBuffer,
-    target: number,
-    bufferId: number,
-    count: number,
-    format: (typeof BUFFER_FORMATS)[number],
-    vertexCount: number,
-    read: ReadBuffer,
-    budget: UploadBudget,
-    guard: () => void,
-    reportUploaded: (bytes: number) => void,
-  ): Promise<void> {
-    guard()
-    const gl = this.gl
-    const stride = format.size * format.array.BYTES_PER_ELEMENT
-    const byteLength = count * stride
-    gl.bindVertexArray(vao)
-    gl.bindBuffer(target, gpu)
-    gl.bufferData(target, byteLength, gl.STATIC_DRAW)
-    this.checkGraphics("allocate a mesh buffer")
-    await this.checkpoint(budget, 0, guard)
-    const chunkSize = Math.floor(UPLOAD_CHUNK / stride) * stride
-    for (let offset = 0; offset < byteLength; offset += chunkSize) {
-      const length = Math.min(chunkSize, byteLength - offset)
-      const values = new format.array(await read(bufferId, offset, length))
-      guard()
-      if (values instanceof Uint32Array) {
-        for (const index of values) {
-          if (index >= vertexCount)
-            throw new Error("A preview mesh contains an invalid vertex index.")
-        }
-      } else if (values instanceof Float32Array) {
-        for (const value of values) {
-          if (!Number.isFinite(value))
-            throw new Error("A preview mesh contains invalid coordinates.")
-        }
-      }
-      // A frame or another load may have rebound every GL target while yielding.
-      gl.bindVertexArray(vao)
-      gl.bindBuffer(target, gpu)
-      gl.bufferSubData(target, offset, values)
-      this.checkGraphics("upload a mesh buffer")
-      reportUploaded(values.byteLength)
-      await this.checkpoint(budget, length, guard)
-    }
-    guard()
-    this.checkGraphics("upload a mesh buffer")
   }
 
   private async checkpoint(budget: UploadBudget, bytes: number, guard: () => void): Promise<void> {
@@ -1036,7 +1067,7 @@ export class SchematicRenderer {
     gl.uniform1i(pipeline.alphaMode, part.alphaMode)
     gl.bindTexture(gl.TEXTURE_2D, part.texture)
     gl.bindVertexArray(part.vao)
-    gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_INT, 0)
+    gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_INT, part.indexByteOffset)
   }
 
   private invalidate(): void {
@@ -1070,11 +1101,9 @@ export class SchematicRenderer {
     if (!model || model.released) return
     model.released = true
     const gl = this.gl
-    for (const part of model.parts) {
-      gl.deleteVertexArray(part.vao)
-      for (const buffer of part.buffers) gl.deleteBuffer(buffer)
-      part.buffers.length = 0
-    }
+    for (const part of model.parts) gl.deleteVertexArray(part.vao)
+    for (const buffer of model.buffers) gl.deleteBuffer(buffer)
+    model.buffers.length = 0
     for (const texture of model.textures) gl.deleteTexture(texture)
     gl.deleteVertexArray(model.gridVao)
     gl.deleteBuffer(model.gridBuffer)
@@ -1085,6 +1114,12 @@ export class SchematicRenderer {
   }
 
   private cancelStaged(): void {
+    this.stream?.cancel()
+    this.stream = null
+    this.preparation?.stop()
+    this.preparation = null
+    this.preparationPool?.dispose()
+    this.preparationPool = null
     for (const model of this.staged) this.releaseModel(model)
     this.staged.clear()
     while (this.pendingYields.length) this.pendingYields.shift()!()

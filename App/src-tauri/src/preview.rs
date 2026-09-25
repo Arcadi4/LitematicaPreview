@@ -3,8 +3,8 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use litematica_preview_native::PreviewOptions;
@@ -20,6 +20,9 @@ pub struct LoadOptions {
     memory_limit_mb: Option<u16>,
     #[serde(deserialize_with = "required_nullable")]
     chunk_size: Option<u16>,
+    #[serde(deserialize_with = "required_nullable")]
+    thread_count: Option<u8>,
+    speed_first: bool,
 }
 
 fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
@@ -35,9 +38,165 @@ impl LoadOptions {
         let options = PreviewOptions {
             memory_limit_mb: self.memory_limit_mb,
             chunk_size: self.chunk_size,
+            thread_count: self.thread_count,
+            speed_first: self.speed_first,
         };
         options.validate()?;
         Ok(options)
+    }
+}
+
+struct QueuedBatch {
+    batch: protocol::Batch,
+    payload: Arc<protocol::Payload>,
+}
+
+#[derive(Default)]
+struct StreamState {
+    queue: std::collections::VecDeque<QueuedBatch>,
+    leased: Option<QueuedBatch>,
+    next_id: u64,
+    complete: Option<protocol::Metadata>,
+    error: Option<String>,
+    waiting: bool,
+    ended: bool,
+}
+
+struct StreamQueue {
+    state: Mutex<StreamState>,
+    changed: Condvar,
+    cancelled: AtomicBool,
+    capacity: usize,
+}
+
+impl StreamQueue {
+    fn new(options: PreviewOptions) -> Self {
+        Self {
+            state: Mutex::new(StreamState::default()),
+            changed: Condvar::new(),
+            cancelled: AtomicBool::new(false),
+            capacity: if options.speed_first {
+                usize::from(options.thread_count.unwrap_or(2))
+            } else {
+                2
+            },
+        }
+    }
+
+    fn publish(&self, texture_offset: usize, payload: protocol::Payload) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "The preview stream is unavailable.")?;
+        while state.queue.len() + usize::from(state.leased.is_some()) >= self.capacity
+            && state.error.is_none()
+        {
+            // One incoming batch stays receiver-owned while the admitted window
+            // is full. Waiting releases the lock needed by upload reads.
+            state = self
+                .changed
+                .wait(state)
+                .map_err(|_| "The preview stream is unavailable.")?;
+        }
+        if let Some(error) = &state.error {
+            return Err(error.clone());
+        }
+        if state.complete.is_some() || state.ended {
+            return Err("The preview stream has ended.".into());
+        }
+        state.next_id += 1;
+        let batch = protocol::Batch {
+            batch_id: state.next_id,
+            texture_offset,
+            metadata: payload.metadata.clone(),
+        };
+        state.queue.push_back(QueuedBatch {
+            batch,
+            payload: Arc::new(payload),
+        });
+        self.changed.notify_all();
+        Ok(())
+    }
+
+    fn finish(&self, metadata: protocol::Metadata) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "The preview stream is unavailable.")?;
+        if let Some(error) = &state.error {
+            return Err(error.clone());
+        }
+        state.complete = Some(metadata);
+        self.changed.notify_all();
+        Ok(())
+    }
+
+    fn fail(&self, error: String) {
+        self.cancelled.store(true, Ordering::Release);
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.queue.clear();
+        state.leased = None;
+        state.complete = None;
+        state.error.get_or_insert(error);
+        self.changed.notify_all();
+    }
+
+    fn next(&self, previous: Option<u64>) -> Result<protocol::StreamEvent, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "The preview stream is unavailable.")?;
+        if let Some(error) = &state.error {
+            return Err(error.clone());
+        }
+        if state.waiting
+            || state.ended
+            || state.leased.as_ref().map(|value| value.batch.batch_id) != previous
+        {
+            return Err("Invalid or duplicate preview batch acknowledgement.".into());
+        }
+        state.leased = None;
+        state.waiting = true;
+        self.changed.notify_all();
+        loop {
+            if let Some(error) = state.error.clone() {
+                state.waiting = false;
+                return Err(error);
+            }
+            if let Some(batch) = state.queue.pop_front() {
+                let event = protocol::StreamEvent::Batch {
+                    batch: batch.batch.clone(),
+                };
+                state.leased = Some(batch);
+                state.waiting = false;
+                return Ok(event);
+            }
+            if let Some(metadata) = state.complete.take() {
+                state.waiting = false;
+                state.ended = true;
+                return Ok(protocol::StreamEvent::Complete { metadata });
+            }
+            state = self
+                .changed
+                .wait(state)
+                .map_err(|_| "The preview stream is unavailable.")?;
+        }
+    }
+
+    fn payload(&self, batch_id: u64) -> Result<Arc<protocol::Payload>, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "The preview stream is unavailable.")?;
+        if let Some(error) = &state.error {
+            return Err(error.clone());
+        }
+        state
+            .leased
+            .as_ref()
+            .filter(|value| value.batch.batch_id == batch_id)
+            .map(|value| Arc::clone(&value.payload))
+            .ok_or_else(|| "The preview batch is not leased or has been released.".into())
     }
 }
 
@@ -47,10 +206,130 @@ pub struct PreviewWorker {
     active_request: AtomicU64,
     worker_pid: AtomicU32,
     process: Mutex<Option<DecoderProcess>>,
-    payload: Mutex<Option<(u64, protocol::Payload)>>,
+    payload: Mutex<Option<(u64, Arc<protocol::Payload>)>>,
+    stream: Mutex<Option<(u64, Arc<StreamQueue>)>>,
 }
 
 impl PreviewWorker {
+    pub fn begin_stream(&self, request_id: u64, options: PreviewOptions) -> Result<(), String> {
+        options.validate()?;
+        let mut stream = self
+            .stream
+            .lock()
+            .map_err(|_| "The preview stream is unavailable.")?;
+        self.ensure_current(request_id)?;
+        if stream.as_ref().is_some_and(|(id, _)| *id == request_id) {
+            return Err("The preview stream has already started.".into());
+        }
+        if let Some((_, previous)) = stream.take() {
+            previous.fail("Cancelled".into());
+        }
+        *stream = Some((request_id, Arc::new(StreamQueue::new(options))));
+        self.active_request.store(request_id, Ordering::Release);
+        Ok(())
+    }
+
+    fn stream(&self, request_id: u64) -> Result<Arc<StreamQueue>, String> {
+        let stream = self
+            .stream
+            .lock()
+            .map_err(|_| "The preview stream is unavailable.")?;
+        self.ensure_current(request_id)?;
+        stream
+            .as_ref()
+            .filter(|(id, _)| *id == request_id)
+            .map(|(_, stream)| Arc::clone(stream))
+            .ok_or_else(|| "The preview stream has been released.".into())
+    }
+
+    pub fn fail_stream(&self, request_id: u64, error: String) {
+        if let Ok(stream) = self.stream(request_id) {
+            stream.fail(error);
+        }
+    }
+
+    pub fn next(
+        &self,
+        request_id: u64,
+        previous_batch_id: Option<u64>,
+    ) -> Result<protocol::StreamEvent, String> {
+        let stream = self.stream(request_id)?;
+        let event = stream.next(previous_batch_id)?;
+        self.ensure_current(request_id)?;
+        if stream.cancelled.load(Ordering::Acquire) {
+            return Err("Cancelled".into());
+        }
+        Ok(event)
+    }
+
+    pub fn load_stream(
+        &self,
+        path: &Path,
+        pack_path: &Path,
+        request_id: u64,
+        options: PreviewOptions,
+        on_progress: impl FnMut(u64, u64),
+    ) -> Result<(), String> {
+        options.validate()?;
+        let stream = self.stream(request_id)?;
+        let current =
+            || self.ensure_current(request_id).is_ok() && !stream.cancelled.load(Ordering::Acquire);
+        let result = (|| {
+            let mut process = self
+                .process
+                .lock()
+                .map_err(|_| "The preview worker is unavailable. Restart the app.".to_string())?;
+            if !current() {
+                return Err("Cancelled".into());
+            }
+            if process
+                .as_ref()
+                .is_some_and(|process| process.memory_limit_mb() != options.memory_limit_mb)
+            {
+                self.worker_pid.store(0, Ordering::Release);
+                process.take();
+            }
+            if process.is_none() {
+                *process = Some(DecoderProcess::spawn(options.memory_limit_mb)?);
+            }
+            self.worker_pid
+                .store(process.as_ref().unwrap().pid(), Ordering::Release);
+            if !current() {
+                return Err("Cancelled".into());
+            }
+            let result = process
+                .as_mut()
+                .ok_or("The preview worker is unavailable.")?
+                .load_stream(
+                    path,
+                    pack_path,
+                    options.chunk_size,
+                    options.thread_count,
+                    options.speed_first,
+                    current,
+                    on_progress,
+                    |offset, payload| stream.publish(offset, payload),
+                );
+            match result {
+                Ok(result) => result,
+                Err(error) => {
+                    // Poison and wake the queue before dropping/killing a broken
+                    // decoder; a consumer must not wait for process teardown.
+                    stream.fail(error.clone());
+                    self.worker_pid.store(0, Ordering::Release);
+                    process.take();
+                    Err(error)
+                }
+            }
+        })();
+        match result {
+            Ok(metadata) => stream.finish(metadata),
+            Err(error) => {
+                stream.fail(error.clone());
+                Err(error)
+            }
+        }
+    }
     pub fn begin_session(&self) -> u64 {
         let request_id = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         self.active_request.store(0, Ordering::Release);
@@ -128,17 +407,29 @@ impl PreviewWorker {
                 path,
                 pack_path,
                 options.chunk_size,
+                options.thread_count,
+                options.speed_first,
                 || self.ensure_current(request_id).is_ok(),
                 on_progress,
             );
         let payload = match result {
             Ok(Err(error)) => {
-                self.active_request.store(0, Ordering::Release);
+                let _ = self.active_request.compare_exchange(
+                    request_id,
+                    0,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
                 return Err(error);
             }
             Ok(Ok(payload)) => payload,
             Err(error) => {
-                self.active_request.store(0, Ordering::Release);
+                let _ = self.active_request.compare_exchange(
+                    request_id,
+                    0,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
                 self.worker_pid.store(0, Ordering::Release);
                 process.take();
                 return Err(error);
@@ -150,26 +441,50 @@ impl PreviewWorker {
     pub fn read(
         &self,
         request_id: u64,
-        buffer_id: usize,
-        offset: usize,
-        length: usize,
+        batch_id: Option<u64>,
+        ranges: &[protocol::ReadRange],
     ) -> Result<Vec<u8>, String> {
-        let stored = self
-            .payload
-            .lock()
-            .map_err(|_| "The preview buffers are unavailable.")?;
+        let stream = batch_id.map(|_| self.stream(request_id)).transpose()?;
+        let payload = if let Some(batch_id) = batch_id {
+            stream.as_ref().unwrap().payload(batch_id)?
+        } else {
+            let stored = self
+                .payload
+                .lock()
+                .map_err(|_| "The preview buffers are unavailable.")?;
+            self.ensure_current(request_id)?;
+            let (_, payload) = stored
+                .as_ref()
+                .filter(|(id, _)| *id == request_id)
+                .ok_or("The preview buffers have been released.")?;
+            Arc::clone(payload)
+        };
+        // Copy packed ranges without holding the publication lock.
+        let bytes = payload.read_ranges(ranges)?;
         self.ensure_current(request_id)?;
-        let (_, payload) = stored
+        if stream
             .as_ref()
-            .filter(|(id, _)| *id == request_id)
-            .ok_or("The preview buffers have been released.")?;
-        payload.read(buffer_id, offset, length)
+            .is_some_and(|stream| stream.cancelled.load(Ordering::Acquire))
+        {
+            return Err("Cancelled".into());
+        }
+        Ok(bytes)
     }
 
     pub fn release(&self, request_id: u64) {
-        if self.active_request.load(Ordering::Acquire) == request_id {
-            self.active_request.store(0, Ordering::Release);
+        if let Ok(mut stored) = self.stream.lock() {
+            if stored.as_ref().is_some_and(|(id, _)| *id == request_id) {
+                if let Some((_, stream)) = stored.take() {
+                    stream.fail("Cancelled".into());
+                }
+            }
         }
+        let _ = self.active_request.compare_exchange(
+            request_id,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
         // A stale upload's finally block must never release the newer model.
         if let Ok(mut stored) = self.payload.lock() {
             if stored.as_ref().is_some_and(|(id, _)| *id == request_id) {
@@ -179,6 +494,13 @@ impl PreviewWorker {
     }
 
     fn clear_older_payloads(&self, request_id: u64) {
+        if let Ok(mut stored) = self.stream.lock() {
+            if stored.as_ref().is_some_and(|(id, _)| *id < request_id) {
+                if let Some((_, stream)) = stored.take() {
+                    stream.fail("Cancelled".into());
+                }
+            }
+        }
         if let Ok(mut stored) = self.payload.lock() {
             if stored.as_ref().is_some_and(|(id, _)| *id < request_id) {
                 stored.take();
@@ -197,7 +519,7 @@ impl PreviewWorker {
             .map_err(|_| "The preview buffers are unavailable.")?;
         self.ensure_current(request_id)?;
         let metadata = payload.metadata.clone();
-        *stored = Some((request_id, payload));
+        *stored = Some((request_id, Arc::new(payload)));
         Ok(metadata)
     }
 }
@@ -205,6 +527,258 @@ impl PreviewWorker {
 #[cfg(test)]
 mod tests {
     use super::{read_bytes, LoadOptions, PreviewOptions, PreviewWorker};
+
+    fn range(buffer_id: usize, offset: usize, length: usize) -> crate::protocol::ReadRange {
+        crate::protocol::ReadRange {
+            buffer_id,
+            offset,
+            length,
+        }
+    }
+
+    fn batch_id(event: crate::protocol::StreamEvent) -> u64 {
+        match event {
+            crate::protocol::StreamEvent::Batch { batch } => batch.batch_id,
+            _ => panic!("Expected a batch"),
+        }
+    }
+
+    #[test]
+    fn streamed_protocol_overlaps_upload_with_bounded_backpressure() {
+        use std::io::Write;
+        use std::net::{TcpListener, TcpStream};
+        use std::sync::{mpsc, Arc};
+        use std::time::Duration;
+
+        let worker = Arc::new(PreviewWorker::default());
+        worker.advance(1);
+        worker.begin_stream(1, PreviewOptions::default()).unwrap();
+        assert!(worker.begin_stream(1, PreviewOptions::default()).is_err());
+        let queue = worker.stream(1).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut sender = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut receiver, _) = listener.accept().unwrap();
+        sender
+            .write_all(&crate::protocol::tests::stream_fixture(4))
+            .unwrap();
+        let (arriving, arrivals) = mpsc::channel();
+        let (published, publications) = mpsc::channel();
+        let (done, finished) = mpsc::channel();
+        let producer = std::thread::spawn(move || {
+            let mut id = 0;
+            let result = crate::protocol::receive_stream(
+                &mut receiver,
+                || true,
+                |_, _| {},
+                |offset, payload| {
+                    id += 1;
+                    arriving.send(id).unwrap();
+                    queue.publish(offset, payload)?;
+                    published.send(id).unwrap();
+                    Ok(())
+                },
+            )
+            .unwrap()
+            .unwrap();
+            queue.finish(result).unwrap();
+            done.send(()).unwrap();
+        });
+        let timeout = Duration::from_secs(5);
+        assert_eq!(arrivals.recv_timeout(timeout).unwrap(), 1);
+        assert_eq!(publications.recv_timeout(timeout).unwrap(), 1);
+        assert_eq!(batch_id(worker.next(1, None).unwrap()), 1);
+        assert_eq!(
+            worker.read(1, Some(1), &[range(0, 0, 4)]).unwrap(),
+            [255; 4]
+        );
+        assert_eq!(arrivals.recv_timeout(timeout).unwrap(), 2);
+        assert_eq!(publications.recv_timeout(timeout).unwrap(), 2);
+        assert_eq!(arrivals.recv_timeout(timeout).unwrap(), 3);
+        assert!(matches!(
+            publications.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            finished.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(worker.read(1, Some(2), &[range(0, 0, 4)]).is_err());
+        assert!(worker.next(1, None).is_err());
+        assert!(worker.next(1, Some(99)).is_err());
+        let first = Arc::downgrade(&worker.stream(1).unwrap().payload(1).unwrap());
+        assert_eq!(batch_id(worker.next(1, Some(1)).unwrap()), 2);
+        assert!(first.upgrade().is_none());
+        assert!(worker.read(1, Some(1), &[range(0, 0, 4)]).is_err());
+        assert!(worker.next(1, Some(1)).is_err());
+        assert_eq!(publications.recv_timeout(timeout).unwrap(), 3);
+        assert_eq!(arrivals.recv_timeout(timeout).unwrap(), 4);
+        assert_eq!(batch_id(worker.next(1, Some(2)).unwrap()), 3);
+        assert_eq!(publications.recv_timeout(timeout).unwrap(), 4);
+        assert_eq!(batch_id(worker.next(1, Some(3)).unwrap()), 4);
+        let crate::protocol::StreamEvent::Complete { metadata } = worker.next(1, Some(4)).unwrap()
+        else {
+            panic!("Expected completion");
+        };
+        assert_eq!(metadata.triangle_count, 4);
+        assert_eq!(metadata.textures.len(), 1);
+        assert_eq!(metadata.byte_length, 4 + 4 * 39);
+        assert!(worker.next(1, None).is_err());
+        finished.recv_timeout(timeout).unwrap();
+        producer.join().unwrap();
+        assert_eq!(worker.active_request.load(super::Ordering::Acquire), 1);
+        worker.release(1);
+        assert_eq!(worker.active_request.load(super::Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn late_failure_drops_queued_payloads_and_wakes_blocked_producer() {
+        use std::sync::{mpsc, Arc};
+        use std::time::Duration;
+        let worker = PreviewWorker::default();
+        worker.advance(1);
+        worker.begin_stream(1, PreviewOptions::default()).unwrap();
+        let queue = worker.stream(1).unwrap();
+        queue
+            .publish(0, crate::protocol::tests::chunk_payload())
+            .unwrap();
+        assert_eq!(batch_id(worker.next(1, None).unwrap()), 1);
+        queue
+            .publish(1, crate::protocol::tests::chunk_payload())
+            .unwrap();
+        let leased = Arc::downgrade(&queue.payload(1).unwrap());
+        let queued = Arc::downgrade(
+            &queue
+                .state
+                .lock()
+                .expect("Queue must not be poisoned")
+                .queue[0]
+                .payload,
+        );
+        let (started, ready) = mpsc::channel();
+        let producer_queue = Arc::clone(&queue);
+        let producer = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            producer_queue.publish(1, crate::protocol::tests::chunk_payload())
+        });
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        worker.fail_stream(1, "Late decoder failure".into());
+        assert_eq!(
+            producer.join().unwrap().unwrap_err(),
+            "Late decoder failure"
+        );
+        assert!(leased.upgrade().is_none());
+        assert!(queued.upgrade().is_none());
+        assert!(worker.read(1, Some(1), &[range(0, 0, 4)]).is_err());
+        assert!(matches!(worker.next(1, Some(1)), Err(error) if error == "Late decoder failure"));
+        assert_eq!(worker.active_request.load(super::Ordering::Acquire), 1);
+        worker.release(1);
+        assert_eq!(worker.active_request.load(super::Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn cancellation_and_generation_changes_wake_waiters_without_poisoning_new_sessions() {
+        use std::sync::{mpsc, Arc};
+        use std::time::Duration;
+        for advance in [false, true] {
+            let worker = Arc::new(PreviewWorker::default());
+            worker.advance(1);
+            worker.begin_stream(1, PreviewOptions::default()).unwrap();
+            let (started, ready) = mpsc::channel();
+            let waiting = Arc::clone(&worker);
+            let consumer = std::thread::spawn(move || {
+                started.send(()).unwrap();
+                waiting.next(1, None)
+            });
+            ready.recv_timeout(Duration::from_secs(5)).unwrap();
+            if advance {
+                worker.advance(2);
+            } else {
+                worker.release(1);
+            }
+            assert!(consumer.join().unwrap().is_err());
+            worker.advance(2);
+            worker.begin_stream(2, PreviewOptions::default()).unwrap();
+            worker.fail_stream(1, "Stale failure".into());
+            worker.release(1);
+            worker
+                .stream(2)
+                .unwrap()
+                .publish(0, crate::protocol::tests::chunk_payload())
+                .unwrap();
+            assert_eq!(batch_id(worker.next(2, None).unwrap()), 1);
+            worker.release(2);
+        }
+    }
+
+    #[test]
+    fn release_unblocks_a_producer_and_late_transport_failure_revokes_a_lease() {
+        use std::io::Write;
+        use std::net::{Shutdown, TcpListener, TcpStream};
+        use std::sync::{mpsc, Arc};
+        use std::time::Duration;
+
+        let worker = PreviewWorker::default();
+        worker.advance(1);
+        worker.begin_stream(1, PreviewOptions::default()).unwrap();
+        let queue = worker.stream(1).unwrap();
+        queue
+            .publish(0, crate::protocol::tests::chunk_payload())
+            .unwrap();
+        queue
+            .publish(1, crate::protocol::tests::chunk_payload())
+            .unwrap();
+        let pending = Arc::clone(&queue);
+        let (entering, entered) = mpsc::channel();
+        let producer = std::thread::spawn(move || {
+            entering.send(()).unwrap();
+            pending.publish(1, crate::protocol::tests::chunk_payload())
+        });
+        entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        worker.release(1);
+        assert!(producer.join().unwrap().is_err());
+        assert!(queue.cancelled.load(super::Ordering::Acquire));
+
+        worker.advance(2);
+        worker.begin_stream(2, PreviewOptions::default()).unwrap();
+        let queue = worker.stream(2).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut sender = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut receiver, _) = listener.accept().unwrap();
+        let mut truncated = crate::protocol::tests::stream_fixture(1);
+        truncated.pop();
+        sender.write_all(&truncated).unwrap();
+        sender.shutdown(Shutdown::Write).unwrap();
+        let (resume, wait) = mpsc::channel();
+        let producer = std::thread::spawn(move || {
+            let result = crate::protocol::receive_stream(
+                &mut receiver,
+                || true,
+                |_, _| {},
+                |offset, payload| {
+                    queue.publish(offset, payload)?;
+                    wait.recv_timeout(Duration::from_secs(5)).unwrap();
+                    Ok(())
+                },
+            );
+            let error = match result {
+                Err(error) => error.to_string(),
+                _ => panic!("Truncated terminator was accepted"),
+            };
+            queue.fail(error);
+        });
+        assert_eq!(batch_id(worker.next(2, None).unwrap()), 1);
+        assert_eq!(
+            worker.read(2, Some(1), &[range(0, 0, 4)]).unwrap(),
+            [255; 4]
+        );
+        let leased = Arc::downgrade(&worker.stream(2).unwrap().payload(1).unwrap());
+        resume.send(()).unwrap();
+        producer.join().unwrap();
+        assert!(leased.upgrade().is_none());
+        assert!(worker.next(2, Some(1)).is_err());
+        assert!(worker.read(2, Some(1), &[range(0, 0, 4)]).is_err());
+        worker.release(2);
+    }
 
     #[test]
     fn reload_and_delayed_requests_cannot_revive_stale_work() {
@@ -232,46 +806,130 @@ mod tests {
     fn preview_options_require_explicit_nullable_integer_settings() {
         use serde_json::json;
 
+        let valid = json!({"memoryLimitMB": 2048, "chunkSize": 64, "threadCount": null, "speedFirst": false});
         assert_eq!(
-            options(json!({"memoryLimitMB": 2048, "chunkSize": 64})).unwrap(),
+            options(valid.clone()).unwrap(),
             PreviewOptions {
                 memory_limit_mb: Some(2048),
                 ..PreviewOptions::default()
             }
         );
         assert_eq!(
-            options(json!({"memoryLimitMB": null, "chunkSize": null})).unwrap(),
+            options(json!({"memoryLimitMB": null, "chunkSize": null, "threadCount": null, "speedFirst": false}))
+                .unwrap(),
             PreviewOptions {
                 memory_limit_mb: None,
                 chunk_size: None,
+                thread_count: None,
+                speed_first: false,
             }
         );
-        for value in [
-            json!({}),
-            json!({"memoryLimitMB": 2048}),
-            json!({"chunkSize": 64}),
-            json!({"memoryLimitGiB": 2, "chunkSize": 64}),
-            json!({"memoryLimitMB": 2047, "chunkSize": 64}),
-            json!({"memoryLimitMB": 8193, "chunkSize": 64}),
-            json!({"memoryLimitMB": 2048.5, "chunkSize": 64}),
-            json!({"memoryLimitMB": "2048", "chunkSize": 64}),
-            json!({"memoryLimitMB": 2048, "chunkSize": 48}),
-            json!({"memoryLimitMB": 2048, "chunkSize": 64.5}),
-            json!({"memoryLimitMB": 2048, "chunkSize": 64, "extra": true}),
+        for field in ["memoryLimitMB", "chunkSize", "threadCount", "speedFirst"] {
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(options(missing).is_err());
+        }
+        for (field, value) in [
+            ("memoryLimitMB", json!(2047)),
+            ("memoryLimitMB", json!(8193)),
+            ("memoryLimitMB", json!(2048.5)),
+            ("chunkSize", json!(48)),
+            ("chunkSize", json!(64.5)),
+            ("threadCount", json!(2.5)),
+            ("threadCount", json!("2")),
+            ("speedFirst", json!(1)),
+            ("speedFirst", json!(null)),
+            ("extra", json!(true)),
         ] {
-            assert!(options(value.clone()).is_err(), "accepted {value}");
+            let mut invalid = valid.clone();
+            invalid[field] = value;
+            assert!(options(invalid).is_err(), "accepted invalid {field}");
         }
-        for mb in [2048, 3072, 4096, 5120, 6144, 7168, 8192] {
-            for size in [16, 32, 64, 128, 256] {
-                assert_eq!(
-                    options(json!({"memoryLimitMB": mb, "chunkSize": size})).unwrap(),
-                    PreviewOptions {
-                        memory_limit_mb: Some(mb),
-                        chunk_size: Some(size),
-                    }
-                );
-            }
+    }
+
+    #[test]
+    fn threading_requires_chunking_and_available_worker_capacity() {
+        use serde_json::json;
+        let maximum = litematica_preview_native::max_worker_threads();
+        let request = |chunk_size, count| {
+            json!({
+                "memoryLimitMB": null, "chunkSize": chunk_size, "threadCount": count, "speedFirst": false,
+            })
+        };
+        assert!(options(request(Some(64), 1)).is_err());
+        assert!(options(request(Some(64), maximum + 1)).is_err());
+        assert!(options(request(None, 2)).is_err());
+        if maximum >= 2 {
+            let parsed = options(request(Some(64), maximum)).unwrap();
+            assert_eq!(parsed.thread_count, Some(maximum));
+        } else {
+            assert!(options(request(Some(64), 2)).is_err());
         }
+    }
+
+    #[test]
+    fn speed_first_requires_multithreading_without_a_decoder_memory_cap() {
+        use serde_json::json;
+        let mut request = json!({"memoryLimitMB": null, "chunkSize": 64, "threadCount": null, "speedFirst": true});
+        assert!(options(request.clone()).is_err());
+        if litematica_preview_native::max_worker_threads() < 2 {
+            return;
+        }
+        request["threadCount"] = json!(2);
+        assert!(options(request.clone()).unwrap().speed_first);
+        request["memoryLimitMB"] = json!(2048);
+        assert!(options(request.clone()).is_err());
+        request["speedFirst"] = json!(false);
+        assert_eq!(options(request).unwrap().memory_limit_mb, Some(2048));
+    }
+
+    #[test]
+    fn speed_first_queue_uses_selected_worker_window_with_backpressure() {
+        use std::sync::{mpsc, Arc};
+        use std::time::Duration;
+        let count = litematica_preview_native::max_worker_threads();
+        if count < 3 {
+            return;
+        }
+        let worker = PreviewWorker::default();
+        worker.advance(1);
+        worker
+            .begin_stream(
+                1,
+                PreviewOptions {
+                    thread_count: Some(count),
+                    speed_first: true,
+                    ..PreviewOptions::default()
+                },
+            )
+            .unwrap();
+        let queue = worker.stream(1).unwrap();
+        for _ in 0..count {
+            queue
+                .publish(0, crate::protocol::tests::chunk_payload())
+                .unwrap();
+        }
+        assert_eq!(batch_id(worker.next(1, None).unwrap()), 1);
+        let (started, ready) = mpsc::channel();
+        let (sent, received) = mpsc::channel();
+        let publishing = Arc::clone(&queue);
+        let producer = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            let result = publishing.publish(0, crate::protocol::tests::chunk_payload());
+            sent.send(result).unwrap();
+        });
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(
+            received.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert_eq!(batch_id(worker.next(1, Some(1)).unwrap()), 2);
+        received
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        producer.join().unwrap();
+        worker.release(1);
     }
 
     #[test]
@@ -288,8 +946,8 @@ mod tests {
     }
 }
 
-// Runs only in the isolated decoder. Each chunk is sent synchronously and
-// dropped before the next one; only the reusable resource pack survives loads.
+// Runs only in the isolated decoder. The coordinator sends ordered chunks while
+// native workers hold a bounded set of results; only the pack survives loads.
 pub(crate) fn decode(
     path: &Path,
     pack_path: &Path,

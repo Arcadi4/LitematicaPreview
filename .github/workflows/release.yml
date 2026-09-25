@@ -19,6 +19,7 @@ jobs:
     runs-on: windows-latest
     env:
       RUSTFLAGS: "-C target-feature=+crt-static"
+      CARGO_TARGET_DIR: App/src-tauri/target
     steps:
       - uses: actions/checkout@v7
         with:
@@ -77,9 +78,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: steps.check_tag.outputs.exists != 'true'
         with:
-          workspaces: |
-            Mesher -> target
-            App/src-tauri -> target
+          workspaces: App/src-tauri -> target
 
       - name: Check Rust formatting
         if: steps.check_tag.outputs.exists != 'true'

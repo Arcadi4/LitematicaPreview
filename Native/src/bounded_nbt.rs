@@ -38,7 +38,7 @@ pub(super) fn gzip_root(data: &[u8], limits: &DecodeLimits) -> Result<NbtCompoun
         }
         raw.extend_from_slice(&chunk[..count]);
     }
-    // The expanded byte buffer is dropped here, before any dense Region allocation.
+    // Keep decompressed storage scoped to parsing so it is released before dense region allocation.
     raw_root(&raw, limits)
 }
 
@@ -63,7 +63,7 @@ fn raw_root(data: &[u8], limits: &DecodeLimits) -> Result<NbtCompound, String> {
         .map_err(|error| error.to_string())
 }
 
-// No-allocation structural pass: quartz_nbt must never see unchecked lengths.
+/// Validate NBT structure and declared bounds before `quartz_nbt` can allocate from unchecked lengths.
 fn validate_nbt(bytes: &[u8], limits: &DecodeLimits) -> Result<(), &'static str> {
     struct Scan<'a> {
         rest: &'a [u8],

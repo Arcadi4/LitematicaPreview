@@ -477,7 +477,6 @@ export default function App({ initialError }: { initialError?: string }) {
         setLoading(null)
         setPreviewMemory(null)
         updateTitle(path, id)
-        // React has committed the active view before the native decode finishes.
         canvasRef.current?.focus({ preventScroll: true })
       } catch (error) {
         if (!isCurrent(id)) return
@@ -506,8 +505,8 @@ export default function App({ initialError }: { initialError?: string }) {
     if (!mounted.current || !bootstrapRef.current || choosingRef.current) return
     choosingRef.current = true
     setChoosing(true)
-    // Dismissing the picker must leave the current preview or load intact.
     const id = generation.current
+    // Dismissing the picker must leave the current preview or load intact.
     try {
       const path = await invoke<string | null>("choose_file")
       if (path && isCurrent(id)) void loadPath(path)
@@ -672,6 +671,7 @@ export default function App({ initialError }: { initialError?: string }) {
   }, [])
 
   const dark = theme === "dark" || (theme === "system" && systemDark)
+  // Storage failures do not change in-memory preferences.
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark)
     document.documentElement.style.colorScheme = dark ? "dark" : "light"

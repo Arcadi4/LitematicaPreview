@@ -20,7 +20,7 @@ fn triple(values: [i32; 3]) -> NbtCompound {
     result
 }
 
-// Independent bit-at-a-time packer, not the reader's two-word extraction.
+/// Pack occupied values bit-by-bit independently of the reader's word extraction.
 fn packed(volume: usize, bits: usize, occupied: &[(usize, usize)]) -> Vec<i64> {
     let mut words = vec![0i64; (volume * bits).div_ceil(64)];
     for &(index, value) in occupied {
@@ -108,8 +108,8 @@ fn options() -> PreviewOptions {
     }
 }
 
-// Retain geometric triangles, normals, colors and alpha classes, independently
-// of vertex/material indexing, atlas placement and nondeterministic mesh order.
+/// Canonicalize geometry independently of vertex/material indices, atlas
+/// placement, and nondeterministic mesh order.
 type Triangle = (u32, [[i64; 10]; 3]);
 fn triangles(mesh: &MeshOutput) -> Vec<Triangle> {
     let mut result = Vec::new();
@@ -434,7 +434,7 @@ fn rejected(bytes: &[u8], pack: &ResourcePackSource) {
     assert_eq!(consumed, 0);
 }
 
-// Append a deliberately invalid named tag to an otherwise valid recognized root.
+/// Append a deliberately invalid named tag to an otherwise valid recognized root.
 fn with_invalid_tail(tag: u8, payload: &[u8]) -> Vec<u8> {
     let mut bytes = raw(&single_block());
     assert_eq!(bytes.pop(), Some(0));

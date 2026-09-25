@@ -1,6 +1,5 @@
 version: 2
 updates:
-  # Nucleation decoder/mesher library.
   - package-ecosystem: "cargo"
     directory: "/Native"
     schedule:
@@ -16,7 +15,6 @@ updates:
       - dependency-name: "nucleation"
       - dependency-name: "schematic-mesher"
 
-  # Tauri host and its Windows dependencies.
   - package-ecosystem: "cargo"
     directory: "/App/src-tauri"
     schedule:
@@ -31,7 +29,6 @@ updates:
     ignore:
       - dependency-name: "nucleation"
 
-  # Fluent UI React frontend.
   - package-ecosystem: "npm"
     directory: "/App"
     schedule:
@@ -44,7 +41,6 @@ updates:
         patterns:
           - "*"
 
-  # Actions used by the Windows and release workflows.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

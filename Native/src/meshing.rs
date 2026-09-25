@@ -1,9 +1,7 @@
 //! Application-owned compact chunk scheduling over Nucleation's public data model.
 //!
-//! Block/entity adapters and chunk scheduling are adapted from Nucleation 0.10.14,
-//! Copyright (c) 2025 Schem-at, under the MIT license. See
-//! ../../ThirdParty/Nucleation-LICENSE.txt for the complete license.
-
+//! Nucleation 0.10.14 block/entity and chunk scheduling; see NOTICE and
+//! ThirdParty/Nucleation-LICENSE.txt.
 use nucleation::meshing::{MeshConfig, MeshOutput, ResourcePackSource};
 use nucleation::{BlockState, Entity, NbtValue, UniversalSchematic};
 use schematic_mesher::{
@@ -85,8 +83,7 @@ impl CompactBlocksBuilder {
             .try_reserve_exact(palette.len())
             .map_err(|e| e.to_string())?;
         for state in palette {
-            // Region's public constructor seeds exactly this ordinary-air state.
-            // Cave/void air do not render, but still contribute to its block count.
+            // Ordinary air is implicit; cave and void air count as blocks but do not render.
             let counted = state.name != "minecraft:air" || !state.properties.is_empty();
             let index = if is_air(&state.name) {
                 None
@@ -162,9 +159,8 @@ impl CompactBlocksBuilder {
         let mut chunks: Vec<_> = self.chunks.into_iter().collect();
         chunks.sort_unstable_by_key(|(coord, _)| *coord);
         for (_, blocks) in &mut chunks {
-            // Stable ties retain all additive block/entity entries. For streamed
-            // input, restore default-first/sorted region precedence before
-            // replacing temporary aliases with the deduplicated global palette.
+            // Stable ties preserve additive entries; streamed aliases restore
+            // source precedence before resolving to the global palette.
             if let Some(order) = &self.source_order {
                 blocks.sort_by_key(|(pos, index)| (pos.y, pos.z, pos.x, order[*index as usize].0));
                 for (_, index) in blocks {
@@ -260,7 +256,7 @@ impl CompactBlocks {
                 builder.push_entity(entity)?;
             }
             builder.add_block_entities(region.block_entities.len())?;
-            // Release this region's dense volume before converting the next one.
+            // Drop each dense region before loading the next to bound peak volume storage.
         }
         Ok(builder.finish())
     }
@@ -492,8 +488,8 @@ impl<'a> ChunkMeshes<'a> {
             .map(|(_, blocks)| blocks.len())
             .max()
             .unwrap_or(0);
-        // Largest core times 27 neighbors times two for Vec growth; an
-        // oversize chunk runs alone in memory-first mode.
+        // Budget the largest core, its 27 neighbors, and Vec growth; an oversize
+        // chunk runs alone in memory-first mode.
         let context_bound = max_chunk.saturating_mul(54).max(1);
         usize::from(count).min((128 * 1024 / context_bound).max(1))
     }
@@ -546,9 +542,8 @@ impl Iterator for ChunkMeshes<'_> {
 }
 
 fn mesher_config(config: &MeshConfig) -> MesherConfig {
-    // Map every public MeshConfig field explicitly. Remaining mesher settings
-    // retain Nucleation 0.10.14's choices: padding=1, no air, no block/sky light,
-    // sky level=15, particles enabled, and the default tint provider.
+    // Keep unspecified mesher settings at library defaults, then apply the
+    // optional biome after mapping the public configuration.
     let mut result = MesherConfig {
         cull_hidden_faces: config.cull_hidden_faces,
         ambient_occlusion: config.ambient_occlusion,

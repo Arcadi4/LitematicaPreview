@@ -6,10 +6,10 @@ use std::sync::{
     Mutex,
 };
 
-// Decode tasks contain at most this many source blocks. Dense inputs are borrowed.
-// Packed tasks own <=128 KiB words and <=256 KiB (BlockPosition,u32) output;
-// <=8 admitted tasks therefore add <=3 MiB payload, excluding allocator/stacks.
-// No full packed region or decompressed document is retained.
+/// Maximum source blocks per decode task. Dense inputs are borrowed; packed tasks
+/// own at most 128 KiB of words and 256 KiB of output. Eight admitted tasks add at
+/// most 3 MiB of payload, excluding allocator and stack overhead. No full packed
+/// region or decompressed document is retained.
 pub(crate) const BATCH_BLOCKS: usize = 16 * 1024;
 
 pub(crate) fn check_cancelled(cancelled: &AtomicBool) -> Result<(), String> {
@@ -23,7 +23,7 @@ pub(crate) fn check_cancelled(cancelled: &AtomicBool) -> Result<(), String> {
 /// Persistent scoped workers each own one task/result slot. Memory-first mode
 /// drains a complete window before refilling; speed-first mode refills each slot
 /// immediately after its ordered result is consumed. Both admit at most
-/// `workers` tasks INCLUDING finished, unconsumed results. Every exit closes
+/// `workers` tasks, including finished but unconsumed results. Every exit closes
 /// channels and joins workers; coordinator callbacks deliberately need not be Sync.
 pub(crate) fn ordered<T: Send, R: Send>(
     mut jobs: impl Iterator<Item = Result<T, String>>,
@@ -164,8 +164,8 @@ pub(crate) fn ordered<T: Send, R: Send>(
             }
         })();
         cancelled.store(true, Ordering::Relaxed);
-        // Dropping receivers also releases a sender blocked after a callback
-        // failure. No further work is queued, so shutdown never needs a drain.
+        // Dropping receivers releases senders blocked after a callback failure.
+        // No further work is queued, so shutdown does not need to drain tasks.
         drop(inputs);
         drop(outputs);
         let mut result = result;

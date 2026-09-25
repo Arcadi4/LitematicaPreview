@@ -16,9 +16,9 @@ mod schematic;
 #[path = "structure_nbt.rs"]
 mod structure_nbt;
 
-// Bound content only by representation, not by an application preview quota.
-// Litematic preview streams packed states; other formats retain their bounded
-// dense readers. Recursive NBT parsing keeps an independent stack-safety bound.
+/// Bound content by representation rather than application preview quota.
+/// Litematic preview streams packed states; other formats use bounded dense readers.
+/// Recursive NBT parsing retains an independent stack-safety bound.
 const MAX_NBT_DEPTH: usize = 64;
 
 pub fn preview_limits() -> DecodeLimits {
@@ -38,11 +38,9 @@ pub fn preview_limits() -> DecodeLimits {
     }
 }
 
-// Rewrites the brace block-state spelling some structure SNBT uses (for
-// example `state: "minecraft:oak_log{axis=y}"`) into the bracket form
-// Nucleation's reader accepts, for one retry after a failed import.
-// Restricted to `state` values so nothing else in the document is touched.
-// `None` skips the retry.
+/// Rewrite brace-form block states in structure SNBT `state` values, such as
+/// `state: "minecraft:oak_log{axis=y}"`, into bracket form for one retry.
+/// Other document fields are unchanged; `None` skips the retry.
 fn normalize_structure_snbt(bytes: &[u8]) -> Option<Vec<u8>> {
     static BRACE_STATE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
         Regex::new(
@@ -70,8 +68,8 @@ pub enum DecodeFailure {
     Limit(String),
 }
 
-// Decode schematic bytes with structural, addressability and stack-safety checks.
-// Keep the bounded reader and two required compatibility fallbacks.
+/// Decode a schematic with structural, addressability, and stack-safety checks,
+/// including the supported compatibility fallbacks.
 pub fn decode(bytes: &[u8]) -> Result<UniversalSchematic, DecodeFailure> {
     let limits = preview_limits();
     limits
@@ -82,7 +80,6 @@ pub fn decode(bytes: &[u8]) -> Result<UniversalSchematic, DecodeFailure> {
         return Ok(schematic);
     }
 
-    // Retry the existing brace-state compatibility spelling only once.
     if let Some(normalized) = normalize_structure_snbt(bytes) {
         if let Ok(schematic) = read_bounded(&normalized, &limits) {
             return Ok(schematic);
@@ -163,16 +160,13 @@ fn read_bounded(bytes: &[u8], limits: &DecodeLimits) -> Result<UniversalSchemati
     limits
         .check_input(bytes)
         .map_err(|error| error.to_string())?;
-    // Preserve registry precedence and retain the first successful decode.
-    // A failed parse continues probing, just as the original bounded detector.
     if let Ok(schematic) = litematic::read(bytes, limits) {
         return Ok(schematic);
     }
     read_other_bounded(bytes, limits)
 }
 
-// Preview fallback must never call read_bounded: doing so could allocate a
-// dense Litematic Region after a failed compact probe.
+/// Read non-Litematic formats without allocating a dense Litematic region.
 fn read_other_bounded(bytes: &[u8], limits: &DecodeLimits) -> Result<UniversalSchematic, String> {
     limits
         .check_input(bytes)
@@ -206,9 +200,8 @@ fn read_other_bounded(bytes: &[u8], limits: &DecodeLimits) -> Result<UniversalSc
     Err("Unknown or unsupported schematic format".into())
 }
 
-// Native readers enforce the exact source palette cap before constructing a
-// Region. Its public constructor adds one ordinary-air entry even when the
-// source contains no air; that implementation detail must not reject the file.
+/// Apply the source palette limit while allowing for the ordinary-air entry
+/// added during `Region` construction.
 fn validate_with_implicit_air(
     schematic: &UniversalSchematic,
     limits: &DecodeLimits,

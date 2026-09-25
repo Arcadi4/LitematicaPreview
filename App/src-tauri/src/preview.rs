@@ -91,8 +91,8 @@ impl StreamQueue {
         while state.queue.len() + usize::from(state.leased.is_some()) >= self.capacity
             && state.error.is_none()
         {
-            // One incoming batch stays receiver-owned while the admitted window
-            // is full. Waiting releases the lock needed by upload reads.
+            // Keep the incoming payload outside the queue while the bounded window
+            // is full. Waiting releases the lock so upload reads can proceed.
             state = self
                 .changed
                 .wait(state)
@@ -313,8 +313,8 @@ impl PreviewWorker {
             match result {
                 Ok(result) => result,
                 Err(error) => {
-                    // Poison and wake the queue before dropping/killing a broken
-                    // decoder; a consumer must not wait for process teardown.
+                    // Notify the queue before dropping the broken decoder so consumers
+                    // do not wait for process teardown.
                     stream.fail(error.clone());
                     self.worker_pid.store(0, Ordering::Release);
                     process.take();
@@ -459,7 +459,7 @@ impl PreviewWorker {
                 .ok_or("The preview buffers have been released.")?;
             Arc::clone(payload)
         };
-        // Copy packed ranges without holding the publication lock.
+        // Release the publication lock before copying the requested packed ranges.
         let bytes = payload.read_ranges(ranges)?;
         self.ensure_current(request_id)?;
         if stream
@@ -485,7 +485,7 @@ impl PreviewWorker {
             Ordering::AcqRel,
             Ordering::Acquire,
         );
-        // A stale upload's finally block must never release the newer model.
+        // Do not let a stale upload release the newer request's buffers.
         if let Ok(mut stored) = self.payload.lock() {
             if stored.as_ref().is_some_and(|(id, _)| *id == request_id) {
                 stored.take();
@@ -948,8 +948,10 @@ mod tests {
     }
 }
 
-// Runs only in the isolated decoder. The coordinator sends ordered chunks while
-// native workers hold a bounded set of results; only the pack survives loads.
+/// Decodes a schematic inside the isolated decoder process.
+///
+/// The coordinator sends ordered chunks while native workers retain a bounded result
+/// set for the current request. Only the resource pack survives across requests.
 pub(crate) fn decode(
     path: &Path,
     pack_path: &Path,
@@ -994,7 +996,7 @@ pub(crate) fn decode(
         )
     }));
     result.unwrap_or_else(|panic| {
-        // Do not reuse native state that was being mutated during a panic.
+        // Discard native state mutated during the panic.
         *pack = None;
         let detail = panic
             .downcast_ref::<String>()
@@ -1030,7 +1032,7 @@ fn read_bytes(
         .ok()
         .filter(|length| *length <= isize::MAX as usize)
         .ok_or("The file exceeds this platform's addressable memory.")?;
-    // Grow from bytes actually read, not potentially stale or sparse-file metadata.
+    // Size the allocation from bytes read rather than stale or sparse-file metadata.
     let mut bytes = Vec::new();
     let mut chunk = [0u8; 64 * 1_024];
     loop {

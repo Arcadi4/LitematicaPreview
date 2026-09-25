@@ -145,8 +145,8 @@ fn sponge(volume: usize) -> Vec<u8> {
 #[test]
 fn sparse_preview_avoids_dense_volume_and_explicit_decode_avoids_a_second_array() {
     let pack = fixtures::test_pack();
-    // Only padding grows: all three stones and their visible bounds stay fixed.
-    // Exercise the public production path, not the explicit dense decode API.
+    // Only padding grows across these widths; the three stones and visible
+    // bounds stay fixed while the public streaming path remains under test.
     for width in [256, 512] {
         let bytes = sparse_litematic(width);
         let baseline = LIVE.load(Ordering::Relaxed);
@@ -182,7 +182,6 @@ fn sparse_preview_avoids_dense_volume_and_explicit_decode_avoids_a_second_array(
         );
     }
 
-    // Explicit UniversalSchematic consumers still legitimately need one array.
     let volume = 256 * 32 * 256;
     let dense_bytes = volume * std::mem::size_of::<usize>();
     for (format, bytes) in [("litematic", litematic(volume)), ("sponge", sponge(volume))] {
@@ -191,8 +190,8 @@ fn sparse_preview_avoids_dense_volume_and_explicit_decode_avoids_a_second_array(
         let schematic = decode(&bytes).unwrap();
         let peak = PEAK.load(Ordering::Relaxed).saturating_sub(baseline);
         assert_eq!(schematic.total_blocks() as usize, volume);
-        // One dense array plus packed NBT and bounded parse scratch fit below
-        // 1.5 arrays. The former preallocate-then-replace path necessarily fails.
+        // One dense array plus packed NBT and bounded parse scratch fits below
+        // 1.5 arrays.
         assert!(
             peak < dense_bytes + dense_bytes / 2,
             "{format}: {peak} peak allocated bytes for {dense_bytes} dense bytes"

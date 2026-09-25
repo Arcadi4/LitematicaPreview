@@ -94,8 +94,8 @@ pub fn mesh_config() -> MeshConfig {
         .with_atlas_max_size(2_048)
 }
 
-// One iterator defines both transport and accounting. Greedy geometry has
-// separate, repeating textures and must never use atlas UVs.
+/// Enumerate non-empty geometry layers with their material and alpha-class indices.
+/// Greedy materials use independent repeating textures rather than atlas UVs.
 pub fn parts(mesh: &MeshOutput) -> impl Iterator<Item = (&MeshLayer, u32, u32)> {
     [
         (&mesh.opaque, 0, 0),
@@ -226,7 +226,6 @@ pub fn prepare(
         triangle_count += (layer.indices.len() / 3) as u64;
         part_count += 1;
     }
-    // Include greedy materials and derive visible bounds from emitted vertices.
     let bounds =
         BoundingBox::from_points(parts(&mesh).flat_map(|(p, _, _)| p.positions.iter().copied()))
             .ok_or("The schematic contains no visible geometry.")?;

@@ -32,8 +32,8 @@ static EVENTS: [Event; SLOTS] = [const {
     }
 }; SLOTS];
 
-// Allocator callbacks must not allocate, format, lock, or panic. A broken meter
-// is reported after measurement rather than overflowing inside the allocator.
+/// Keep allocator callbacks allocation-, formatting-, lock-, and panic-free.
+/// Broken accounting is reported after measurement rather than inside the allocator.
 fn adjust(bytes: usize, increase: bool) -> usize {
     match LIVE.fetch_update(SeqCst, SeqCst, |live| {
         if increase {
@@ -128,7 +128,7 @@ unsafe impl GlobalAlloc for Meter {
 #[global_allocator]
 static ALLOCATOR: Meter = Meter;
 
-// Keep this executable at one test: allocation counters are process-global.
+/// Allocation counters are process-global, so keep this diagnostic as one ignored test.
 #[test]
 #[ignore = "Explicit diagnostic: allocates memory required by the supplied schematic"]
 fn inspect_decoder_allocations() {
@@ -140,8 +140,8 @@ fn inspect_decoder_allocations() {
         "LP_MEMORY_MODE must be preview or dense"
     );
     let bytes = std::fs::read(&path).expect("read input");
-    // Match the production worker's cached resource pack. Its loading cost is
-    // outside the active window, but retained pack allocations remain in baseline.
+    // Match the production worker's cached resource pack. Loading occurs before
+    // the active window, but retained pack allocations remain in the baseline.
     let pack = if mode == "preview" {
         let pack_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../Assets/pack.zip");
         let pack_bytes = std::fs::read(&pack_path).expect("read bundled resource pack");
@@ -166,7 +166,7 @@ fn inspect_decoder_allocations() {
             |preview| {
                 first_chunk = Some(preview.info);
                 callback_live = LIVE.load(SeqCst);
-                // Deliberate early stop: do not generate the rest of the model.
+                // Stop after the first chunk to measure preview startup only.
                 Err(STOP.into())
             },
             |_, _| Ok(()),

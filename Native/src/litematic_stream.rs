@@ -13,8 +13,8 @@ use schematic_mesher::BlockPosition;
 use crate::meshing::{CompactBlocks, CompactBlocksBuilder, PaletteEntry};
 
 const BUFFER_SIZE: usize = 64 * 1024;
-// The production callback performs an IPC round trip. Keep the 64 KiB reader
-// buffer, but do not add one ACK per fill on top of packed-block checkpoints.
+/// Checkpoint packed input every 4 MiB. The 64 KiB reader buffer avoids an IPC
+/// acknowledgement for every fill.
 const CHECKPOINT_BYTES: usize = 4 * 1024 * 1024;
 
 type Position = (i32, i32, i32);
@@ -50,8 +50,8 @@ impl Default for RegionFields {
     }
 }
 struct Regions {
-    // The first serialized name remains the default even when its value is not
-    // a compound. Repeated names replace values without changing this order.
+    // The first serialized name is the default even for a non-compound value;
+    // repeated names replace values without changing this order.
     entries: Vec<(String, Option<RegionFields>)>,
 }
 
@@ -271,8 +271,7 @@ impl<'a, F: Fn() -> Result<(), String>> Scan<'a, F> {
             result.push_str(text);
             return Ok(Some(result));
         }
-        // Quartz's public root-name reader supplies exactly its Java CESU-8
-        // semantics without a dependency change or a second string codec.
+        // Fall back to Quartz's Java CESU-8 root-name decoder for invalid UTF-8.
         let (_, text) =
             quartz_nbt::io::read_nbt(&mut Cursor::new(&self.string), Flavor::Uncompressed)
                 .map_err(|error| error.to_string())?;
@@ -412,8 +411,7 @@ impl<'a, F: Fn() -> Result<(), String>> Scan<'a, F> {
                             .map_err(|error| error.to_string())?;
                         compound.insert(name, value);
                     } else if retain {
-                        // A duplicate field with the wrong type replaces the
-                        // former valid value, exactly as Quartz's compound does.
+                        // Later fields replace earlier fields regardless of type.
                         compound.inner_mut().shift_remove(&name);
                     }
                 }
@@ -693,8 +691,8 @@ fn prepare(
         .entries
         .first()
         .is_some_and(|(_, fields)| fields.is_some());
-    // The initial synthetic default region is counted by the original importer
-    // only when the first serialized entry was absent or not a compound.
+    // Count the synthetic default only when the first serialized region is absent
+    // or non-compound.
     let mut total_volume = usize::from(!has_default);
     let mut region_count = usize::from(!has_default);
     let mut total_entities = 0usize;
@@ -749,9 +747,7 @@ fn prepare(
         }
         builder.begin_source()?;
         let mapping = builder.register_palette(&palette)?;
-        // Register global palette entries in exactly the old logical order.
-        // A separate source rank puts entities after this region's blocks even
-        // though their positions are emitted before the second gzip pass.
+        // Give this region's entities a later source rank than its blocks.
         builder.begin_source()?;
         for mut entity in fields.entities {
             current()?;

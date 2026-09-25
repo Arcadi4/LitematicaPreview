@@ -1,9 +1,7 @@
-// Sponge schematic decoding, adapted from Nucleation 0.10.14's
-// src/formats/schematic.rs. Copyright (c) 2025 Schem-at, MIT licensed.
-// The upstream license is retained in the application's third-party notices.
-//
-// BlockData stays packed until each value is written into the final Region.
-// Only the small file-palette -> Region-palette mapping is materialized.
+//! Sponge schematic format decoding.
+//!
+//! BlockData stays packed until each value is written into the final Region.
+//! Only the small file-palette -> Region-palette mapping is materialized.
 
 use nucleation::block_entity::BlockEntity;
 use nucleation::formats::limits::DecodeLimits;
@@ -23,8 +21,7 @@ pub(super) fn read(data: &[u8], limits: &DecodeLimits) -> Result<UniversalSchema
         .check_dimensions((i64::from(width), i64::from(height), i64::from(length)))
         .map_err(|e| e.to_string())?;
 
-    // Preserve the upstream layout dispatch, including its v3-shaped inputs
-    // whose Version is not 2. Offset is likewise not applied by that reader.
+    // Accept v3-shaped layouts when `Version` is not 2; `Offset` is not applied.
     let blocks = if version == 2 {
         schem
     } else {
@@ -52,8 +49,8 @@ pub(super) fn read(data: &[u8], limits: &DecodeLimits) -> Result<UniversalSchema
         let NbtTag::Int(id) = value else {
             return Err("palette index is not an integer".into());
         };
-        // Upstream allocates PaletteMax + 1 slots, so retain its acceptance of
-        // an explicitly defined entry at PaletteMax, within the shared limit.
+        // `PaletteMax` is inclusive: accept an explicitly defined entry at that
+        // index when it remains within the shared limit.
         if *id < 0 || *id > palette_max || *id as usize >= limits.max_palette_entries {
             return Err("palette index is outside the declared palette or limit".into());
         }
@@ -77,8 +74,6 @@ pub(super) fn read(data: &[u8], limits: &DecodeLimits) -> Result<UniversalSchema
 
     let mut schematic = UniversalSchematic::new("Unnamed".into());
     if let Ok(metadata) = schem.get::<_, &NbtCompound>("Metadata") {
-        // Metadata's type is private upstream; its public fields preserve the
-        // same conversion without reaching through Nucleation's module boundary.
         schematic.metadata.name = metadata.get::<_, &str>("Name").ok().map(str::to_owned);
         schematic.metadata.author = metadata.get::<_, &str>("Author").ok().map(str::to_owned);
         schematic.metadata.description = metadata
@@ -158,8 +153,8 @@ pub(super) fn read(data: &[u8], limits: &DecodeLimits) -> Result<UniversalSchema
             .copied()
             .filter(|value| *value != usize::MAX)
             .ok_or_else(|| format!("block {index} refers to undefined palette index {source}"))?;
-        // Region starts as air (index 0). Skipping it retains the initialized
-        // count/bounds; all other writes use the public bookkeeping setter.
+        // The region is initialized to air at index zero. Skipping it preserves
+        // the initialized count and bounds; other writes update bookkeeping.
         if target != 0 {
             let (x, y, z) = region.index_to_coords(index);
             region.set_block_at_index_unchecked(target, x, y, z);
@@ -200,7 +195,7 @@ fn optional_list<'a>(compound: &'a NbtCompound, key: &str) -> Result<Option<&'a 
     }
 }
 
-// Preserve the original Sponge parser's property order and permissive spelling.
+/// Parse Sponge block states while preserving serialized property order and permissive spelling.
 fn parse_block_state(input: &str) -> BlockState {
     if let Some((name, properties)) = input.split_once('[') {
         BlockState {
@@ -241,7 +236,7 @@ fn read_varint(bytes: &mut &[i8]) -> Result<u32, String> {
 fn parse_block_entity(compound: &NbtCompound) -> Result<BlockEntity, String> {
     let flattened;
     let source = if compound.contains_key("Data") {
-        // Upstream gives Data precedence when flattening block entities.
+        // Nested `Data` takes precedence when flattening block entities.
         let mut flat = NbtCompound::new();
         for (key, value) in compound.inner() {
             if key != "Data" {
@@ -258,7 +253,7 @@ fn parse_block_entity(compound: &NbtCompound) -> Result<BlockEntity, String> {
     } else {
         compound
     };
-    // Public BlockEntity::from_nbt indexes the first three elements directly.
+    // `BlockEntity::from_nbt` indexes the first three `Pos` elements directly.
     if source
         .get::<_, &Vec<i32>>("Pos")
         .is_ok_and(|pos| pos.len() < 3)

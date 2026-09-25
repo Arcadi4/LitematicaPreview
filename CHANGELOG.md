@@ -1,3 +1,22 @@
+# v0.3.0
+
+## Features
+
+- Enable multithreaded preview generation by default with 4 worker threads when enough logical processors are available. Existing saved settings are preserved. Loading time reduced by about 50%.
+- Add a conservative memory scheduling option for multithreaded previews. It is disabled by default; enabling it reduces concurrent mesh work and queued upload batches, which may slow decoding.
+- Show the combined host and decoder private working sets during loading. This figure excludes WebView2 and GPU memory.
+
+## Improvements
+
+- Start uploading complete geometry batches while later chunks are still being generated. Keep mesh work, host batches, and upload preparation bounded, and discard staged results on cancellation or failure.
+- Pack preview data into shared arenas for fewer IPC reads and GPU buffer allocations without changing draw order.
+- Keep the optional decoder process-memory limit effective with either scheduling mode.
+
+## ToDos
+
+- Add recent-files history.
+- Add lighting shader.
+
 # v0.2.0
 
 ## Features

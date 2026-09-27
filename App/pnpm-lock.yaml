@@ -179,8 +179,8 @@ importers:
   .:
     dependencies:
       '@fluentui/react-components':
-        specifier: ^9.74.8
-        version: 9.74.8(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(scheduler@0.28.0)
+        specifier: ^9.74.9
+        version: 9.74.9(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(scheduler@0.28.0)
       '@fluentui/react-icons':
         specifier: ^2.0.0
         version: 2.0.341(react@19.3.0)
@@ -377,8 +377,8 @@ packages:
       '@types/react':
         optional: true
 
-  '@fluentui/react-components@9.74.8':
-    resolution: {integrity: sha512-RmhL9PoH1eiRD8UWncy1Ynkiv6YY/LukGwJQI8dSuSp0vInjydBrX6iiPd5OQAHZ11Hq6Uga0OEVeRG09lpgTQ==}
+  '@fluentui/react-components@9.74.9':
+    resolution: {integrity: sha512-cXXEW3vlOJLGx9f6ejajjrb2t+k7Ed0CDiFG1qtIPLsUxsAChx/beZ72VnjXJX1WhE2EjZMpe4B/gcqAZ/9fVg==}
     peerDependencies:
       '@types/react': '>=16.14.0 <20.0.0'
       react: '>=16.14.0 <20.0.0'
@@ -2536,7 +2536,7 @@ snapshots:
     transitivePeerDependencies:
       - scheduler
 
-  '@fluentui/react-components@9.74.8(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(scheduler@0.28.0)':
+  '@fluentui/react-components@9.74.9(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(scheduler@0.28.0)':
     dependencies:
       '@fluentui/react-accordion': 9.12.4(@types/react@19.3.0)(react@19.3.0)(scheduler@0.28.0)
       '@fluentui/react-alert': 9.0.2-beta.1(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(scheduler@0.28.0)

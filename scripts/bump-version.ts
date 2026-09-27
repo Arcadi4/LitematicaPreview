@@ -322,7 +322,7 @@ function bumpVersions(targetVersion: string, options: BumpOptions = {}): boolean
 
   const check = checkVersions(newVersion);
   if (!check) {
-    logError("Post-bump verification failed!");
+    reportError("Post-bump verification failed!");
     return false;
   }
 

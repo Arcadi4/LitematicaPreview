@@ -19,7 +19,7 @@ jobs:
     runs-on: windows-latest
     env:
       RUSTFLAGS: "-C target-feature=+crt-static"
-      CARGO_TARGET_DIR: App/src-tauri/target
+      CARGO_TARGET_DIR: target
     steps:
       - uses: actions/checkout@v7
         with:
@@ -68,7 +68,7 @@ jobs:
         with:
           node-version: "24"
           cache: pnpm
-          cache-dependency-path: App/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
         if: steps.check_tag.outputs.exists != 'true'
         with:
@@ -78,20 +78,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: steps.check_tag.outputs.exists != 'true'
         with:
-          workspaces: App/src-tauri -> target
+          workspaces: . -> target
 
       - name: Check Rust formatting
         if: steps.check_tag.outputs.exists != 'true'
         shell: pwsh
         run: |
-          cargo fmt --manifest-path Mesher/Cargo.toml -- --check
+          cargo fmt --manifest-path crates/core/Cargo.toml -- --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo fmt --manifest-path App/src-tauri/Cargo.toml -- --check
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test schematic decoding and meshing
         if: steps.check_tag.outputs.exists != 'true'
-        run: cargo test --manifest-path Mesher/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
+        run: cargo test --manifest-path crates/core/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
 
       - name: Build setup and portable packages
         if: steps.check_tag.outputs.exists != 'true'
@@ -100,11 +100,14 @@ jobs:
 
       - name: Check frontend formatting
         if: steps.check_tag.outputs.exists != 'true'
-        run: pnpm --prefix App run format -- --check
+        run: pnpm run format -- --check
 
+      - name: Test frontend
+        if: steps.check_tag.outputs.exists != 'true'
+        run: pnpm run test
       - name: Test the Tauri host
         if: steps.check_tag.outputs.exists != 'true'
-        run: cargo test --manifest-path App/src-tauri/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
+        run: cargo test --manifest-path src-tauri/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
 
       - name: Generate package checksums
         if: steps.check_tag.outputs.exists != 'true'
@@ -114,7 +117,7 @@ jobs:
           Set-StrictMode -Version Latest
 
           $artifactsDir = Join-Path (Get-Location) 'artifacts'
-          $version = (Get-Content -LiteralPath 'App/src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json).version
+          $version = (Get-Content -LiteralPath 'src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json).version
           $packageName = "LitematicaPreview-$version-win-x64"
           $releaseAssets = @(
               (Join-Path $artifactsDir "$packageName-setup.exe"),
@@ -208,7 +211,7 @@ jobs:
         run: |
           tag="$GITHUB_REF_NAME"
 
-          version="$(node -p 'require("./App/src-tauri/tauri.conf.json").version')"
+          version="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
           setup_file="artifacts/LitematicaPreview-${version}-win-x64-setup.exe"
           zip_file="artifacts/LitematicaPreview-${version}-win-x64-portable.zip"
           checksum_file="artifacts/SHA256SUMS.txt"

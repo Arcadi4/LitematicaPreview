@@ -37,13 +37,13 @@
     "targets": ["nsis"],
     "category": "Utility",
     "shortDescription": "Offline Minecraft schematic viewer",
-    "icon": ["../../Assets/app.ico", "../../Assets/icon.png"],
+    "icon": ["../Assets/app.ico", "../Assets/icon.png"],
     "resources": {
-      "../../Assets/pack.zip": "Assets/pack.zip",
-      "../../Fixtures/Demos/": "Demos/",
-      "../../LICENSE": "Licenses/LICENSE",
-      "../../NOTICE": "Licenses/NOTICE",
-      "../../ThirdParty/": "Licenses/ThirdParty/"
+      "../Assets/pack.zip": "Assets/pack.zip",
+      "../Fixtures/Demos/": "Demos/",
+      "../LICENSE": "Licenses/LICENSE",
+      "../NOTICE": "Licenses/NOTICE",
+      "../ThirdParty/": "Licenses/ThirdParty/"
     },
     "windows": {
       "webviewInstallMode": {
@@ -51,10 +51,10 @@
         "silent": true
       },
       "nsis": {
-        "template": "../../scripts/installer.nsi",
+        "template": "../scripts/installer.nsi",
         "installMode": "currentUser",
-        "installerIcon": "../../Assets/app.ico",
-        "installerHooks": "../../scripts/installer-hooks.nsh",
+        "installerIcon": "../Assets/app.ico",
+        "installerHooks": "../scripts/installer-hooks.nsh",
         "displayLanguageSelector": false,
         "languages": ["English"]
       }

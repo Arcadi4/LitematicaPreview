@@ -1,4 +1,4 @@
-Resolved Windows dependencies from App/src-tauri/Cargo.lock (including build dependencies). Original license texts copied from crate distributions or the upstream sources identified below.
+Resolved Windows dependencies from Cargo.lock (including build dependencies). Original license texts copied from crate distributions or the upstream sources identified below.
 
 adler2 2.0.1 (0BSD OR MIT OR Apache-2.0)
 https://github.com/oyvindln/adler2

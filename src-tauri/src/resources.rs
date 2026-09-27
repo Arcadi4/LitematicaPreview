@@ -31,7 +31,7 @@ impl Resources {
         #[cfg(dev)]
         {
             let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../..")
+                .join("..")
                 .join(source);
             if path.exists() {
                 return Ok(path);

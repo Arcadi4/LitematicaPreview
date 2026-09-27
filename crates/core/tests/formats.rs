@@ -4,7 +4,7 @@ use quartz_nbt::{NbtCompound, NbtList, NbtTag};
 use std::{fs, path::PathBuf};
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
 fn fixture(name: &str) -> Vec<u8> {

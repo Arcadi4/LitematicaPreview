@@ -37,8 +37,8 @@ interface ParsedSemver {
 
 const LOCATIONS: VersionLocation[] = [
   {
-    id: "App/package.json",
-    file: path.join(ROOT_DIR, "App/package.json"),
+    id: "package.json",
+    file: path.join(ROOT_DIR, "package.json"),
     read(file: string): string | null {
       const json = JSON.parse(fs.readFileSync(file, "utf8")) as { version?: string };
       return json.version ?? null;
@@ -56,8 +56,8 @@ const LOCATIONS: VersionLocation[] = [
     },
   },
   {
-    id: "App/src-tauri/tauri.conf.json",
-    file: path.join(ROOT_DIR, "App/src-tauri/tauri.conf.json"),
+    id: "src-tauri/tauri.conf.json",
+    file: path.join(ROOT_DIR, "src-tauri/tauri.conf.json"),
     read(file: string): string | null {
       const json = JSON.parse(fs.readFileSync(file, "utf8")) as { version?: string };
       return json.version ?? null;
@@ -75,8 +75,8 @@ const LOCATIONS: VersionLocation[] = [
     },
   },
   {
-    id: "App/src-tauri/Cargo.toml",
-    file: path.join(ROOT_DIR, "App/src-tauri/Cargo.toml"),
+    id: "src-tauri/Cargo.toml",
+    file: path.join(ROOT_DIR, "src-tauri/Cargo.toml"),
     read(file: string): string | null {
       const content = fs.readFileSync(file, "utf8");
       const match = content.match(
@@ -97,8 +97,8 @@ const LOCATIONS: VersionLocation[] = [
     },
   },
   {
-    id: "Mesher/Cargo.toml",
-    file: path.join(ROOT_DIR, "Mesher/Cargo.toml"),
+    id: "crates/core/Cargo.toml",
+    file: path.join(ROOT_DIR, "crates/core/Cargo.toml"),
     read(file: string): string | null {
       const content = fs.readFileSync(file, "utf8");
       const match = content.match(
@@ -119,8 +119,8 @@ const LOCATIONS: VersionLocation[] = [
     },
   },
   {
-    id: "App/src-tauri/Cargo.lock (litematica-preview)",
-    file: path.join(ROOT_DIR, "App/src-tauri/Cargo.lock"),
+    id: "Cargo.lock (litematica-preview)",
+    file: path.join(ROOT_DIR, "Cargo.lock"),
     read(file: string): string | null {
       const content = fs.readFileSync(file, "utf8");
       const match = content.match(
@@ -141,30 +141,8 @@ const LOCATIONS: VersionLocation[] = [
     },
   },
   {
-    id: "App/src-tauri/Cargo.lock (litematica-preview-native)",
-    file: path.join(ROOT_DIR, "App/src-tauri/Cargo.lock"),
-    read(file: string): string | null {
-      const content = fs.readFileSync(file, "utf8");
-      const match = content.match(
-        /\[\[package\]\]\s+name\s*=\s*"litematica-preview-native"\s+version\s*=\s*"([^"]+)"/m
-      );
-      return match ? match[1] : null;
-    },
-    write(file: string, newVersion: string): void {
-      const raw = fs.readFileSync(file, "utf8");
-      const updated = raw.replace(
-        /(\[\[package\]\]\s+name\s*=\s*"litematica-preview-native"\s+version\s*=\s*)"[^"]+"/g,
-        `$1"${newVersion}"`
-      );
-      if (raw === updated && !raw.includes(`"${newVersion}"`)) {
-        throw new Error(`Failed to update litematica-preview-native version in ${file}`);
-      }
-      fs.writeFileSync(file, updated, "utf8");
-    },
-  },
-  {
-    id: "Mesher/Cargo.lock (litematica-preview-native)",
-    file: path.join(ROOT_DIR, "Mesher/Cargo.lock"),
+    id: "Cargo.lock (litematica-preview-native)",
+    file: path.join(ROOT_DIR, "Cargo.lock"),
     read(file: string): string | null {
       const content = fs.readFileSync(file, "utf8");
       const match = content.match(
@@ -368,13 +346,12 @@ Options:
   --help, -h              Show this help message
 
 Locations updated:
-  - App/package.json
-  - App/src-tauri/tauri.conf.json
-  - App/src-tauri/Cargo.toml
-  - Mesher/Cargo.toml
-  - App/src-tauri/Cargo.lock (litematica-preview)
-  - App/src-tauri/Cargo.lock (litematica-preview-native)
-  - Mesher/Cargo.lock (litematica-preview-native)
+  - package.json
+  - src-tauri/tauri.conf.json
+  - src-tauri/Cargo.toml
+  - crates/core/Cargo.toml
+  - Cargo.lock (litematica-preview)
+  - Cargo.lock (litematica-preview-native)
 `);
 }
 

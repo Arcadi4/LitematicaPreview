@@ -15,7 +15,7 @@ jobs:
     runs-on: windows-latest
     env:
       RUSTFLAGS: "-C target-feature=+crt-static"
-      CARGO_TARGET_DIR: App/src-tauri/target
+      CARGO_TARGET_DIR: target
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -25,30 +25,32 @@ jobs:
         with:
           node-version: '24'
           cache: pnpm
-          cache-dependency-path: App/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: App/src-tauri -> target
+          workspaces: . -> target
       - name: Check Rust format
         shell: pwsh
         run: |
-          cargo fmt --manifest-path Mesher/Cargo.toml -- --check
+          cargo fmt --manifest-path crates/core/Cargo.toml -- --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo fmt --manifest-path App/src-tauri/Cargo.toml -- --check
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test Mesher
-        run: cargo test --manifest-path Mesher/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
+        run: cargo test --manifest-path crates/core/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
       - name: Build packages
         shell: pwsh
         run: ./scripts/build.ps1 -NonInteractive
       - name: Check frontend format
-        run: pnpm --prefix App run format -- --check
+        run: pnpm run format -- --check
+      - name: Test frontend
+        run: pnpm run test
       - name: Test App
-        run: cargo test --manifest-path App/src-tauri/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
+        run: cargo test --manifest-path src-tauri/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
       - uses: actions/upload-artifact@v7
         with:
           name: LitematicaPreview-win-x64

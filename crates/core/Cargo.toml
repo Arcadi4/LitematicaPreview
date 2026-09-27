@@ -8,11 +8,6 @@ publish = false
 name = "litematica_preview_native"
 crate-type = ["rlib"]
 
-[profile.release]
-lto = "fat"
-codegen-units = 1
-# The desktop host catches recoverable mesher panics.
-panic = "unwind"
 
 [dependencies]
 nucleation = { version = "=0.10.14", default-features = false, features = ["meshing"] }

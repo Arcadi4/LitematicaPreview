@@ -57,16 +57,17 @@ Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https:
 Run the desktop app in development mode:
 
 ```powershell
-pnpm --prefix App install --frozen-lockfile
-pnpm --prefix App exec tauri dev
+pnpm install --frozen-lockfile
+pnpm exec tauri dev
 ```
 
 Run frontend and Rust checks:
 
 ```powershell
-pnpm --prefix App run build
-cargo test --manifest-path Mesher/Cargo.toml --release --locked
-cargo test --manifest-path App/src-tauri/Cargo.toml --release --locked
+pnpm run build
+pnpm run test
+cargo test --manifest-path crates/core/Cargo.toml --release --locked
+cargo test --manifest-path src-tauri/Cargo.toml --release --locked
 ```
 
 ### Build

@@ -1,38 +1,38 @@
 #!/usr/bin/env node
 
-import fs from "node:fs";
-import path from "node:path";
-import process from "node:process";
-import { fileURLToPath } from "node:url";
+import fs from "node:fs"
+import path from "node:path"
+import process from "node:process"
+import { fileURLToPath } from "node:url"
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const ROOT_DIR = path.resolve(__dirname, "..");
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const ROOT_DIR = path.resolve(__dirname, "..")
 
 interface VersionLocation {
-  id: string;
-  file: string;
-  read: (filePath: string) => string | null;
-  write: (filePath: string, newVersion: string) => void;
+  id: string
+  file: string
+  read: (filePath: string) => string | null
+  write: (filePath: string, newVersion: string) => void
 }
 
 interface LocationResult extends VersionLocation {
-  version: string | null;
-  error: string | null;
+  version: string | null
+  error: string | null
 }
 
 interface BumpOptions {
-  dryRun?: boolean;
+  dryRun?: boolean
 }
 
 interface ParsedSemver {
-  raw: string;
-  major: number;
-  minor: number;
-  patch: number;
-  prerelease: string | null;
-  build: string | null;
-  normalized: string;
+  raw: string
+  major: number
+  minor: number
+  patch: number
+  prerelease: string | null
+  build: string | null
+  normalized: string
 }
 
 const LOCATIONS: VersionLocation[] = [
@@ -40,136 +40,125 @@ const LOCATIONS: VersionLocation[] = [
     id: "package.json",
     file: path.join(ROOT_DIR, "package.json"),
     read(file: string): string | null {
-      const json = JSON.parse(fs.readFileSync(file, "utf8")) as { version?: string };
-      return json.version ?? null;
+      const json = JSON.parse(fs.readFileSync(file, "utf8")) as { version?: string }
+      return json.version ?? null
     },
     write(file: string, newVersion: string): void {
-      const raw = fs.readFileSync(file, "utf8");
-      const updated = raw.replace(
-        /(^  "version"\s*:\s*)"[^"]+"/m,
-        `$1"${newVersion}"`
-      );
+      const raw = fs.readFileSync(file, "utf8")
+      const updated = raw.replace(/(^  "version"\s*:\s*)"[^"]+"/m, `$1"${newVersion}"`)
       if (raw === updated && !raw.includes(`"${newVersion}"`)) {
-        throw new Error(`Failed to update version in ${file}`);
+        throw new Error(`Failed to update version in ${file}`)
       }
-      fs.writeFileSync(file, updated, "utf8");
+      fs.writeFileSync(file, updated, "utf8")
     },
   },
   {
     id: "src-tauri/tauri.conf.json",
     file: path.join(ROOT_DIR, "src-tauri/tauri.conf.json"),
     read(file: string): string | null {
-      const json = JSON.parse(fs.readFileSync(file, "utf8")) as { version?: string };
-      return json.version ?? null;
+      const json = JSON.parse(fs.readFileSync(file, "utf8")) as { version?: string }
+      return json.version ?? null
     },
     write(file: string, newVersion: string): void {
-      const raw = fs.readFileSync(file, "utf8");
-      const updated = raw.replace(
-        /(^  "version"\s*:\s*)"[^"]+"/m,
-        `$1"${newVersion}"`
-      );
+      const raw = fs.readFileSync(file, "utf8")
+      const updated = raw.replace(/(^  "version"\s*:\s*)"[^"]+"/m, `$1"${newVersion}"`)
       if (raw === updated && !raw.includes(`"${newVersion}"`)) {
-        throw new Error(`Failed to update version in ${file}`);
+        throw new Error(`Failed to update version in ${file}`)
       }
-      fs.writeFileSync(file, updated, "utf8");
+      fs.writeFileSync(file, updated, "utf8")
     },
   },
   {
     id: "src-tauri/Cargo.toml",
     file: path.join(ROOT_DIR, "src-tauri/Cargo.toml"),
     read(file: string): string | null {
-      const content = fs.readFileSync(file, "utf8");
-      const match = content.match(
-        /^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m
-      );
-      return match ? match[1] : null;
+      const content = fs.readFileSync(file, "utf8")
+      const match = content.match(/^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m)
+      return match ? match[1] : null
     },
     write(file: string, newVersion: string): void {
-      const raw = fs.readFileSync(file, "utf8");
+      const raw = fs.readFileSync(file, "utf8")
       const updated = raw.replace(
         /(^\[package\][\s\S]*?^version\s*=\s*)"[^"]+"/m,
-        `$1"${newVersion}"`
-      );
+        `$1"${newVersion}"`,
+      )
       if (raw === updated && !raw.includes(`"${newVersion}"`)) {
-        throw new Error(`Failed to update version in ${file}`);
+        throw new Error(`Failed to update version in ${file}`)
       }
-      fs.writeFileSync(file, updated, "utf8");
+      fs.writeFileSync(file, updated, "utf8")
     },
   },
   {
     id: "crates/core/Cargo.toml",
     file: path.join(ROOT_DIR, "crates/core/Cargo.toml"),
     read(file: string): string | null {
-      const content = fs.readFileSync(file, "utf8");
-      const match = content.match(
-        /^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m
-      );
-      return match ? match[1] : null;
+      const content = fs.readFileSync(file, "utf8")
+      const match = content.match(/^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m)
+      return match ? match[1] : null
     },
     write(file: string, newVersion: string): void {
-      const raw = fs.readFileSync(file, "utf8");
+      const raw = fs.readFileSync(file, "utf8")
       const updated = raw.replace(
         /(^\[package\][\s\S]*?^version\s*=\s*)"[^"]+"/m,
-        `$1"${newVersion}"`
-      );
+        `$1"${newVersion}"`,
+      )
       if (raw === updated && !raw.includes(`"${newVersion}"`)) {
-        throw new Error(`Failed to update version in ${file}`);
+        throw new Error(`Failed to update version in ${file}`)
       }
-      fs.writeFileSync(file, updated, "utf8");
+      fs.writeFileSync(file, updated, "utf8")
     },
   },
   {
     id: "Cargo.lock (litematica-preview)",
     file: path.join(ROOT_DIR, "Cargo.lock"),
     read(file: string): string | null {
-      const content = fs.readFileSync(file, "utf8");
+      const content = fs.readFileSync(file, "utf8")
       const match = content.match(
-        /\[\[package\]\]\s+name\s*=\s*"litematica-preview"\s+version\s*=\s*"([^"]+)"/m
-      );
-      return match ? match[1] : null;
+        /\[\[package\]\]\s+name\s*=\s*"litematica-preview"\s+version\s*=\s*"([^"]+)"/m,
+      )
+      return match ? match[1] : null
     },
     write(file: string, newVersion: string): void {
-      const raw = fs.readFileSync(file, "utf8");
+      const raw = fs.readFileSync(file, "utf8")
       const updated = raw.replace(
         /(\[\[package\]\]\s+name\s*=\s*"litematica-preview"\s+version\s*=\s*)"[^"]+"/g,
-        `$1"${newVersion}"`
-      );
+        `$1"${newVersion}"`,
+      )
       if (raw === updated && !raw.includes(`"${newVersion}"`)) {
-        throw new Error(`Failed to update litematica-preview version in ${file}`);
+        throw new Error(`Failed to update litematica-preview version in ${file}`)
       }
-      fs.writeFileSync(file, updated, "utf8");
+      fs.writeFileSync(file, updated, "utf8")
     },
   },
   {
     id: "Cargo.lock (litematica-preview-native)",
     file: path.join(ROOT_DIR, "Cargo.lock"),
     read(file: string): string | null {
-      const content = fs.readFileSync(file, "utf8");
+      const content = fs.readFileSync(file, "utf8")
       const match = content.match(
-        /\[\[package\]\]\s+name\s*=\s*"litematica-preview-native"\s+version\s*=\s*"([^"]+)"/m
-      );
-      return match ? match[1] : null;
+        /\[\[package\]\]\s+name\s*=\s*"litematica-preview-native"\s+version\s*=\s*"([^"]+)"/m,
+      )
+      return match ? match[1] : null
     },
     write(file: string, newVersion: string): void {
-      const raw = fs.readFileSync(file, "utf8");
+      const raw = fs.readFileSync(file, "utf8")
       const updated = raw.replace(
         /(\[\[package\]\]\s+name\s*=\s*"litematica-preview-native"\s+version\s*=\s*)"[^"]+"/g,
-        `$1"${newVersion}"`
-      );
+        `$1"${newVersion}"`,
+      )
       if (raw === updated && !raw.includes(`"${newVersion}"`)) {
-        throw new Error(`Failed to update litematica-preview-native version in ${file}`);
+        throw new Error(`Failed to update litematica-preview-native version in ${file}`)
       }
-      fs.writeFileSync(file, updated, "utf8");
+      fs.writeFileSync(file, updated, "utf8")
     },
   },
-];
+]
 
-const SEMVER_REGEX =
-  /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/;
+const SEMVER_REGEX = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$/
 
 function parseSemver(str: string): ParsedSemver | null {
-  const match = String(str).trim().match(SEMVER_REGEX);
-  if (!match) return null;
+  const match = String(str).trim().match(SEMVER_REGEX)
+  if (!match) return null
   return {
     raw: str,
     major: parseInt(match[1], 10),
@@ -180,154 +169,149 @@ function parseSemver(str: string): ParsedSemver | null {
     normalized: `${match[1]}.${match[2]}.${match[3]}${
       match[4] ? `-${match[4]}` : ""
     }${match[5] ? `+${match[5]}` : ""}`,
-  };
+  }
 }
 
 function calculateBump(currentVersion: string, bumpType: string): string | null {
-  const parsed = parseSemver(currentVersion);
+  const parsed = parseSemver(currentVersion)
   if (!parsed) {
-    throw new Error(`Cannot bump invalid semver version: "${currentVersion}"`);
+    throw new Error(`Cannot bump invalid semver version: "${currentVersion}"`)
   }
-  const { major, minor, patch } = parsed;
+  const { major, minor, patch } = parsed
   switch (bumpType.toLowerCase()) {
     case "major":
-      return `${major + 1}.0.0`;
+      return `${major + 1}.0.0`
     case "minor":
-      return `${major}.${minor + 1}.0`;
+      return `${major}.${minor + 1}.0`
     case "patch":
-      return `${major}.${minor}.${patch + 1}`;
+      return `${major}.${minor}.${patch + 1}`
     default:
-      return null;
+      return null
   }
 }
 
 function readAllVersions(): LocationResult[] {
-  const results: LocationResult[] = [];
+  const results: LocationResult[] = []
   for (const loc of LOCATIONS) {
     if (!fs.existsSync(loc.file)) {
-      results.push({ ...loc, version: null, error: "File not found" });
-      continue;
+      results.push({ ...loc, version: null, error: "File not found" })
+      continue
     }
     try {
-      const ver = loc.read(loc.file);
-      results.push({ ...loc, version: ver, error: ver ? null : "Could not extract version" });
+      const ver = loc.read(loc.file)
+      results.push({ ...loc, version: ver, error: ver ? null : "Could not extract version" })
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      results.push({ ...loc, version: null, error: msg });
+      const msg = err instanceof Error ? err.message : String(err)
+      results.push({ ...loc, version: null, error: msg })
     }
   }
-  return results;
+  return results
 }
 
 function reportError(msg: string): void {
-  const prefix = process.env.GITHUB_ACTIONS ? "::error::" : "Error: ";
-  console.error(`${prefix}${msg}`);
+  const prefix = process.env.GITHUB_ACTIONS ? "::error::" : "Error: "
+  console.error(`${prefix}${msg}`)
 }
 
 function checkVersions(expectedTagOrVersion?: string | null): boolean {
-  const versions = readAllVersions();
-  const errors: string[] = [];
+  const versions = readAllVersions()
+  const errors: string[] = []
 
   for (const v of versions) {
     if (v.error) {
-      errors.push(`${v.id}: ${v.error}`);
+      errors.push(`${v.id}: ${v.error}`)
     }
   }
 
   const distinctVersions = Object.keys(
-    Object.fromEntries(versions.filter((v) => v.version).map((v) => [v.version as string, true]))
-  );
+    Object.fromEntries(versions.filter((v) => v.version).map((v) => [v.version as string, true])),
+  )
 
   if (distinctVersions.length === 0) {
-    reportError("No version numbers found across project files.");
-    return false;
+    reportError("No version numbers found across project files.")
+    return false
   }
 
   if (distinctVersions.length > 1) {
     const lines = [
       "Version mismatch across project files:",
       ...versions.map((v) => `  - ${v.id}: ${v.version || `(${v.error})`}`),
-    ];
-    reportError(lines.join("\n"));
-    return false;
+    ]
+    reportError(lines.join("\n"))
+    return false
   }
 
-  const currentVersion = distinctVersions[0];
+  const currentVersion = distinctVersions[0]
 
   if (expectedTagOrVersion) {
-    const rawExpected = String(expectedTagOrVersion).trim();
-    const expected = rawExpected.startsWith("v")
-      ? rawExpected.slice(1)
-      : rawExpected;
-    const expectedBase = expected.split("-")[0];
+    const rawExpected = String(expectedTagOrVersion).trim()
+    const expected = rawExpected.startsWith("v") ? rawExpected.slice(1) : rawExpected
+    const expectedBase = expected.split("-")[0]
 
     if (currentVersion !== expected && currentVersion !== expectedBase) {
       reportError(
-        `Version mismatch: target is '${rawExpected}' (version '${expected}'), but project files define '${currentVersion}'`
-      );
-      return false;
+        `Version mismatch: target is '${rawExpected}' (version '${expected}'), but project files define '${currentVersion}'`,
+      )
+      return false
     }
 
     console.log(
-      `✓ All ${LOCATIONS.length} project locations match version ${currentVersion} (tag '${rawExpected}').`
-    );
+      `✓ All ${LOCATIONS.length} project locations match version ${currentVersion} (tag '${rawExpected}').`,
+    )
   } else {
-    console.log(
-      `✓ All ${LOCATIONS.length} project locations match version ${currentVersion}.`
-    );
+    console.log(`✓ All ${LOCATIONS.length} project locations match version ${currentVersion}.`)
   }
 
-  return true;
+  return true
 }
 
 function bumpVersions(targetVersion: string, options: BumpOptions = {}): boolean {
-  const { dryRun = false } = options;
-  const versions = readAllVersions();
+  const { dryRun = false } = options
+  const versions = readAllVersions()
 
-  const currentVersion =
-    versions.find((v) => v.version && !v.error)?.version || "0.0.0";
+  const currentVersion = versions.find((v) => v.version && !v.error)?.version || "0.0.0"
 
-  let newVersion = calculateBump(currentVersion, targetVersion);
+  let newVersion = calculateBump(currentVersion, targetVersion)
   if (!newVersion) {
-    const parsed = parseSemver(targetVersion);
+    const parsed = parseSemver(targetVersion)
     if (!parsed) {
       reportError(
-        `Invalid version or bump type: '${targetVersion}'. Expected major, minor, patch, or semver (e.g. 0.2.0, v0.2.0).`
-      );
-      return false;
+        `Invalid version or bump type: '${targetVersion}'. Expected major, minor, patch, or semver (e.g. 0.2.0, v0.2.0).`,
+      )
+      return false
     }
-    newVersion = parsed.normalized;
+    newVersion = parsed.normalized
   }
 
-  console.log(`Bumping version: ${currentVersion} -> ${newVersion}${dryRun ? " (dry run)" : ""}`);
+  console.log(`Bumping version: ${currentVersion} -> ${newVersion}${dryRun ? " (dry run)" : ""}`)
 
   const versionById: Record<string, string> = Object.fromEntries(
-    versions.map((v) => [v.id, v.version || currentVersion])
-  );
+    versions.map((v) => [v.id, v.version || currentVersion]),
+  )
 
   for (const loc of LOCATIONS) {
-    const oldVer = versionById[loc.id] || currentVersion;
+    const oldVer = versionById[loc.id] || currentVersion
     if (dryRun) {
-      console.log(`  [dry-run] Update ${loc.id}: ${oldVer} -> ${newVersion}`);
-      continue;
+      console.log(`  [dry-run] Update ${loc.id}: ${oldVer} -> ${newVersion}`)
+      continue
     }
 
-    loc.write(loc.file, newVersion);
-    console.log(`  ✓ Updated ${loc.id} to ${newVersion}`);
+    loc.write(loc.file, newVersion)
+    console.log(`  ✓ Updated ${loc.id} to ${newVersion}`)
   }
 
   if (dryRun) {
-    return true;
+    return true
   }
 
-  const check = checkVersions(newVersion);
+  const check = checkVersions(newVersion)
   if (!check) {
-    reportError("Post-bump verification failed!");
-    return false;
+    reportError("Post-bump verification failed!")
+    return false
   }
 
-  console.log(`\nSuccessfully bumped all ${LOCATIONS.length} locations to ${newVersion}.`);
-  return true;
+  console.log(`\nSuccessfully bumped all ${LOCATIONS.length} locations to ${newVersion}.`)
+  return true
 }
 
 function showHelp(): void {
@@ -352,40 +336,40 @@ Locations updated:
   - crates/core/Cargo.toml
   - Cargo.lock (litematica-preview)
   - Cargo.lock (litematica-preview-native)
-`);
+`)
 }
 
 function main(): void {
-  const args = process.argv.slice(2);
+  const args = process.argv.slice(2)
   if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
-    showHelp();
-    const versions = readAllVersions();
-    console.log("Current versions:");
+    showHelp()
+    const versions = readAllVersions()
+    console.log("Current versions:")
     for (const v of versions) {
-      console.log(`  ${v.id}: ${v.version || `(${v.error})`}`);
+      console.log(`  ${v.id}: ${v.version || `(${v.error})`}`)
     }
-    process.exit(args.length === 0 ? 1 : 0);
+    process.exit(args.length === 0 ? 1 : 0)
   }
 
-  const checkIndex = args.findIndex((a) => a === "--check" || a === "-c");
+  const checkIndex = args.findIndex((a) => a === "--check" || a === "-c")
   if (checkIndex !== -1) {
-    const remaining = args.filter((_, i) => i !== checkIndex);
-    const expected = remaining[0] || null;
-    const ok = checkVersions(expected);
-    process.exit(ok ? 0 : 1);
+    const remaining = args.filter((_, i) => i !== checkIndex)
+    const expected = remaining[0] || null
+    const ok = checkVersions(expected)
+    process.exit(ok ? 0 : 1)
   }
 
-  const dryRun = args.includes("--dry-run") || args.includes("-n");
-  const targetArg = args.find((a) => !a.startsWith("-"));
+  const dryRun = args.includes("--dry-run") || args.includes("-n")
+  const targetArg = args.find((a) => !a.startsWith("-"))
 
   if (!targetArg) {
-    reportError("No version or bump type specified.");
-    showHelp();
-    process.exit(1);
+    reportError("No version or bump type specified.")
+    showHelp()
+    process.exit(1)
   }
 
-  const ok = bumpVersions(targetArg, { dryRun });
-  process.exit(ok ? 0 : 1);
+  const ok = bumpVersions(targetArg, { dryRun })
+  process.exit(ok ? 0 : 1)
 }
 
-main();
+main()

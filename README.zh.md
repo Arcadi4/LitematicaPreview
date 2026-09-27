@@ -3,10 +3,10 @@
   <h1>Litematica Preview</h1>
   <p><strong>适用于 Windows 的离线 Minecraft 投影与结构查看器</strong></p>
 
-  [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-0078d4?style=flat-square&logo=windows)](https://github.com/Arcadi4/LitematicaPreview)
-  [![Tauri 2](https://img.shields.io/badge/Tauri-v2-24c8db?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
-  [![Fluent UI](https://img.shields.io/badge/Fluent%20UI-React%20v9-0078d4?style=flat-square&logo=react)](https://react.fluentui.dev)
-  [![Nucleation](https://img.shields.io/badge/Powered%20by-Nucleation-ff8c00?style=flat-square)](https://github.com/Schem-at/Nucleation)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20x64-0078d4?style=flat-square&logo=windows)](https://github.com/Arcadi4/LitematicaPreview)
+[![Tauri 2](https://img.shields.io/badge/Tauri-v2-24c8db?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
+[![Fluent UI](https://img.shields.io/badge/Fluent%20UI-React%20v9-0078d4?style=flat-square&logo=react)](https://react.fluentui.dev)
+[![Nucleation](https://img.shields.io/badge/Powered%20by-Nucleation-ff8c00?style=flat-square)](https://github.com/Schem-at/Nucleation)
 
 </div>
 
@@ -40,15 +40,15 @@ Litematica Preview 是一款适用于 Windows 桌面的 Minecraft 投影与结�
 
 ## 支持的格式
 
-| 扩展名 | 文件格式 |
-| --- | --- |
-| `.litematic` | Litematica |
-| `.schem` | Sponge schematic（海绵投影） |
-| `.schematic` | MCEdit |
-| `.nbt` | Java 版结构方块（Structure block） |
-| `.snbt` | 结构 SNBT（支持花括号或方括号方块状态） |
-| `.mcstructure` | 基岩版结构（Bedrock structure） |
-| `.nusn` | Nucleation 快照（Nucleation snapshot） |
+| 扩展名         | 文件格式                                |
+| -------------- | --------------------------------------- |
+| `.litematic`   | Litematica                              |
+| `.schem`       | Sponge schematic（海绵投影）            |
+| `.schematic`   | MCEdit                                  |
+| `.nbt`         | Java 版结构方块（Structure block）      |
+| `.snbt`        | 结构 SNBT（支持花括号或方括号方块状态） |
+| `.mcstructure` | 基岩版结构（Bedrock structure）         |
+| `.nusn`        | Nucleation 快照（Nucleation snapshot）  |
 
 ## 开发
 

@@ -25,6 +25,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
       - name: Validate release tag
         id: check_tag
         shell: bash
@@ -42,7 +51,7 @@ jobs:
             exit 1
           fi
 
-          if ! node scripts/bump-version.ts --check "$tag"; then
+          if ! pnpm run version:check "$tag"; then
             exit 1
           fi
 
@@ -59,16 +68,6 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: pnpm/action-setup@v6
-        if: steps.check_tag.outputs.exists != 'true'
-        with:
-          version: 12
-      - uses: actions/setup-node@v7
-        if: steps.check_tag.outputs.exists != 'true'
-        with:
-          node-version: "24"
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
         if: steps.check_tag.outputs.exists != 'true'
         with:
@@ -82,61 +81,31 @@ jobs:
 
       - name: Check Rust formatting
         if: steps.check_tag.outputs.exists != 'true'
-        shell: pwsh
-        run: |
-          cargo fmt --manifest-path crates/core/Cargo.toml -- --check
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        run: pnpm run format:rust
 
       - name: Test schematic decoding and meshing
         if: steps.check_tag.outputs.exists != 'true'
-        run: cargo test --manifest-path crates/core/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
+        run: pnpm run test:core
 
       - name: Build setup and portable packages
         if: steps.check_tag.outputs.exists != 'true'
-        shell: pwsh
-        run: ./scripts/build.ps1 -NonInteractive
+        run: pnpm run build:win
 
       - name: Check frontend formatting
         if: steps.check_tag.outputs.exists != 'true'
-        run: pnpm run format -- --check
+        run: pnpm run format:check
 
       - name: Test frontend
         if: steps.check_tag.outputs.exists != 'true'
         run: pnpm run test
+
       - name: Test the Tauri host
         if: steps.check_tag.outputs.exists != 'true'
-        run: cargo test --manifest-path src-tauri/Cargo.toml --release --locked --target x86_64-pc-windows-msvc
+        run: pnpm run test:host
 
       - name: Generate package checksums
         if: steps.check_tag.outputs.exists != 'true'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Set-StrictMode -Version Latest
-
-          $artifactsDir = Join-Path (Get-Location) 'artifacts'
-          $version = (Get-Content -LiteralPath 'src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json).version
-          $packageName = "LitematicaPreview-$version-win-x64"
-          $releaseAssets = @(
-              (Join-Path $artifactsDir "$packageName-setup.exe"),
-              (Join-Path $artifactsDir "$packageName-portable.zip")
-          )
-          foreach ($filePath in $releaseAssets) {
-              if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
-                  throw "Release package not found: $filePath"
-              }
-          }
-          Write-Host "Generating SHA256SUMS.txt for release assets..."
-          $checksumLines = foreach ($filePath in $releaseAssets) {
-              $hash = (Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant()
-              $fileName = Split-Path $filePath -Leaf
-              "$hash  $fileName"
-          }
-          $checksumPath = Join-Path $artifactsDir 'SHA256SUMS.txt'
-          $checksumLines | Set-Content -LiteralPath $checksumPath -Encoding utf8
-          Get-Content -LiteralPath $checksumPath | Write-Host
+        run: pnpm run checksums
 
       - uses: actions/upload-artifact@v7
         if: steps.check_tag.outputs.exists != 'true'

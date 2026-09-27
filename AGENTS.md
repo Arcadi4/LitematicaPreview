@@ -6,7 +6,9 @@ Windows x64 desktop app for offline Minecraft schematic and structure viewing. T
 - `crates/core/`: Rust library (`litematica_preview_native`) wrapping Nucleation 0.10.14 for decoding and meshing.
 - `Assets/`: Tracked inputs including default resource pack (`Assets/pack.zip`) and application icons.
 - `Fixtures/`: Seven demo schematics in `Demos/` and minimal format fixtures in `Formats/`.
-- `scripts/`: PowerShell build scripts (`build.ps1`), cross-platform version management script (`bump-version.ts`, `bump-version.ps1`), and NSIS installer configuration (`installer-hooks.nsh`).
+- `scripts/`: Cross-platform TypeScript tooling (`build.ts`, `checksums.ts`, `record-memory.ts`, `bump-version.ts`) and NSIS installer configuration (`installer.nsi`, `installer-hooks.nsh`).
+
+Every repository task is a package script in `package.json`; there are no PowerShell entry points. Scripts run through `tsx` except `bump-version.ts`, which stays dependency-free so release tags can be validated before `pnpm install`.
 
 Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, `.nusn` (defined once in Rust host `EXTENSIONS` in `src-tauri/src/main.rs`).
 
@@ -27,7 +29,7 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
 - Run the desktop app with hot-reloading (Windows):
 
   ```bash
-  pnpm exec tauri dev
+  pnpm run tauri:dev
   ```
 
 - Run frontend development server (Vite+ on port 1420):
@@ -50,10 +52,16 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
 
 ## Testing and Quality Checks
 
+- Run every frontend and Rust check (what CI runs):
+
+  ```bash
+  pnpm run check
+  ```
+
 - Check frontend formatting:
 
   ```bash
-  pnpm run format -- --check
+  pnpm run format:check
   ```
 
 - Format frontend code (oxfmt, semi: false):
@@ -71,54 +79,57 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
 - Check Rust formatting:
 
   ```bash
-  cargo fmt --manifest-path crates/core/Cargo.toml -- --check
-  cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+  pnpm run format:rust
   ```
 
 - Core decoder and mesher tests:
 
   ```bash
-  cargo test --manifest-path crates/core/Cargo.toml --release --locked
+  pnpm run test:core
   ```
 
 - Rust Tauri host compile check:
 
   ```bash
-  cargo check --manifest-path src-tauri/Cargo.toml --all-targets --locked
+  pnpm run check:host
   ```
 
 - Rust Tauri host unit tests:
 
   ```bash
-  cargo test --manifest-path src-tauri/Cargo.toml --release --locked
+  pnpm run test:host
   ```
 
-- Check version consistency across all project locations:
+- Check version consistency across all project locations (accepts an optional tag):
 
   ```bash
-  node scripts/bump-version.ts --check [tag_or_version]
+  pnpm run version:check [tag_or_version]
   ```
 
 - Bump version numbers across all project files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `crates/core/Cargo.toml`, and lockfiles):
 
   ```bash
-  node scripts/bump-version.ts <version | major | minor | patch>
-  # or via PowerShell
-  ./scripts/bump-version.ps1 <version | major | minor | patch>
+  pnpm run version:bump <version | major | minor | patch>
+  ```
+
+- Record host and decoder process memory to CSV until interrupted (never overwrites an existing recording):
+
+  ```bash
+  pnpm run record-memory -- --process LitematicaPreview --interval 200
   ```
 
 ## Build and Packaging
 
-- Build portable Windows app (`artifacts/win-x64/`):
+- Build the Windows x64 release packages on Windows: the portable app (`artifacts/win-x64/`, `artifacts/*-portable.zip`) and the NSIS setup (`artifacts/*-setup.exe`):
 
-  ```powershell
-  ./scripts/build.ps1
+  ```bash
+  pnpm run build:win
   ```
 
-- Build portable app and NSIS setup installer (`artifacts/*-setup.exe`):
+- Write `artifacts/SHA256SUMS.txt` for the generated release packages:
 
-  ```powershell
-  ./scripts/build.ps1 -Installer
+  ```bash
+  pnpm run checksums
   ```
 
 - Do not report Windows runtime, installer, or benchmark results from a Mac or non-Windows environment.

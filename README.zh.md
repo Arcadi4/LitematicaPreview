@@ -54,18 +54,15 @@ Litematica Preview 是一款适用于 Windows 桌面的 Minecraft 投影与结�
 
 在开发模式下运行桌面应用：
 
-```powershell
+```bash
 pnpm install --frozen-lockfile
-pnpm exec tauri dev
+pnpm run tauri:dev
 ```
 
-运行前端和 Rust 检查：
+运行前端和 Rust 检查（与 CI 一致）：
 
-```powershell
-pnpm run build
-pnpm run test
-cargo test --manifest-path crates/core/Cargo.toml --release --locked
-cargo test --manifest-path src-tauri/Cargo.toml --release --locked
+```bash
+pnpm run check
 ```
 
 ### 构建
@@ -74,12 +71,12 @@ cargo test --manifest-path src-tauri/Cargo.toml --release --locked
 - Rust 稳定版工具链 (`x86_64-pc-windows-msvc`)
 - Visual Studio C++ Build Tools（使用 C++ 的桌面开发、x64 MSVC、Windows SDK）
 
-```powershell
+```bash
 git clone https://github.com/Arcadi4/LitematicaPreview.git
 cd LitematicaPreview
 
 rustup target add x86_64-pc-windows-msvc
-./scripts/build.ps1
+pnpm run build:win
 ```
 
 构建产物（`*-setup.exe`、`*-portable.zip` 以及可直接运行的 `win-x64/` 目录）会输出到 `artifacts/`。

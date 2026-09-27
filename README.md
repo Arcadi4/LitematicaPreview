@@ -56,18 +56,15 @@ Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https:
 
 Run the desktop app in development mode:
 
-```powershell
+```bash
 pnpm install --frozen-lockfile
-pnpm exec tauri dev
+pnpm run tauri:dev
 ```
 
-Run frontend and Rust checks:
+Run frontend and Rust checks (the same set CI runs):
 
-```powershell
-pnpm run build
-pnpm run test
-cargo test --manifest-path crates/core/Cargo.toml --release --locked
-cargo test --manifest-path src-tauri/Cargo.toml --release --locked
+```bash
+pnpm run check
 ```
 
 ### Build
@@ -76,12 +73,12 @@ cargo test --manifest-path src-tauri/Cargo.toml --release --locked
 - Rust stable toolchain (`x86_64-pc-windows-msvc`)
 - Visual Studio C++ Build Tools (Desktop development with C++, x64 MSVC, Windows SDK)
 
-```powershell
+```bash
 git clone https://github.com/Arcadi4/LitematicaPreview.git
 cd LitematicaPreview
 
 rustup target add x86_64-pc-windows-msvc
-./scripts/build.ps1
+pnpm run build:win
 ```
 
 Build outputs (`*-setup.exe`, `*-portable.zip`, and the runnable `win-x64/` directory) are written to `artifacts/`.

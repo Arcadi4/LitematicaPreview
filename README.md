@@ -3,10 +3,10 @@
   <h1>Litematica Preview</h1>
   <p><strong>Offline Minecraft schematic viewer for Windows</strong></p>
 
-  [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-0078d4?style=flat-square&logo=windows)](https://github.com/Arcadi4/LitematicaPreview)
-  [![Tauri 2](https://img.shields.io/badge/Tauri-v2-24c8db?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
-  [![Fluent UI](https://img.shields.io/badge/Fluent%20UI-React%20v9-0078d4?style=flat-square&logo=react)](https://react.fluentui.dev)
-  [![Nucleation](https://img.shields.io/badge/Powered%20by-Nucleation-ff8c00?style=flat-square)](https://github.com/Schem-at/Nucleation)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20x64-0078d4?style=flat-square&logo=windows)](https://github.com/Arcadi4/LitematicaPreview)
+[![Tauri 2](https://img.shields.io/badge/Tauri-v2-24c8db?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
+[![Fluent UI](https://img.shields.io/badge/Fluent%20UI-React%20v9-0078d4?style=flat-square&logo=react)](https://react.fluentui.dev)
+[![Nucleation](https://img.shields.io/badge/Powered%20by-Nucleation-ff8c00?style=flat-square)](https://github.com/Schem-at/Nucleation)
 
 </div>
 
@@ -42,15 +42,15 @@ Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https:
 
 ## Supported Formats
 
-| Extension | File format |
-| --- | --- |
-| `.litematic` | Litematica |
-| `.schem` | Sponge schematic |
-| `.schematic` | MCEdit |
-| `.nbt` | Java structure block |
-| `.snbt` | Structure SNBT, brace or bracket block states |
-| `.mcstructure` | Bedrock structure |
-| `.nusn` | Nucleation snapshot |
+| Extension      | File format                                   |
+| -------------- | --------------------------------------------- |
+| `.litematic`   | Litematica                                    |
+| `.schem`       | Sponge schematic                              |
+| `.schematic`   | MCEdit                                        |
+| `.nbt`         | Java structure block                          |
+| `.snbt`        | Structure SNBT, brace or bracket block states |
+| `.mcstructure` | Bedrock structure                             |
+| `.nusn`        | Nucleation snapshot                           |
 
 ## Development
 

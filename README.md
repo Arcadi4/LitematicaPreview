@@ -16,7 +16,9 @@
 
 <!-- README-I18N:END -->
 
-Litematica Preview is a Windows desktop viewer for Minecraft schematics and structures, adapted from [LitematicaQL](https://github.com/Arcadi4/LitematicaQL). It previews `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, and `.nusn` files locally in 3D.
+Litematica Preview is a Windows desktop viewer for Minecraft schematics and structures. It previews `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, and `.nusn` files locally in 3D.
+
+If you are on macOS, check out the sister project [LitematicaQL](https://github.com/Arcadi4/LitematicaQL) for the same speed and smooth Quick Look integration!
 
 ## Highlights
 
@@ -85,4 +87,4 @@ Build outputs (`*-setup.exe`, `*-portable.zip`, and the runnable `win-x64/` dire
 
 ## Acknowledgements
 
-Great thanks to [@Nano112](https://github.com/Nano112)'s project [Nucleation](https://github.com/Schem-at/Nucleation) for powering the parsing and meshing pipeline, and to [LitematicaQL](https://github.com/Arcadi4/LitematicaQL) for the original macOS implementation.
+Great thanks to [@Nano112](https://github.com/Nano112)'s project [Nucleation](https://github.com/Schem-at/Nucleation) for powering the whole parsing and meshing pipeline.

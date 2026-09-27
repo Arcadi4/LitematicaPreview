@@ -1,6 +1,6 @@
 !include "LogicLib.nsh"
 !include "nsDialogs.nsh"
-!include "${__FILEDIR__}\..\App\src-tauri\gen\installer-extensions.nsh"
+!include "${__FILEDIR__}\..\src-tauri\gen\installer-extensions.nsh"
 
 ; installer.nsi inserts this file before defining PRODUCTNAME and other Tauri values.
 ; Callbacks therefore use only these local variables and NSIS APIs.

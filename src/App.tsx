@@ -53,7 +53,7 @@ import { listen } from "@tauri-apps/api/event"
 import { invoke } from "@tauri-apps/api/core"
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import { getCurrentWindow } from "@tauri-apps/api/window"
-import icon from "../../Assets/app-ui.png"
+import icon from "../Assets/app-ui.png"
 import { SchematicRenderer, type PreviewMetadata, type PreviewStreamEvent } from "./renderer"
 import type { PreviewReadRange } from "./upload-layout"
 

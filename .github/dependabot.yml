@@ -1,7 +1,7 @@
 version: 2
 updates:
   - package-ecosystem: "cargo"
-    directory: "/Mesher"
+    directory: "/"
     schedule:
       interval: "weekly"
     commit-message:
@@ -15,22 +15,8 @@ updates:
       - dependency-name: "nucleation"
       - dependency-name: "schematic-mesher"
 
-  - package-ecosystem: "cargo"
-    directory: "/App/src-tauri"
-    schedule:
-      interval: "weekly"
-    commit-message:
-      prefix: "chore"
-      include: "scope"
-    groups:
-      tauri:
-        patterns:
-          - "*"
-    ignore:
-      - dependency-name: "nucleation"
-
   - package-ecosystem: "npm"
-    directory: "/App"
+    directory: "/"
     schedule:
       interval: "weekly"
     commit-message:

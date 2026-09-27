@@ -143,7 +143,7 @@ fn inspect_decoder_allocations() {
     // Match the production worker's cached resource pack. Loading occurs before
     // the active window, but retained pack allocations remain in the baseline.
     let pack = if mode == "preview" {
-        let pack_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../Assets/pack.zip");
+        let pack_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Assets/pack.zip");
         let pack_bytes = std::fs::read(&pack_path).expect("read bundled resource pack");
         Some(ResourcePackSource::from_bytes(&pack_bytes).expect("load bundled resource pack"))
     } else {

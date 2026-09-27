@@ -11,7 +11,7 @@ fn public_preview_preserves_dense_fixture_counts_and_geometry_for_all_formats() 
     use quartz_nbt::{NbtCompound, NbtTag};
 
     let fixture_root =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../Fixtures/Formats");
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Fixtures/Formats");
     let mut inputs = [
         "Classic.schematic",
         "Sponge.schem",

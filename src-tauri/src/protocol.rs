@@ -794,7 +794,7 @@ pub(crate) mod tests {
         std::thread::scope(|scope| {
             let producer = scope.spawn(|| {
                 let pack_bytes = std::fs::read(
-                    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Assets/pack.zip"),
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../Assets/pack.zip"),
                 )
                 .unwrap();
                 let pack =

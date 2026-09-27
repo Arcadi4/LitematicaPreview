@@ -611,7 +611,7 @@ fn parallel_preview_matches_serial_for_all_formats_and_keeps_chunk_order() {
         return;
     }
     let fixture_root =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../Fixtures/Formats");
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Fixtures/Formats");
     let pack = fixtures::test_pack();
     let mut inputs = [
         "Classic.schematic",

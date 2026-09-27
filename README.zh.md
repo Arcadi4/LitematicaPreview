@@ -55,16 +55,17 @@ Litematica Preview 是一款适用于 Windows 桌面的 Minecraft 投影与结�
 在开发模式下运行桌面应用：
 
 ```powershell
-pnpm --prefix App install --frozen-lockfile
-pnpm --prefix App exec tauri dev
+pnpm install --frozen-lockfile
+pnpm exec tauri dev
 ```
 
 运行前端和 Rust 检查：
 
 ```powershell
-pnpm --prefix App run build
-cargo test --manifest-path Mesher/Cargo.toml --release --locked
-cargo test --manifest-path App/src-tauri/Cargo.toml --release --locked
+pnpm run build
+pnpm run test
+cargo test --manifest-path crates/core/Cargo.toml --release --locked
+cargo test --manifest-path src-tauri/Cargo.toml --release --locked
 ```
 
 ### 构建

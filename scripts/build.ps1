@@ -8,7 +8,7 @@ Set-StrictMode -Version Latest
 
 $root = Split-Path $PSScriptRoot -Parent
 $target = 'x86_64-pc-windows-msvc'
-$tauriRoot = Join-Path $root 'App/src-tauri'
+$tauriRoot = Join-Path $root 'src-tauri'
 $targetRoot = Join-Path $tauriRoot 'target'
 $releaseRoot = Join-Path $targetRoot "$target/release"
 $artifactsRoot = Join-Path $root 'artifacts'
@@ -65,7 +65,7 @@ try {
     $config = Get-Content -LiteralPath (Join-Path $tauriRoot 'tauri.conf.json') -Raw | ConvertFrom-Json
     $version = [string]$config.version
     if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
-        throw 'App/src-tauri/tauri.conf.json must contain an explicit semantic version for package filenames.'
+        throw 'src-tauri/tauri.conf.json must contain an explicit semantic version for package filenames.'
     }
     $packageName = "LitematicaPreview-$version-win-x64"
     $setupPath = Join-Path $artifactsRoot "$packageName-setup.exe"
@@ -93,7 +93,7 @@ try {
 
     $stage = 'Installing frontend dependencies'
     Write-Host "`n[2/5] $stage" -ForegroundColor Cyan
-    & $pnpm.Source --prefix App install --frozen-lockfile | Out-Host
+    & $pnpm.Source install --frozen-lockfile | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed. Check the log for network or lockfile errors.' }
 
     $stage = 'Building the application and NSIS setup'
@@ -102,7 +102,7 @@ try {
     foreach ($oldPackage in @($setupPath, $portableZip)) {
         if (Test-Path -LiteralPath $oldPackage) { Remove-Item -LiteralPath $oldPackage -Force }
     }
-    & $pnpm.Source --prefix App exec tauri build --target $target --ci --bundles nsis -- --locked | Out-Host
+    & $pnpm.Source exec tauri build --target $target --ci --bundles nsis -- --locked | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'Tauri release build failed. Check the compiler/bundler output in the log; confirm the MSVC C++ tools, Windows SDK, and Rust target are installed.' }
 
     $stage = 'Staging the portable application and setup'

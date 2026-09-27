@@ -1,25 +1,25 @@
 # Litematica Preview
 
-Windows x64 desktop app for offline Minecraft schematic and structure viewing.
+Windows x64 desktop app for offline Minecraft schematic and structure viewing. The root is both a pnpm workspace and a Cargo workspace.
 
-- `App/`: Tauri 2 desktop application with a Rust host (`App/src-tauri/`) and Fluent UI React v9 frontend (`App/src/`). Uses an on-demand WebGL 2 renderer with `gl-matrix`.
-- `Mesher/`: Rust library (`litematica_preview_native`) wrapping Nucleation 0.10.14 for decoding and meshing.
+- Root: Tauri 2 desktop application with a Rust host (`src-tauri/`) and Fluent UI React v9 frontend (`src/`). Uses an on-demand WebGL 2 renderer with `gl-matrix`.
+- `crates/core/`: Rust library (`litematica_preview_native`) wrapping Nucleation 0.10.14 for decoding and meshing.
 - `Assets/`: Tracked inputs including default resource pack (`Assets/pack.zip`) and application icons.
 - `Fixtures/`: Seven demo schematics in `Demos/` and minimal format fixtures in `Formats/`.
 - `scripts/`: PowerShell build scripts (`build.ps1`), cross-platform version management script (`bump-version.ts`, `bump-version.ps1`), and NSIS installer configuration (`installer-hooks.nsh`).
 
-Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, `.nusn` (defined once in Rust host `EXTENSIONS` in `App/src-tauri/src/main.rs`).
+Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, `.nusn` (defined once in Rust host `EXTENSIONS` in `src-tauri/src/main.rs`).
 
 ## Setup and Prerequisites
 
-- Package manager: `pnpm` (v12, see `devEngines` in `App/package.json`).
+- Package manager: `pnpm` (v12, see `devEngines` in `package.json`).
 - Node.js: Node.js 24 LTS.
 - Rust: Current stable Rust toolchain with `x86_64-pc-windows-msvc` target for Windows builds.
 - Windows desktop builds: Visual Studio C++ Build Tools (Desktop development with C++, x64 MSVC, Windows SDK) and WebView2 Evergreen Runtime.
 - Install frontend dependencies:
 
   ```bash
-  pnpm --prefix App install --frozen-lockfile
+  pnpm install --frozen-lockfile
   ```
 
 ## Development Workflow
@@ -27,25 +27,25 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
 - Run the desktop app with hot-reloading (Windows):
 
   ```bash
-  pnpm --prefix App exec tauri dev
+  pnpm exec tauri dev
   ```
 
 - Run frontend development server (Vite+ on port 1420):
 
   ```bash
-  pnpm --prefix App run dev
+  pnpm run dev
   ```
 
 - Build frontend assets (`tsc --noEmit && vp build`):
 
   ```bash
-  pnpm --prefix App run build
+  pnpm run build
   ```
 
 - Preview built frontend:
 
   ```bash
-  pnpm --prefix App run preview
+  pnpm run preview
   ```
 
 ## Testing and Quality Checks
@@ -53,38 +53,44 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
 - Check frontend formatting:
 
   ```bash
-  pnpm --prefix App run format -- --check
+  pnpm run format -- --check
   ```
 
 - Format frontend code (oxfmt, semi: false):
 
   ```bash
-  pnpm --prefix App run format
+  pnpm run format
+  ```
+
+- Run frontend tests:
+
+  ```bash
+  pnpm run test
   ```
 
 - Check Rust formatting:
 
   ```bash
-  cargo fmt --manifest-path Mesher/Cargo.toml -- --check
-  cargo fmt --manifest-path App/src-tauri/Cargo.toml -- --check
+  cargo fmt --manifest-path crates/core/Cargo.toml -- --check
+  cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
   ```
 
-- Mesher decoder and mesher tests:
+- Core decoder and mesher tests:
 
   ```bash
-  cargo test --manifest-path Mesher/Cargo.toml --release --locked
+  cargo test --manifest-path crates/core/Cargo.toml --release --locked
   ```
 
 - Rust Tauri host compile check:
 
   ```bash
-  cargo check --manifest-path App/src-tauri/Cargo.toml --all-targets --locked
+  cargo check --manifest-path src-tauri/Cargo.toml --all-targets --locked
   ```
 
 - Rust Tauri host unit tests:
 
   ```bash
-  cargo test --manifest-path App/src-tauri/Cargo.toml --release --locked
+  cargo test --manifest-path src-tauri/Cargo.toml --release --locked
   ```
 
 - Check version consistency across all project locations:
@@ -93,7 +99,7 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
   node scripts/bump-version.ts --check [tag_or_version]
   ```
 
-- Bump version numbers across all project files (`App/package.json`, `App/src-tauri/tauri.conf.json`, `App/src-tauri/Cargo.toml`, `Mesher/Cargo.toml`, and lockfiles):
+- Bump version numbers across all project files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `crates/core/Cargo.toml`, and lockfiles):
 
   ```bash
   node scripts/bump-version.ts <version | major | minor | patch>

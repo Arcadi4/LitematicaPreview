@@ -9,7 +9,19 @@
     "test": "vp test run",
     "preview": "vp preview --host 127.0.0.1",
     "tauri": "tauri",
-    "format": "vp fmt"
+    "tauri:dev": "tauri dev",
+    "format": "vp fmt",
+    "format:check": "vp fmt --check",
+    "format:rust": "cargo fmt --manifest-path crates/core/Cargo.toml -- --check && cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
+    "test:core": "cargo test --manifest-path crates/core/Cargo.toml --release --locked",
+    "test:host": "cargo test --manifest-path src-tauri/Cargo.toml --release --locked",
+    "check:host": "cargo check --manifest-path src-tauri/Cargo.toml --all-targets --locked",
+    "check": "pnpm run format:check && pnpm run format:rust && pnpm run build && pnpm run test && pnpm run test:core && pnpm run test:host",
+    "build:win": "pnpm install --frozen-lockfile && tsx scripts/build.ts",
+    "record-memory": "tsx scripts/record-memory.ts",
+    "checksums": "tsx scripts/checksums.ts",
+    "version:check": "node scripts/bump-version.ts --check",
+    "version:bump": "node scripts/bump-version.ts"
   },
   "dependencies": {
     "@fluentui/react-components": "^9.74.9",
@@ -26,7 +38,9 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.0",
+    "fflate": "^0.8.3",
     "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "catalog:",
     "vite-plus": "catalog:"

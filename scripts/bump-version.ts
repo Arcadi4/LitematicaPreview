@@ -333,8 +333,8 @@ function bumpVersions(targetVersion: string, options: BumpOptions = {}): boolean
 function showHelp(): void {
   console.log(`
 Usage:
-  node scripts/bump-version.ts <version | major | minor | patch> [options]
-  node scripts/bump-version.ts --check [tag_or_version]
+  pnpm run version:bump <version | major | minor | patch> [options]
+  pnpm run version:check [tag_or_version]
 
 Arguments:
   <version>               Explicit version (e.g. 0.2.0, v0.2.0, 0.2.0-rc.1)

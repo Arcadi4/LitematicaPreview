@@ -1,6 +1,9 @@
 packages:
   - "."
 
+# tsx resolves the platform esbuild binary from optional dependencies; no install scripts run.
+allowBuilds:
+  esbuild: true
 catalog:
   vite: npm:@voidzero-dev/vite-plus-core@0.3.3
   vite-plus: 0.3.3

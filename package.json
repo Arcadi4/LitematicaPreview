@@ -20,8 +20,9 @@
     "build:win": "pnpm install --frozen-lockfile && tsx scripts/build.ts",
     "record-memory": "tsx scripts/record-memory.ts",
     "checksums": "tsx scripts/checksums.ts",
-    "version:check": "node scripts/bump-version.ts --check",
-    "version:bump": "node scripts/bump-version.ts"
+    "version:check": "tsx scripts/bump-version.ts --check",
+    "version:bump": "tsx scripts/bump-version.ts",
+    "bump": "tsx scripts/bump-version.ts"
   },
   "dependencies": {
     "@fluentui/react-components": "^9.74.9",

@@ -1,5 +1,15 @@
 #!/usr/bin/env node
 
+// Tags a release: bump the version, commit, and tag.
+//
+// Takes the component to raise, so the current version never has to be looked
+// up: a bare `pnpm run version:bump` and `pnpm run version:bump patch` both give
+// 0.3.1 from 0.3.0, `pnpm run version:bump minor` gives 0.4.0, and
+// `pnpm run version:bump major` gives 1.0.0. Runs only on main from a clean
+// workspace, so the tag always names exactly what was reviewed. Push the
+// commit and the tag yourself; the release workflow fires on the tag.
+
+import { execSync } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
 import process from "node:process"
@@ -33,6 +43,10 @@ interface ParsedSemver {
   prerelease: string | null
   build: string | null
   normalized: string
+}
+
+interface CheckOptions {
+  quiet?: boolean
 }
 
 const LOCATIONS: VersionLocation[] = [
@@ -213,7 +227,11 @@ function reportError(msg: string): void {
   console.error(`${prefix}${msg}`)
 }
 
-function checkVersions(expectedTagOrVersion?: string | null): boolean {
+function bumpError(msg: string): void {
+  console.error(`bump: ${msg}`)
+}
+
+function checkVersions(expectedTagOrVersion?: string | null, options: CheckOptions = {}): boolean {
   const versions = readAllVersions()
   const errors: string[] = []
 
@@ -255,78 +273,193 @@ function checkVersions(expectedTagOrVersion?: string | null): boolean {
       return false
     }
 
-    console.log(
-      `✓ All ${LOCATIONS.length} project locations match version ${currentVersion} (tag '${rawExpected}').`,
-    )
-  } else {
+    if (!options.quiet) {
+      console.log(
+        `✓ All ${LOCATIONS.length} project locations match version ${currentVersion} (tag '${rawExpected}').`,
+      )
+    }
+  } else if (!options.quiet) {
     console.log(`✓ All ${LOCATIONS.length} project locations match version ${currentVersion}.`)
   }
 
   return true
 }
 
-function bumpVersions(targetVersion: string, options: BumpOptions = {}): boolean {
+function bumpVersions(level: string = "patch", options: BumpOptions = {}): boolean {
   const { dryRun = false } = options
-  const versions = readAllVersions()
 
-  const currentVersion = versions.find((v) => v.version && !v.error)?.version || "0.0.0"
+  let branch = ""
+  try {
+    branch = execSync("git branch --show-current", { cwd: ROOT_DIR, encoding: "utf8" }).trim()
+  } catch {
+    // ignore if not a git repository
+  }
 
-  let newVersion = calculateBump(currentVersion, targetVersion)
-  if (!newVersion) {
-    const parsed = parseSemver(targetVersion)
-    if (!parsed) {
-      reportError(
-        `Invalid version or bump type: '${targetVersion}'. Expected major, minor, patch, or semver (e.g. 0.2.0, v0.2.0).`,
-      )
+  const allowedBranch = process.env.BUMP_ALLOW_BRANCH || "main"
+  if (branch !== allowedBranch) {
+    if (dryRun) {
+      console.warn(`[dry-run] Warning: versions are cut from main, not ${branch || "(unknown)"}`)
+    } else {
+      bumpError(`versions are cut from main, not ${branch || "(unknown)"}`)
       return false
     }
-    newVersion = parsed.normalized
   }
 
-  console.log(`Bumping version: ${currentVersion} -> ${newVersion}${dryRun ? " (dry run)" : ""}`)
+  let porcelain = ""
+  try {
+    porcelain = execSync("git status --porcelain", { cwd: ROOT_DIR, encoding: "utf8" }).trim()
+  } catch {
+    // ignore if not a git repository
+  }
 
-  const versionById: Record<string, string> = Object.fromEntries(
-    versions.map((v) => [v.id, v.version || currentVersion]),
+  if (porcelain.length > 0) {
+    if (dryRun) {
+      console.warn("[dry-run] Warning: workspace has uncommitted changes:")
+      const shortStatus = execSync("git status --short", { cwd: ROOT_DIR, encoding: "utf8" })
+      process.stderr.write(shortStatus)
+    } else {
+      bumpError("workspace has uncommitted changes:")
+      const shortStatus = execSync("git status --short", { cwd: ROOT_DIR, encoding: "utf8" })
+      process.stderr.write(shortStatus)
+      return false
+    }
+  }
+
+  const versions = readAllVersions()
+  const distinctVersions = Object.keys(
+    Object.fromEntries(versions.filter((v) => v.version).map((v) => [v.version as string, true])),
   )
 
-  for (const loc of LOCATIONS) {
-    const oldVer = versionById[loc.id] || currentVersion
-    if (dryRun) {
-      console.log(`  [dry-run] Update ${loc.id}: ${oldVer} -> ${newVersion}`)
-      continue
-    }
-
-    loc.write(loc.file, newVersion)
-    console.log(`  ✓ Updated ${loc.id} to ${newVersion}`)
-  }
-
-  if (dryRun) {
-    return true
-  }
-
-  const check = checkVersions(newVersion)
-  if (!check) {
-    reportError("Post-bump verification failed!")
+  if (distinctVersions.length === 0) {
+    bumpError("no version numbers found across project files")
     return false
   }
 
-  console.log(`\nSuccessfully bumped all ${LOCATIONS.length} locations to ${newVersion}.`)
+  if (distinctVersions.length > 1) {
+    const lines = [
+      "version mismatch across project files:",
+      ...versions.map((v) => `  - ${v.id}: ${v.version || `(${v.error})`}`),
+    ]
+    bumpError(lines.join("\n"))
+    return false
+  }
+
+  const current = distinctVersions[0]
+
+  const normalizedLevel = level.trim().toLowerCase()
+  let next: string | null = null
+
+  if (normalizedLevel === "major" || normalizedLevel === "minor" || normalizedLevel === "patch") {
+    next = calculateBump(current, normalizedLevel)
+  } else {
+    const parsed = parseSemver(level)
+    if (parsed) {
+      next = parsed.normalized
+    }
+  }
+
+  if (!next) {
+    console.error("usage: pnpm run version:bump major|minor|patch")
+    return false
+  }
+
+  try {
+    execSync(`git rev-parse -q --verify "refs/tags/v${next}"`, {
+      cwd: ROOT_DIR,
+      stdio: "ignore",
+    })
+    bumpError(`tag v${next} already exists`)
+    return false
+  } catch {
+    // Tag does not exist, which is expected
+  }
+
+  const expectedFiles: string[] = []
+  for (const loc of LOCATIONS) {
+    const rel = path.relative(ROOT_DIR, loc.file).split(path.sep).join("/")
+    if (!expectedFiles.includes(rel)) {
+      expectedFiles.push(rel)
+    }
+  }
+  expectedFiles.sort()
+
+  if (dryRun) {
+    console.log(`[dry-run] Would bump version: ${current} -> ${next}`)
+    for (const v of versions) {
+      console.log(`[dry-run]   ${v.id}: ${v.version || current} -> ${next}`)
+    }
+    console.log(`[dry-run] Would stage: ${expectedFiles.join(" ")}`)
+    console.log(`[dry-run] Would commit: chore: bump to v${next}`)
+    console.log(`[dry-run] Would tag: v${next}`)
+    console.log(`bumped ${current} to ${next}, committed and tagged v${next}`)
+    console.log(`publish with: git push origin main v${next}`)
+    return true
+  }
+
+  for (const loc of LOCATIONS) {
+    loc.write(loc.file, next)
+  }
+
+  const check = checkVersions(next, { quiet: true })
+  if (!check) {
+    bumpError("refusing to commit changes: post-bump verification failed")
+    return false
+  }
+
+  const changedOutput = execSync("git diff --name-only", { cwd: ROOT_DIR, encoding: "utf8" })
+  const changed = changedOutput
+    .split(/\r?\n/)
+    .map((s) => s.trim().replace(/\\/g, "/"))
+    .filter(Boolean)
+    .sort()
+
+  const matches =
+    changed.length === expectedFiles.length &&
+    changed.every((file, index) => file === expectedFiles[index])
+
+  if (!matches) {
+    bumpError("refusing to commit changes beyond the version bump:")
+    const shortStatus = execSync("git status --short", { cwd: ROOT_DIR, encoding: "utf8" })
+    process.stderr.write(shortStatus)
+    return false
+  }
+
+  try {
+    execSync(`git add ${expectedFiles.map((f) => `"${f}"`).join(" ")}`, {
+      cwd: ROOT_DIR,
+      stdio: "inherit",
+    })
+    execSync(`git commit -m "chore: bump to v${next}"`, {
+      cwd: ROOT_DIR,
+      stdio: "inherit",
+    })
+    execSync(`git tag -a "v${next}" -m "v${next}"`, {
+      cwd: ROOT_DIR,
+      stdio: "inherit",
+    })
+  } catch {
+    bumpError("git commit or tag failed")
+    return false
+  }
+
+  console.log(`bumped ${current} to ${next}, committed and tagged v${next}`)
+  console.log(`publish with: git push origin main v${next}`)
+
   return true
 }
 
 function showHelp(): void {
   console.log(`
 Usage:
-  pnpm run version:bump <version | major | minor | patch> [options]
+  pnpm run version:bump [major | minor | patch] [options]
   pnpm run version:check [tag_or_version]
 
 Arguments:
-  <version>               Explicit version (e.g. 0.2.0, v0.2.0, 0.2.0-rc.1)
-  major | minor | patch   Bump the corresponding semver component
+  major | minor | patch   Bump the corresponding semver component (default: patch)
 
 Options:
   --check, -c             Verify that all locations match each other and optional expected tag/version
-  --dry-run, -n           Simulate the bump without modifying files
+  --dry-run, -n           Simulate the bump without modifying files or committing
   --help, -h              Show this help message
 
 Locations updated:
@@ -341,14 +474,14 @@ Locations updated:
 
 function main(): void {
   const args = process.argv.slice(2)
-  if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
+  if (args.includes("--help") || args.includes("-h")) {
     showHelp()
     const versions = readAllVersions()
     console.log("Current versions:")
     for (const v of versions) {
       console.log(`  ${v.id}: ${v.version || `(${v.error})`}`)
     }
-    process.exit(args.length === 0 ? 1 : 0)
+    process.exit(0)
   }
 
   const checkIndex = args.findIndex((a) => a === "--check" || a === "-c")
@@ -360,13 +493,7 @@ function main(): void {
   }
 
   const dryRun = args.includes("--dry-run") || args.includes("-n")
-  const targetArg = args.find((a) => !a.startsWith("-"))
-
-  if (!targetArg) {
-    reportError("No version or bump type specified.")
-    showHelp()
-    process.exit(1)
-  }
+  const targetArg = args.find((a) => !a.startsWith("-")) || "patch"
 
   const ok = bumpVersions(targetArg, { dryRun })
   process.exit(ok ? 0 : 1)

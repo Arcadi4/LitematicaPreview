@@ -67,20 +67,3 @@ jobs:
         run: pnpm run test:core
       - name: Test App
         run: pnpm run test:host
-      - name: Build packages
-        run: pnpm exec tsx scripts/build.ts
-      - uses: actions/upload-artifact@v7
-        with:
-          name: LitematicaPreview-win-x64
-          path: |
-            artifacts/win-x64/
-            artifacts/*-setup.exe
-            artifacts/*-portable.zip
-          if-no-files-found: error
-      - name: Upload build logs
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: LitematicaPreview-build-logs
-          path: artifacts/logs/
-          if-no-files-found: ignore

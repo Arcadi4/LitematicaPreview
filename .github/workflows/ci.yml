@@ -27,6 +27,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Check frontend format
         run: pnpm run format:check
+      - name: Lint frontend
+        run: pnpm run lint
       - name: Test frontend
         run: pnpm run test
   build:

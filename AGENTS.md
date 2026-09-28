@@ -64,6 +64,12 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
   pnpm run format:check
   ```
 
+- Lint frontend code (oxlint):
+
+  ```bash
+  pnpm run lint
+  ```
+
 - Format frontend code (oxfmt, semi: false):
 
   ```bash
@@ -106,10 +112,10 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
   pnpm run version:check [tag_or_version]
   ```
 
-- Bump version numbers across all project files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `crates/core/Cargo.toml`, and lockfiles):
+- Bump version numbers across all project files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `crates/core/Cargo.toml`, and lockfiles), commit, and tag (defaults to `patch`):
 
   ```bash
-  pnpm run version:bump <version | major | minor | patch>
+  pnpm run version:bump [patch | minor | major]
   ```
 
 - Record host and decoder process memory to CSV until interrupted (never overwrites an existing recording):

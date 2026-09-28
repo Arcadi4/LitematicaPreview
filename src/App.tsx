@@ -638,9 +638,10 @@ export default function App({ initialError }: { initialError?: string }) {
     }
   }, [cancelNative, isCurrent, loadPath, updatePreviewSettings])
 
+  const currentRequestId = loading?.requestId
   useEffect(() => {
-    if (!loading) return
-    const id = loading.requestId
+    if (!currentRequestId) return
+    const id = currentRequestId
     let active = true
     let inFlight = false
     const sample = async () => {
@@ -661,7 +662,7 @@ export default function App({ initialError }: { initialError?: string }) {
       active = false
       window.clearInterval(timer)
     }
-  }, [loading?.requestId, isCurrent])
+  }, [currentRequestId, isCurrent])
 
   useEffect(() => {
     const media = matchMedia("(prefers-color-scheme: dark)")

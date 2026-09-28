@@ -279,16 +279,16 @@ async function main(): Promise<void> {
   const config = readConfig()
   const packageName = `LitematicaPreview-${config.version}-win-x64`
   const portableRoot = path.join(ARTIFACTS_ROOT, "win-x64")
-  const releaseRoot = path.join(TAURI_ROOT, "target", TARGET, "release")
+  const targetDir = path.resolve(process.env.CARGO_TARGET_DIR ?? path.join(ROOT, "target"))
+  const releaseRoot = path.join(targetDir, TARGET, "release")
   const installerRoot = path.join(releaseRoot, "bundle", "nsis")
   const setupPath = path.join(ARTIFACTS_ROOT, `${packageName}-setup.exe`)
   const portableZip = path.join(ARTIFACTS_ROOT, `${packageName}-portable.zip`)
   assertPortableIsUnlocked(portableRoot)
 
-  // Keep build output local even when the caller configured a shared Cargo target directory.
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    CARGO_TARGET_DIR: path.join(TAURI_ROOT, "target"),
+    CARGO_TARGET_DIR: targetDir,
   }
   // Link the Visual C++ runtime statically so packages do not require a separate runtime installer.
   const rustflags = process.env.RUSTFLAGS ?? ""

@@ -82,7 +82,7 @@ pnpm run build:win
 ```
 
 Build outputs (`*-setup.exe`, `*-portable.zip`, and the runnable `win-x64/` directory) are written to `artifacts/`.
-Cargo output uses the workspace `target/` directory by default; set `CARGO_TARGET_DIR` to use another directory. CI shares this directory and the Windows MSVC target between tests and packaging.
+Cargo output uses the workspace `target/` directory by default; set `CARGO_TARGET_DIR` to use another directory. The release workflow shares this directory and the Windows MSVC target between tests and packaging.
 
 ## Acknowledgements
 

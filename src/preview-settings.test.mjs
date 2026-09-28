@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "vite-plus/test"
-import { savedPreviewSettings } from "./App.tsx"
+import { savedPreviewSettings } from "./preview-settings.ts"
 
 const key = "litematica-preview-settings"
 

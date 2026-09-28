@@ -23,7 +23,8 @@
     "checksums": "tsx scripts/checksums.ts",
     "version:check": "tsx scripts/bump-version.ts --check",
     "version:bump": "tsx scripts/bump-version.ts",
-    "bump": "tsx scripts/bump-version.ts"
+    "bump": "tsx scripts/bump-version.ts",
+    "doctor": "react-doctor"
   },
   "dependencies": {
     "@fluentui/react-components": "^9.74.9",
@@ -41,6 +42,7 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.0",
     "fflate": "^0.8.3",
+    "react-doctor": "^0.9.14",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",

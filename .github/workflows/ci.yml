@@ -31,7 +31,10 @@ jobs:
         run: pnpm run lint
       - name: Test frontend
         run: pnpm run test
-  build:
+  # `core` and `host` run in parallel. They must stay on the same runner image
+  # and target triple to keep their caches useful, but they must keep separate
+  # cache keys: a shared key would make one job's save evict the other's.
+  core:
     runs-on: windows-latest
     env:
       RUSTFLAGS: "-C target-feature=+crt-static"
@@ -56,14 +59,39 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
+      # `cargo fmt` needs no target, so this one step covers both manifests.
       - name: Check Rust format
         run: pnpm run format:rust
+      - name: Test Mesher
+        run: pnpm run test:core
+  host:
+    runs-on: windows-latest
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
+      CARGO_TARGET_DIR: target
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
       # `tauri::generate_context!` embeds `frontendDist` at compile time, so the
       # directory must exist even though the host tests never load the frontend.
       - name: Create placeholder frontend directory
         shell: bash
         run: mkdir -p dist
-      - name: Test Mesher
-        run: pnpm run test:core
       - name: Test App
         run: pnpm run test:host

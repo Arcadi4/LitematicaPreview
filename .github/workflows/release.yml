@@ -98,6 +98,13 @@ jobs:
         if: steps.check_tag.outputs.exists != 'true'
         run: pnpm run format:rust
 
+      # `tauri::generate_context!` embeds `frontendDist` at compile time, so the
+      # directory must exist even though the host tests never load the frontend.
+      - name: Create placeholder frontend directory
+        if: steps.check_tag.outputs.exists != 'true'
+        shell: bash
+        run: mkdir -p dist
+
       - name: Test schematic decoding and meshing
         if: steps.check_tag.outputs.exists != 'true'
         run: pnpm run test:core

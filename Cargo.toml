@@ -2,6 +2,15 @@
 members = ["src-tauri", "crates/core"]
 resolver = "2"
 
+# Debug info is the most expensive part of an unoptimized build. Line tables
+# keep the host's panic locations readable; dependency debug info is never
+# read, so none of it is generated. The release profile is unaffected.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

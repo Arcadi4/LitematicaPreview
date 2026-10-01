@@ -125,6 +125,29 @@
   color: var(--colorNeutralForegroundDisabled);
 }
 
+.fui-Tooltip__content.preview-settings-notice {
+  display: none;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 32px));
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 140ms ease-out,
+    display 140ms allow-discrete;
+}
+
+.fui-Tooltip__content.preview-settings-notice.is-visible {
+  display: block;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@starting-style {
+  .fui-Tooltip__content.preview-settings-notice.is-visible {
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

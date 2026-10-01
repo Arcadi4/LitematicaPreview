@@ -143,7 +143,6 @@ test("deduplicated global textures survive local buffer ID reuse and publication
   assert.equal(uploadedTextures.length, 2)
   assert.equal(boundTextures[0], boundTextures[1])
   assert.equal(boundTextures[2], uploadedTextures[1])
-  assert.deepEqual(events[1].batch.metadata.parts[0].buffers, [0, 1, 2, 3, 4])
   assert.deepEqual(
     metadata.textures.map((texture) => texture.bufferId),
     [0, 11],

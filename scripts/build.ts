@@ -62,10 +62,16 @@ function resolveCommand(tool: string): { command: string; prefix: string[] } {
     // Running through a package script keeps pnpm resolution package-manager agnostic.
     const execPath = process.env.npm_execpath
     if (execPath && fs.existsSync(execPath)) {
+      if (path.extname(execPath).toLowerCase() === ".exe") {
+        return { command: execPath, prefix: [] }
+      }
       return { command: process.execPath, prefix: [execPath] }
     }
   }
-  return { command: process.platform === "win32" ? `${tool}.cmd` : tool, prefix: [] }
+  return {
+    command: process.platform === "win32" && tool === "pnpm" ? "pnpm.cmd" : tool,
+    prefix: [],
+  }
 }
 
 async function run(

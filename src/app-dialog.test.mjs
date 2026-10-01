@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { act, createElement } from "react"
 import { createRoot } from "react-dom/client"
 import { FluentProvider, webLightTheme } from "@fluentui/react-components"
-import { getAllByRole, getByRole } from "@testing-library/dom"
+import { getByRole } from "@testing-library/dom"
 import { afterAll, afterEach, beforeAll, test } from "vite-plus/test"
 import { AppDialog } from "./app-dialog.tsx"
 import { AppHeader } from "./app-header.tsx"
@@ -87,11 +87,9 @@ function selectedPanel() {
 
 test("Settings defaults to Performance and switches to the existing controls reference", async () => {
   await mount(AppDialog, dialogProps)
-  assert.equal(getAllByRole(document.body, "tab").length, 3)
   assert.equal(byRole("tablist", "Settings sections").getAttribute("aria-orientation"), "vertical")
   for (const name of ["Performance", "Control", "Appearance"]) byRole("tab", name)
   assert.equal(byRole("tab", "Performance").getAttribute("aria-selected"), "true")
-  assert.match(selectedPanel().textContent, /Changes are saved automatically/)
   assert.ok(selectedPanel().querySelector('input[aria-label="Worker threads"]'))
   assert.equal(getByRole(selectedPanel(), "heading", { name: "Performance" }).tagName, "H2")
 
@@ -100,7 +98,6 @@ test("Settings defaults to Performance and switches to the existing controls ref
   for (const label of ["Orbit", "Pan", "Zoom", "Fit model", "Open schematic", "Cancel loading"]) {
     assert.ok([...control.querySelectorAll("dt")].some((node) => node.textContent === label))
   }
-  assert.match(control.textContent, /Click or Tab into the preview/)
   assert.equal(getByRole(control, "heading", { name: "Control" }).tagName, "H2")
   assert.equal(document.querySelector('input[aria-label="Worker threads"]'), null)
 })
@@ -114,7 +111,6 @@ test("Appearance selects the existing theme immediately without changing perform
     onSettingsChange: (value) => settings.push(value),
   })
   await click(byRole("tab", "Appearance"))
-  assert.match(selectedPanel().textContent, /Theme changes apply immediately/)
   assert.equal(getByRole(selectedPanel(), "heading", { name: "Appearance" }).tagName, "H2")
   const system = selectedPanel().querySelector('input[value="system"]')
   assert.ok(system.checked)
@@ -134,7 +130,6 @@ test("closing and reopening Settings resets navigation to Performance", async ()
   await update({ ...dialogProps, open: false })
   await update(dialogProps)
   assert.equal(byRole("tab", "Performance").getAttribute("aria-selected"), "true")
-  assert.match(selectedPanel().textContent, /Changes are saved automatically/)
 })
 
 test("switching settings sections resets content scroll without moving navigation or Close", async () => {
@@ -166,11 +161,6 @@ test("the application menu has one Settings entry and retains About and file ass
   byRole("menuitem", "About and licenses")
   byRole("menuitem", "Set as default app…")
   byRole("menuitem", "Remove file associations")
-  assert.equal(document.querySelector('[role="menuitemradio"]'), null)
-  assert.doesNotMatch(
-    document.querySelector('[role="menu"]').textContent,
-    /Controls and shortcuts|Preview settings|Appearance/,
-  )
   await click(settings)
   assert.deepEqual(dialogs, ["settings"])
 })

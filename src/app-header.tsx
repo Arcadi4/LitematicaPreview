@@ -6,41 +6,21 @@ import {
   MenuGroup,
   MenuGroupHeader,
   MenuItem,
-  MenuItemRadio,
   MenuList,
   MenuPopover,
   MenuTrigger,
 } from "@fluentui/react-components"
-import {
-  Info20Regular,
-  Keyboard20Regular,
-  MoreHorizontal20Regular,
-  Settings20Regular,
-} from "@fluentui/react-icons"
+import { Info20Regular, MoreHorizontal20Regular, Settings20Regular } from "@fluentui/react-icons"
 import icon from "../Assets/app-ui.png"
-import {
-  appName,
-  isTheme,
-  type DialogKind,
-  type NativeCommand,
-  type ThemePreference,
-} from "./app-model"
+import { appName, type DialogKind, type NativeCommand } from "./app-model"
 
 export interface AppHeaderProps {
   actionBusy: boolean
   onNativeAction: (command: NativeCommand) => void
   onOpenDialog: (dialog: DialogKind) => void
-  onThemeChange: (theme: ThemePreference) => void
-  theme: ThemePreference
 }
 
-export function AppHeader({
-  actionBusy,
-  onNativeAction,
-  onOpenDialog,
-  onThemeChange,
-  theme,
-}: AppHeaderProps) {
+export function AppHeader({ actionBusy, onNativeAction, onOpenDialog }: AppHeaderProps) {
   return (
     <header className="flex-none flex items-center justify-between gap-4 min-h-14 sm:min-h-16 px-4 py-2.5 sm:px-6 sm:py-3 bg-surface border-b border-border">
       <div className="flex items-center gap-2.5 sm:gap-3 text-sm sm:text-base font-semibold tracking-tight">
@@ -53,13 +33,7 @@ export function AppHeader({
           Desktop
         </Badge>
       </div>
-      <Menu
-        checkedValues={{ theme: [theme] }}
-        onCheckedValueChange={(_, data) => {
-          const value = data.checkedItems[0]
-          if (data.name === "theme" && isTheme(value)) onThemeChange(value)
-        }}
-      >
+      <Menu>
         <MenuTrigger disableButtonEnhancement>
           <Button
             appearance="subtle"
@@ -71,10 +45,7 @@ export function AppHeader({
         <MenuPopover>
           <MenuList>
             <MenuItem icon={<Settings20Regular />} onClick={() => onOpenDialog("settings")}>
-              Preview settings
-            </MenuItem>
-            <MenuItem icon={<Keyboard20Regular />} onClick={() => onOpenDialog("controls")}>
-              Controls and shortcuts
+              Settings
             </MenuItem>
             <MenuItem icon={<Info20Regular />} onClick={() => onOpenDialog("about")}>
               About and licenses
@@ -94,19 +65,6 @@ export function AppHeader({
               >
                 Remove file associations
               </MenuItem>
-            </MenuGroup>
-            <MenuDivider />
-            <MenuGroup>
-              <MenuGroupHeader>Appearance</MenuGroupHeader>
-              <MenuItemRadio name="theme" value="system">
-                Use system setting
-              </MenuItemRadio>
-              <MenuItemRadio name="theme" value="light">
-                Light
-              </MenuItemRadio>
-              <MenuItemRadio name="theme" value="dark">
-                Dark
-              </MenuItemRadio>
             </MenuGroup>
           </MenuList>
         </MenuPopover>

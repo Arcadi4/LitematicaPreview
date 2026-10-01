@@ -61,7 +61,7 @@ export interface PreviewSessionOptions {
  * stale samples are ignored instead of overwriting the current view.
  */
 export function usePreviewSession({ initialError }: PreviewSessionOptions) {
-  const [dialog, setDialog] = useState<DialogKind>(initialError ? "error" : "controls")
+  const [dialog, setDialog] = useState<DialogKind>(initialError ? "error" : "settings")
   const [dialogOpen, setDialogOpen] = useState(Boolean(initialError))
   const [errorDetails, setErrorDetails] = useState(initialError || "")
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null)

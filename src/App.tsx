@@ -119,13 +119,7 @@ export default function App({ initialError }: { initialError?: string }) {
       applyStylesToPortals={false}
       className={`flex flex-col w-full h-full min-w-[320px] text-text bg-surface-secondary ${dark ? "dark theme-dark" : "theme-light"}`}
     >
-      <AppHeader
-        actionBusy={actionBusy}
-        onNativeAction={nativeAction}
-        onOpenDialog={openDialog}
-        onThemeChange={onThemeChange}
-        theme={theme}
-      />
+      <AppHeader actionBusy={actionBusy} onNativeAction={nativeAction} onOpenDialog={openDialog} />
 
       <PreviewToolbar
         busy={busy}
@@ -181,8 +175,10 @@ export default function App({ initialError }: { initialError?: string }) {
         onNativeAction={nativeAction}
         onOpenChange={setDialogOpen}
         onSettingsChange={updatePreviewSettings}
+        onThemeChange={onThemeChange}
         open={dialogOpen}
         settings={previewSettings}
+        theme={theme}
       />
     </FluentProvider>
   )

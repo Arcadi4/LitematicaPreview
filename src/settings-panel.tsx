@@ -53,7 +53,7 @@ function SettingsNotice({
 export function SettingsPanel({ bootstrap, onChange, settings }: SettingsPanelProps) {
   const maxThreads = Math.max(2, bootstrap?.maxWorkerThreads ?? 2)
   return (
-    <div className="flex flex-col gap-5 max-h-[60vh] overflow-y-auto">
+    <div className="flex flex-col gap-5">
       <p className="m-0 leading-relaxed">
         Changes are saved automatically and apply the next time you open a schematic. The current
         preview or load is not changed.

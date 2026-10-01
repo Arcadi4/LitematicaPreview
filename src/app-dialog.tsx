@@ -6,9 +6,22 @@ import {
   DialogContent,
   DialogSurface,
   DialogTitle,
+  Field,
+  Radio,
+  RadioGroup,
+  Tab,
+  TabList,
 } from "@fluentui/react-components"
+import { useId, useState } from "react"
 import icon from "../Assets/app-ui.png"
-import { appName, type Bootstrap, type DialogKind, type NativeCommand } from "./app-model"
+import {
+  appName,
+  isTheme,
+  type Bootstrap,
+  type DialogKind,
+  type NativeCommand,
+  type ThemePreference,
+} from "./app-model"
 import type { PreviewSettings } from "./preview-settings"
 import { SettingsPanel } from "./settings-panel"
 
@@ -20,18 +33,18 @@ export interface AppDialogProps {
   onNativeAction: (command: NativeCommand) => void
   onOpenChange: (open: boolean) => void
   onSettingsChange: (patch: Partial<PreviewSettings>) => void
+  onThemeChange: (theme: ThemePreference) => void
   open: boolean
   settings: PreviewSettings
+  theme: ThemePreference
 }
 
 const title = (dialog: DialogKind) =>
   dialog === "error"
     ? "Unable to open preview"
-    : dialog === "controls"
-      ? "Controls and shortcuts"
-      : dialog === "settings"
-        ? "Preview settings"
-        : `About ${appName}`
+    : dialog === "settings"
+      ? "Settings"
+      : `About ${appName}`
 
 function ControlsHelp() {
   return (
@@ -81,6 +94,105 @@ function ControlsHelp() {
   )
 }
 
+function SettingsSections({
+  bootstrap,
+  onSettingsChange,
+  onThemeChange,
+  settings,
+  theme,
+}: Pick<
+  AppDialogProps,
+  "bootstrap" | "onSettingsChange" | "onThemeChange" | "settings" | "theme"
+>) {
+  const [section, setSection] = useState("performance")
+  const id = useId()
+  return (
+    <div className="settings-layout">
+      <TabList
+        aria-label="Settings sections"
+        className="settings-sidebar"
+        vertical
+        selectedValue={section}
+        onTabSelect={(_, data) => {
+          if (typeof data.value === "string") setSection(data.value)
+        }}
+      >
+        <Tab id={`${id}-performance-tab`} aria-controls={`${id}-performance`} value="performance">
+          Performance
+        </Tab>
+        <Tab id={`${id}-control-tab`} aria-controls={`${id}-control`} value="control">
+          Control
+        </Tab>
+        <Tab id={`${id}-appearance-tab`} aria-controls={`${id}-appearance`} value="appearance">
+          Appearance
+        </Tab>
+      </TabList>
+      <div key={section} className="settings-content-scroll">
+        <div
+          role="tabpanel"
+          id={`${id}-performance`}
+          aria-labelledby={`${id}-performance-tab`}
+          hidden={section !== "performance"}
+          tabIndex={0}
+        >
+          {section === "performance" && (
+            <div>
+              <h2 className="mt-0 mb-5 text-lg font-semibold">Performance</h2>
+              <SettingsPanel
+                bootstrap={bootstrap}
+                onChange={onSettingsChange}
+                settings={settings}
+              />
+            </div>
+          )}
+        </div>
+        <div
+          role="tabpanel"
+          id={`${id}-control`}
+          aria-labelledby={`${id}-control-tab`}
+          hidden={section !== "control"}
+          tabIndex={0}
+        >
+          {section === "control" && (
+            <div>
+              <h2 className="mt-0 mb-5 text-lg font-semibold">Control</h2>
+              <ControlsHelp />
+            </div>
+          )}
+        </div>
+        <div
+          role="tabpanel"
+          id={`${id}-appearance`}
+          aria-labelledby={`${id}-appearance-tab`}
+          hidden={section !== "appearance"}
+          tabIndex={0}
+        >
+          {section === "appearance" && (
+            <div className="flex flex-col gap-4">
+              <h2 className="m-0 mb-1 text-lg font-semibold">Appearance</h2>
+              <p className="m-0 leading-relaxed">
+                Theme changes apply immediately and are saved automatically.
+              </p>
+              <Field label="Theme">
+                <RadioGroup
+                  value={theme}
+                  onChange={(_, data) => {
+                    if (isTheme(data.value)) onThemeChange(data.value)
+                  }}
+                >
+                  <Radio value="system" label="Use system setting" />
+                  <Radio value="light" label="Light" />
+                  <Radio value="dark" label="Dark" />
+                </RadioGroup>
+              </Field>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function AboutLicenses({ version }: { version: string | undefined }) {
   return (
     <div className="leading-relaxed [&>p]:mb-3">
@@ -115,12 +227,14 @@ export function AppDialog({
   onNativeAction,
   onOpenChange,
   onSettingsChange,
+  onThemeChange,
   open,
   settings,
+  theme,
 }: AppDialogProps) {
   return (
     <Dialog open={open} onOpenChange={(_, data) => onOpenChange(data.open)}>
-      <DialogSurface>
+      <DialogSurface className={dialog === "settings" ? "settings-dialog" : undefined}>
         <DialogBody>
           <DialogTitle>{title(dialog)}</DialogTitle>
           <DialogContent>
@@ -132,13 +246,15 @@ export function AppDialog({
                 </pre>
               </>
             ) : dialog === "settings" ? (
-              <SettingsPanel
-                bootstrap={bootstrap}
-                onChange={onSettingsChange}
-                settings={settings}
-              />
-            ) : dialog === "controls" ? (
-              <ControlsHelp />
+              open && (
+                <SettingsSections
+                  bootstrap={bootstrap}
+                  onSettingsChange={onSettingsChange}
+                  onThemeChange={onThemeChange}
+                  settings={settings}
+                  theme={theme}
+                />
+              )
             ) : (
               <AboutLicenses version={bootstrap?.version} />
             )}

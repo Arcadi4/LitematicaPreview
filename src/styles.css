@@ -125,6 +125,91 @@
   color: var(--colorNeutralForegroundDisabled);
 }
 
+.fui-DialogSurface.settings-dialog {
+  width: min(900px, calc(100vw - 32px));
+  max-width: none;
+  height: min(640px, calc(100dvh - 32px));
+  max-height: none;
+  overflow: hidden;
+}
+
+.settings-dialog .fui-DialogBody {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 16px;
+}
+
+.settings-dialog .fui-DialogTitle,
+.settings-dialog .fui-DialogContent,
+.settings-dialog .fui-DialogActions {
+  grid-column: 1 / -1;
+}
+
+.settings-dialog .fui-DialogContent {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.settings-dialog .fui-DialogActions {
+  grid-row: 3;
+  flex-direction: row;
+  justify-self: end;
+  padding-top: 16px;
+  border-top: 1px solid var(--colorNeutralStroke2);
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: clamp(112px, 22%, 176px) minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.fui-TabList.settings-sidebar {
+  min-height: 0;
+  gap: 4px;
+  padding-inline-end: 12px;
+  border-inline-end: 1px solid var(--colorNeutralStroke2);
+  overflow-y: auto;
+}
+
+.settings-sidebar .fui-Tab {
+  min-height: 40px;
+  width: 100%;
+  text-align: start;
+}
+
+.settings-sidebar .fui-Tab[aria-selected="true"] {
+  background: var(--colorBrandBackground2);
+}
+
+.settings-content-scroll {
+  min-width: 0;
+  min-height: 0;
+  padding-inline: 24px 8px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+@media (max-width: 600px) {
+  .fui-DialogSurface.settings-dialog {
+    padding: 16px;
+  }
+
+  .settings-content-scroll {
+    padding-inline: 12px 4px;
+  }
+
+  .fui-TabList.settings-sidebar {
+    padding-inline-end: 8px;
+  }
+}
+
 .fui-Tooltip__content.preview-settings-notice {
   display: none;
   width: max-content;

@@ -20,7 +20,7 @@ export type Loading = {
 export type MeshProgress = { requestId: number; phase: "mesh"; completed: number; total: number }
 export type Loaded = { path: string; metadata: PreviewMetadata; seconds: number }
 export type Notice = { intent: "error" | "success" | "info"; message: string }
-export type DialogKind = "controls" | "about" | "settings" | "error"
+export type DialogKind = "about" | "settings" | "error"
 export type NativeCommand = "register_associations" | "unregister_associations" | "show_licenses"
 
 export const appName = "Litematica Preview"

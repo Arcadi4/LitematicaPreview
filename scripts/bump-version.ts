@@ -103,26 +103,6 @@ const LOCATIONS: VersionLocation[] = [
     },
   },
   {
-    id: "crates/core/Cargo.toml",
-    file: path.join(ROOT_DIR, "crates/core/Cargo.toml"),
-    read(file: string): string | null {
-      const content = fs.readFileSync(file, "utf8")
-      const match = content.match(/^\[package\][\s\S]*?^version\s*=\s*"([^"]+)"/m)
-      return match ? match[1] : null
-    },
-    write(file: string, newVersion: string): void {
-      const raw = fs.readFileSync(file, "utf8")
-      const updated = raw.replace(
-        /(^\[package\][\s\S]*?^version\s*=\s*)"[^"]+"/m,
-        `$1"${newVersion}"`,
-      )
-      if (raw === updated && !raw.includes(`"${newVersion}"`)) {
-        throw new Error(`Failed to update version in ${file}`)
-      }
-      fs.writeFileSync(file, updated, "utf8")
-    },
-  },
-  {
     id: "Cargo.lock (litematica-preview)",
     file: path.join(ROOT_DIR, "Cargo.lock"),
     read(file: string): string | null {
@@ -140,28 +120,6 @@ const LOCATIONS: VersionLocation[] = [
       )
       if (raw === updated && !raw.includes(`"${newVersion}"`)) {
         throw new Error(`Failed to update litematica-preview version in ${file}`)
-      }
-      fs.writeFileSync(file, updated, "utf8")
-    },
-  },
-  {
-    id: "Cargo.lock (litematica-preview-native)",
-    file: path.join(ROOT_DIR, "Cargo.lock"),
-    read(file: string): string | null {
-      const content = fs.readFileSync(file, "utf8")
-      const match = content.match(
-        /\[\[package\]\]\s+name\s*=\s*"litematica-preview-native"\s+version\s*=\s*"([^"]+)"/m,
-      )
-      return match ? match[1] : null
-    },
-    write(file: string, newVersion: string): void {
-      const raw = fs.readFileSync(file, "utf8")
-      const updated = raw.replace(
-        /(\[\[package\]\]\s+name\s*=\s*"litematica-preview-native"\s+version\s*=\s*)"[^"]+"/g,
-        `$1"${newVersion}"`,
-      )
-      if (raw === updated && !raw.includes(`"${newVersion}"`)) {
-        throw new Error(`Failed to update litematica-preview-native version in ${file}`)
       }
       fs.writeFileSync(file, updated, "utf8")
     },
@@ -466,9 +424,7 @@ Locations updated:
   - package.json
   - src-tauri/tauri.conf.json
   - src-tauri/Cargo.toml
-  - crates/core/Cargo.toml
   - Cargo.lock (litematica-preview)
-  - Cargo.lock (litematica-preview-native)
 `)
 }
 

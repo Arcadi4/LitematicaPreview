@@ -483,8 +483,17 @@ mod tests {
         )
         .unwrap()
         .is_none());
-        let compact = super::super::decode_preview(&bytes, None, None, false, &|| Ok(())).unwrap();
+        let (compact, warnings) = super::super::decode_preview(
+            &bytes,
+            &super::super::preview_limits(),
+            None,
+            None,
+            false,
+            &|| Ok(()),
+        )
+        .unwrap();
         assert_eq!(compact.block_count(), 1);
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -518,8 +527,15 @@ mod tests {
         );
         let bytes = gzip(&root);
         let dense = read(&bytes, &super::super::preview_limits()).unwrap();
-        let compact =
-            super::super::decode_preview(&bytes, Some(16), None, false, &|| Ok(())).unwrap();
+        let (compact, _) = super::super::decode_preview(
+            &bytes,
+            &super::super::preview_limits(),
+            Some(16),
+            None,
+            false,
+            &|| Ok(()),
+        )
+        .unwrap();
         assert_eq!(compact.block_count(), 26);
         assert_eq!(compact.block_count(), i64::from(dense.total_blocks()));
         assert_eq!(compact.block_entity_count(), 2);
@@ -544,10 +560,19 @@ mod tests {
         )
         .err()
         .expect("out-of-range packed index must be rejected");
-        let preview_error = super::super::decode_preview(&bytes, None, None, false, &|| Ok(()))
-            .err()
-            .unwrap();
-        assert_eq!(preview_error, error);
+        let preview_error = super::super::decode_preview(
+            &bytes,
+            &super::super::preview_limits(),
+            None,
+            None,
+            false,
+            &|| Ok(()),
+        )
+        .err()
+        .unwrap();
+        // The recognized Litematic is terminal for preview, so its rejection
+        // survives the classification every other reader's messages go through.
+        assert_eq!(preview_error.to_string(), error);
         let mut missing_metadata = root_with_indices(&palette, &[0]);
         missing_metadata.inner_mut().shift_remove("Metadata");
         assert!(read_compact(
@@ -594,11 +619,18 @@ mod tests {
         );
         assert_eq!(result, Err("cancelled".into()));
         assert_eq!(visited.get(), 65_536);
-        let result =
-            super::super::decode_preview(&gzip(&NbtCompound::new()), None, None, false, &|| {
-                Err("cancelled".into())
-            });
-        assert_eq!(result.err().as_deref(), Some("cancelled"));
+        let result = super::super::decode_preview(
+            &gzip(&NbtCompound::new()),
+            &super::super::preview_limits(),
+            None,
+            None,
+            false,
+            &|| Err("cancelled".into()),
+        );
+        assert_eq!(
+            result.err().map(|failure| failure.to_string()).as_deref(),
+            Some("cancelled")
+        );
     }
 
     #[test]

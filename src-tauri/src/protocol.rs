@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
 
-use litematica_preview_native::{parts, Preview, PreviewInfo};
+use litematica_preview_core::{parts, Preview, PreviewInfo};
 use serde::{Deserialize, Serialize};
 
 pub const FRAME_BYTES: usize = 1024 * 1024;
@@ -295,6 +295,7 @@ fn read_packet(stream: &mut impl Read) -> io::Result<(u8, Vec<u8>)> {
 pub struct Encoder<'a, S> {
     stream: &'a mut S,
     textures: Vec<(u64, TextureRecord, Vec<u8>)>,
+    atlas_sent: bool,
 }
 
 impl<'a, S: Read + Write> Encoder<'a, S> {
@@ -302,6 +303,7 @@ impl<'a, S: Read + Write> Encoder<'a, S> {
         Self {
             stream,
             textures: Vec::new(),
+            atlas_sent: false,
         }
     }
 
@@ -341,31 +343,22 @@ impl<'a, S: Read + Write> Encoder<'a, S> {
         Ok(())
     }
 
-    fn texture(
-        &mut self,
-        width: u32,
-        height: u32,
-        pixels: &[u8],
-        repeat: bool,
-    ) -> Result<u32, String> {
+    fn repeating_texture(&mut self, width: u32, height: u32, pixels: &[u8]) -> Result<u32, String> {
         let mut hash = DefaultHasher::new();
-        (width, height, repeat, pixels).hash(&mut hash);
+        (width, height, pixels).hash(&mut hash);
         let key = hash.finish();
         if let Some(index) = self.textures.iter().position(|(h, record, prior)| {
-            *h == key
-                && record.width == width
-                && record.height == height
-                && record.repeat == repeat
-                && prior == pixels
+            *h == key && record.width == width && record.height == height && prior == pixels
         }) {
-            return u32::try_from(index).map_err(|_| TOO_LARGE.into());
+            return u32::try_from(index + 1).map_err(|_| TOO_LARGE.into());
         }
-        let index = u32::try_from(self.textures.len()).map_err(|_| TOO_LARGE)?;
+        // Atlas occupies global texture zero; this cache contains repeating textures only.
+        let index = u32::try_from(self.textures.len() + 1).map_err(|_| TOO_LARGE)?;
         let record = TextureRecord {
             width,
             height,
             byte_length: pixels.len(),
-            repeat,
+            repeat: true,
         };
         self.record(TEXTURE, &record)?;
         self.bytes(pixels)?;
@@ -376,9 +369,29 @@ impl<'a, S: Read + Write> Encoder<'a, S> {
     pub fn chunk(&mut self, preview: Preview) -> Result<(), String> {
         let atlas = &preview.mesh.atlas;
         let mut textures = Vec::with_capacity(preview.textures.len() + 1);
-        textures.push(self.texture(atlas.width, atlas.height, &atlas.pixels, false)?);
+        if !self.atlas_sent {
+            if atlas.pixels.is_empty() {
+                return Err("The first preview chunk has no texture atlas.".into());
+            }
+            self.record(
+                TEXTURE,
+                &TextureRecord {
+                    width: atlas.width,
+                    height: atlas.height,
+                    byte_length: atlas.pixels.len(),
+                    repeat: false,
+                },
+            )?;
+            self.bytes(&atlas.pixels)?;
+            self.atlas_sent = true;
+        }
+        textures.push(0);
         for texture in &preview.textures {
-            textures.push(self.texture(texture.width, texture.height, &texture.pixels, true)?);
+            textures.push(self.repeating_texture(
+                texture.width,
+                texture.height,
+                &texture.pixels,
+            )?);
         }
         for (part, texture, alpha_mode) in parts(&preview.mesh) {
             let record = PartRecord {
@@ -769,7 +782,7 @@ pub(crate) mod tests {
 
     #[test]
     fn native_mesh_encoder_delivers_reusable_textures_before_completion() {
-        use litematica_preview_native::{load_chunks, PreviewOptions};
+        use litematica_preview_core::{load_chunks, PreviewOptions};
         use nucleation::{BlockState, UniversalSchematic};
         use std::net::{TcpListener, TcpStream};
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -806,7 +819,7 @@ pub(crate) mod tests {
                     &pack,
                     PreviewOptions {
                         chunk_size: Some(16),
-                        thread_count: (litematica_preview_native::max_worker_threads() >= 2)
+                        thread_count: (litematica_preview_core::max_worker_threads() >= 2)
                             .then_some(2),
                         ..PreviewOptions::default()
                     },
@@ -1016,21 +1029,6 @@ pub(crate) mod tests {
         )
         .is_err());
         assert_eq!(batches, 2);
-    }
-
-    #[test]
-    fn encoder_texture_identity_survives_multiple_chunks() {
-        let mut connection = wire(vec![CONTINUE; 4]);
-        let mut encoder = Encoder::new(&mut connection);
-        assert_eq!(encoder.texture(1, 1, &[255; 4], false).unwrap(), 0);
-        assert_eq!(encoder.texture(1, 1, &[255; 4], false).unwrap(), 0);
-        assert_eq!(encoder.texture(1, 1, &[255; 4], true).unwrap(), 1);
-        let mut packets = io::Cursor::new(connection.outgoing);
-        assert_eq!(read_packet(&mut packets).unwrap().0, TEXTURE);
-        assert_eq!(read_packet(&mut packets).unwrap().0, DATA);
-        assert_eq!(read_packet(&mut packets).unwrap().0, TEXTURE);
-        assert_eq!(read_packet(&mut packets).unwrap().0, DATA);
-        assert_eq!(packets.position() as usize, packets.get_ref().len());
     }
 
     #[test]

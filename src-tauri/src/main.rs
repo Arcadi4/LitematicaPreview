@@ -47,7 +47,7 @@ async fn bootstrap(state: State<'_, HostState>) -> Result<Bootstrap, String> {
             initial_path,
             version: env!("CARGO_PKG_VERSION"),
             request_id,
-            max_worker_threads: litematica_preview_native::max_worker_threads(),
+            max_worker_threads: litematica_preview_core::max_worker_threads(),
         })
     })
     .await

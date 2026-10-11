@@ -6,7 +6,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
 
-use litematica_preview_native::{decode, load_chunks, PreviewOptions};
+use litematica_preview_core::{decode, load_chunks, PreviewOptions};
 use nucleation::meshing::ResourcePackSource;
 
 struct Meter;
@@ -177,8 +177,8 @@ fn inspect_decoder_allocations() {
         decode(&bytes)
             .map(|schematic| dense_result = Some(schematic))
             .map_err(|error| match error {
-                litematica_preview_native::DecodeFailure::Format(message)
-                | litematica_preview_native::DecodeFailure::Limit(message) => message,
+                litematica_preview_core::DecodeFailure::Format(message)
+                | litematica_preview_core::DecodeFailure::Limit(message) => message,
             })
     };
     ACTIVE.store(false, SeqCst);

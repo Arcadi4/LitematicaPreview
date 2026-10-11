@@ -1,4 +1,4 @@
-use litematica_preview_native::*;
+use litematica_preview_core::*;
 use nucleation::{BlockState, Region, UniversalSchematic};
 use quartz_nbt::{NbtCompound, NbtList, NbtTag};
 use std::{fs, path::PathBuf};

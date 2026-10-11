@@ -221,6 +221,6 @@ FunctionEnd
 !macro NSIS_HOOK_PREUNINSTALL
   ; This hook runs before the built-in running-app check.
   ; Check before any registry mutation so a canceled removal leaves the installation untouched.
-  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
   Call un.LPCleanupAssociationsBeforeUninstall
 !macroend

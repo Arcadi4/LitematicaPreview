@@ -1,4 +1,4 @@
-use litematica_preview_native::{load_chunks, PreviewOptions};
+use litematica_preview_core::{load_chunks, PreviewOptions};
 use std::cell::Cell;
 
 #[path = "../src/meshing/tests/fixtures.rs"]
@@ -7,7 +7,7 @@ use fixtures::{schematic, test_pack};
 
 #[test]
 fn public_preview_preserves_dense_fixture_counts_and_geometry_for_all_formats() {
-    use litematica_preview_native::{decode, mesh_config, prepare};
+    use litematica_preview_core::{decode, mesh_config, prepare};
     use quartz_nbt::{NbtCompound, NbtTag};
 
     let fixture_root =
@@ -430,7 +430,7 @@ fn invalid_options_fail_before_decoding_or_consuming_input() {
             ..PreviewOptions::default()
         },
         PreviewOptions {
-            thread_count: Some(litematica_preview_native::max_worker_threads() + 1),
+            thread_count: Some(litematica_preview_core::max_worker_threads() + 1),
             ..PreviewOptions::default()
         },
         PreviewOptions {
@@ -470,7 +470,7 @@ fn invalid_options_fail_before_decoding_or_consuming_input() {
         .validate()
         .unwrap();
     }
-    if litematica_preview_native::max_worker_threads() >= 2 {
+    if litematica_preview_core::max_worker_threads() >= 2 {
         PreviewOptions {
             thread_count: Some(2),
             speed_first: true,

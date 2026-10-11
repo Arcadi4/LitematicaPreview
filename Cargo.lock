@@ -2039,7 +2039,7 @@ name = "litematica-preview"
 version = "0.3.0"
 dependencies = [
  "bytemuck",
- "litematica-preview-native",
+ "litematica-preview-core",
  "nucleation",
  "serde",
  "serde_json",
@@ -2051,17 +2051,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "litematica-preview-native"
-version = "0.3.0"
+name = "litematica-preview-core"
+version = "0.1.0"
 dependencies = [
  "flate2",
  "image",
+ "lz4_flex",
  "nucleation",
  "quartz_nbt",
  "regex",
  "rustc-hash",
  "schematic-mesher",
  "serde_json",
+ "zip 8.6.0",
 ]
 
 [[package]]
@@ -2078,6 +2080,12 @@ name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+
+[[package]]
+name = "lz4_flex"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ecbdfe44b1bd960b68170b417450a628c43f7cf56bb3c5317e61cb230ee7f226"
 
 [[package]]
 name = "markup5ever"
@@ -2258,7 +2266,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
- "zip",
+ "zip 2.4.2",
 ]
 
 [[package]]
@@ -3241,7 +3249,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
- "zip",
+ "zip 2.4.2",
 ]
 
 [[package]]
@@ -4374,6 +4382,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
+name = "typed-path"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
+
+[[package]]
 name = "typeid"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5316,6 +5330,20 @@ dependencies = [
  "indexmap 2.14.2",
  "memchr",
  "thiserror 2.0.20",
+ "zopfli",
+]
+
+[[package]]
+name = "zip"
+version = "8.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap 2.14.2",
+ "memchr",
+ "typed-path",
  "zopfli",
 ]
 

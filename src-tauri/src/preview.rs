@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use litematica_preview_native::PreviewOptions;
+use litematica_preview_core::PreviewOptions;
 use nucleation::meshing::ResourcePackSource;
 
 use crate::preview_process::DecoderProcess;
@@ -850,7 +850,7 @@ mod tests {
     #[test]
     fn threading_requires_chunking_and_available_worker_capacity() {
         use serde_json::json;
-        let maximum = litematica_preview_native::max_worker_threads();
+        let maximum = litematica_preview_core::max_worker_threads();
         let request = |chunk_size, count| {
             json!({
                 "memoryLimitMB": null, "chunkSize": chunk_size, "threadCount": count, "speedFirst": false,
@@ -872,7 +872,7 @@ mod tests {
         use serde_json::json;
         let mut request = json!({"memoryLimitMB": null, "chunkSize": 64, "threadCount": null, "speedFirst": true});
         assert!(options(request.clone()).is_err());
-        if litematica_preview_native::max_worker_threads() < 2 {
+        if litematica_preview_core::max_worker_threads() < 2 {
             return;
         }
         request["threadCount"] = json!(2);
@@ -889,7 +889,7 @@ mod tests {
     fn speed_first_queue_uses_selected_worker_window_with_backpressure() {
         use std::sync::{mpsc, Arc};
         use std::time::Duration;
-        let count = litematica_preview_native::max_worker_threads();
+        let count = litematica_preview_core::max_worker_threads();
         if count < 3 {
             return;
         }
@@ -958,7 +958,7 @@ pub(crate) fn decode(
     pack: &mut Option<ResourcePackSource>,
     options: PreviewOptions,
     stream: &mut (impl Read + Write),
-) -> Result<litematica_preview_native::PreviewInfo, String> {
+) -> Result<litematica_preview_core::PreviewInfo, String> {
     options.validate()?;
     let result = catch_unwind(AssertUnwindSafe(|| {
         let encoder = RefCell::new(protocol::Encoder::new(stream));
@@ -972,7 +972,7 @@ pub(crate) fn decode(
                     .map_err(|e| format!("The bundled block resources are invalid: {e}"))?,
             );
         }
-        litematica_preview_native::load_chunks(
+        litematica_preview_core::load_chunks(
             &data,
             pack.as_ref()
                 .ok_or("The bundled block resources are unavailable.")?,

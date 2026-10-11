@@ -3,7 +3,7 @@ use std::cell::Cell;
 use std::io::Write;
 
 use flate2::{write::GzEncoder, Compression};
-use litematica_preview_native::{
+use litematica_preview_core::{
     decode, load_chunks, mesh_config, parts, prepare, PreviewInfo, PreviewOptions,
 };
 use nucleation::meshing::{MeshOutput, ResourcePackSource};
@@ -607,7 +607,7 @@ fn threaded_preview(
 
 #[test]
 fn parallel_preview_matches_serial_for_all_formats_and_keeps_chunk_order() {
-    if litematica_preview_native::max_worker_threads() < 2 {
+    if litematica_preview_core::max_worker_threads() < 2 {
         return;
     }
     let fixture_root =
@@ -660,7 +660,7 @@ fn parallel_preview_matches_serial_for_all_formats_and_keeps_chunk_order() {
 
 #[test]
 fn parallel_preview_rejects_invalid_packed_states_and_gzip_crc_before_publish() {
-    if litematica_preview_native::max_worker_threads() < 2 {
+    if litematica_preview_core::max_worker_threads() < 2 {
         return;
     }
     let pack = fixtures::test_pack();
@@ -697,7 +697,7 @@ fn parallel_preview_rejects_invalid_packed_states_and_gzip_crc_before_publish() 
 
 #[test]
 fn parallel_cancel_after_first_chunk_never_publishes_stale_work() {
-    if litematica_preview_native::max_worker_threads() < 2 {
+    if litematica_preview_core::max_worker_threads() < 2 {
         return;
     }
     let pack = fixtures::test_pack();
@@ -734,4 +734,49 @@ fn parallel_cancel_after_first_chunk_never_publishes_stale_work() {
         assert_eq!(result.err().as_deref(), Some("cancelled by caller"));
         assert_eq!(consumed.get(), 1);
     }
+}
+
+#[test]
+fn pull_stream_cancellation_discards_prefetched_batches_before_publication() {
+    use litematica_preview_core::{decode_with_options, MeshStream};
+    use nucleation::formats::limits::DecodeLimits;
+
+    let pack = fixtures::test_pack();
+    let model = fixtures::schematic(&[
+        (0, 0, 0, "minecraft:stone"),
+        (64, 0, 0, "minecraft:stone"),
+        (128, 0, 0, "minecraft:stone"),
+    ]);
+    let bytes = nucleation::formats::litematic::to_litematic(&model).unwrap();
+    let source = decode_with_options(
+        &bytes,
+        &DecodeLimits::default(),
+        PreviewOptions::default(),
+        || Ok(()),
+    )
+    .unwrap();
+    let cancelled = Cell::new(false);
+    let current = || {
+        if cancelled.get() {
+            Err("cancelled by caller".into())
+        } else {
+            Ok(())
+        }
+    };
+    let mut stream = MeshStream::new(&source, &pack, &mesh_config(), 2, &current).unwrap();
+    let first = prepare(
+        stream.next(&current).unwrap().unwrap(),
+        source.block_count(),
+        source.block_entity_count(),
+    )
+    .unwrap();
+    assert_eq!(first.info.triangle_count, 12);
+    assert_eq!(first.info.min, [-0.5; 3]);
+    assert_eq!(first.info.max, [0.5; 3]);
+
+    cancelled.set(true);
+    assert_eq!(
+        stream.next(&current).err().as_deref(),
+        Some("cancelled by caller")
+    );
 }

@@ -1,4 +1,4 @@
-use litematica_preview_native::PreviewOptions;
+use litematica_preview_core::PreviewOptions;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};

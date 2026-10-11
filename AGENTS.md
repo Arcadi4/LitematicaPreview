@@ -3,7 +3,7 @@
 Windows x64 desktop app for offline Minecraft schematic and structure viewing. The root is both a pnpm workspace and a Cargo workspace.
 
 - Root: Tauri 2 desktop application with a Rust host (`src-tauri/`) and Fluent UI React v9 frontend (`src/`). Uses an on-demand WebGL 2 renderer with `gl-matrix`.
-- `crates/core/`: Rust library (`litematica_preview_native`) wrapping Nucleation 0.10.14 for decoding and meshing.
+- `crates/core/`: Rust library `litematica-preview-core` (`litematica_preview_core`), used by this app and LitematicaQL without JSON-serializing mesh buffers.
 - `Assets/`: Tracked inputs including default resource pack (`Assets/pack.zip`) and application icons.
 - `Fixtures/`: Seven demo schematics in `Demos/` and minimal format fixtures in `Formats/`.
 - `scripts/`: Cross-platform TypeScript tooling (`build.ts`, `checksums.ts`, `record-memory.ts`, `bump-version.ts`) and NSIS installer configuration (`installer.nsi`, `installer-hooks.nsh`).
@@ -112,7 +112,7 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
   pnpm run version:check [tag_or_version]
   ```
 
-- Bump version numbers across all project files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `crates/core/Cargo.toml`, and lockfiles), commit, and tag (defaults to `patch`):
+- Bump app versions (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the app entry in `Cargo.lock`), commit, and tag (defaults to `patch`). The shared engine has an independent version:
 
   ```bash
   pnpm run version:bump [patch | minor | major]

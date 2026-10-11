@@ -1,12 +1,66 @@
-//! Owned schematic mesh buffers shared directly with the Tauri Rust host.
+//! Platform-neutral, bounded schematic decoding and streaming mesh generation.
+//! Preview textures use the first animation frame; sprite-sheet playback data
+//! is not retained in per-chunk output.
 
+use nucleation::formats::limits::DecodeLimits;
 use nucleation::meshing::{MeshConfig, MeshLayer, MeshOutput, ResourcePackSource};
 use schematic_mesher::BoundingBox;
 
 mod decode;
 mod meshing;
 mod parallel;
+mod stream;
 pub use decode::{decode, DecodeFailure};
+pub use stream::MeshStream;
+
+/// Decoded occupied blocks and entities; mesh streams borrow this source.
+pub struct DecodedSchematic {
+    source: meshing::CompactBlocks,
+    warnings: Vec<String>,
+}
+
+impl DecodedSchematic {
+    pub fn block_count(&self) -> i64 {
+        self.source.block_count()
+    }
+    pub fn block_entity_count(&self) -> i64 {
+        self.source.block_entity_count()
+    }
+    /// Occupied-block bounds, excluding entity geometry and chunk padding.
+    pub fn content_origin(&self) -> (i32, i32, i32) {
+        self.source.content_origin()
+    }
+    pub fn content_dimensions(&self) -> (i32, i32, i32) {
+        self.source.content_dimensions()
+    }
+    pub fn warnings(&self) -> &[String] {
+        &self.warnings
+    }
+}
+
+/// Decode with caller-selected content limits and bounded preparation options.
+pub fn decode_with_options(
+    data: &[u8],
+    limits: &DecodeLimits,
+    options: PreviewOptions,
+    current: impl Fn() -> Result<(), String>,
+) -> Result<DecodedSchematic, DecodeFailure> {
+    options.validate().map_err(DecodeFailure::Format)?;
+    current().map_err(DecodeFailure::Format)?;
+    if data.is_empty() {
+        return Err(DecodeFailure::Format("Choose a nonempty schematic.".into()));
+    }
+    let (source, warnings) = decode::decode_preview(
+        data,
+        limits,
+        options.chunk_size.map(i32::from),
+        options.thread_count,
+        options.speed_first,
+        &current,
+    )?;
+    current().map_err(DecodeFailure::Format)?;
+    Ok(DecodedSchematic { source, warnings })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PreviewOptions {
@@ -125,32 +179,21 @@ pub fn load_chunks(
     mut on_progress: impl FnMut(usize, usize) -> Result<(), String>,
     current: impl Fn() -> Result<(), String>,
 ) -> Result<PreviewInfo, String> {
-    options.validate()?;
-    current()?;
-    if data.is_empty() {
-        return Err("Choose a nonempty schematic.".into());
-    }
-    let chunk_size = options.chunk_size.map(i32::from);
-    let source = decode::decode_preview(
-        data,
-        chunk_size,
-        options.thread_count,
-        options.speed_first,
-        &current,
-    )?;
-    current()?;
+    let source = decode_with_options(data, &decode::preview_limits(), options, &current)
+        .map_err(|error| error.to_string())?;
     let block_count = source.block_count();
     let block_entity_count = source.block_entity_count();
     if block_count == 0 {
         return Err("The schematic must contain at least one block.".into());
     }
-    let total = source.chunk_count();
+    let total = source.source.chunk_count();
     if total == 0 {
         return Err("The schematic contains no visible geometry.".into());
     }
     on_progress(0, total)?;
     let mut chunks =
-        meshing::ChunkMeshes::from_source(source, pack, &mesh_config(), chunk_size, &current)?;
+        meshing::ChunkMeshes::from_source(&source.source, pack, &mesh_config(), &current)?;
+    let mut atlas_pixels = chunks.take_atlas_pixels();
     current()?;
     let mut info = PreviewInfo {
         block_count,
@@ -164,7 +207,7 @@ pub fn load_chunks(
     chunks.consume(
         options.thread_count,
         options.speed_first,
-        |mesh| {
+        |mut mesh| {
             completed += 1;
             if parts(&mesh).next().is_none() {
                 if completed < total {
@@ -172,6 +215,8 @@ pub fn load_chunks(
                 }
                 return Ok(());
             }
+            // The first published chunk owns the atlas; later chunks keep metadata only.
+            mesh.atlas.pixels = std::mem::take(&mut atlas_pixels);
             let preview = prepare(mesh, block_count, block_entity_count)?;
             info.triangle_count = info
                 .triangle_count
@@ -259,4 +304,54 @@ pub fn prepare(
         textures,
         info,
     })
+}
+
+/// Overlay a bounded Java resource-pack ZIP on an immutable parsed base.
+pub fn resource_pack_overlay(
+    base: &ResourcePackSource,
+    bytes: &[u8],
+) -> Result<ResourcePackSource, String> {
+    let invalid = |message: &str| message.to_owned();
+    if bytes.len() > 256 * 1024 * 1024 {
+        return Err(invalid("Choose a resource pack smaller than 256 MB."));
+    }
+    // Upstream parses without enforcing total unpacked size, so bound the
+    // expansion up front from header sizes before handing bytes over. Header
+    // sizes are declarations, not measurements, but they still cap honest
+    // packs and naive bombs; true enforcement would need upstream support.
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        .map_err(|_| invalid("Choose a Minecraft Java resource-pack ZIP."))?;
+    if archive.len() > 100_000 {
+        return Err(invalid("This resource pack contains too many files."));
+    }
+    let mut expanded = 0_u64;
+    let mut metadata = false;
+    for index in 0..archive.len() {
+        let file = archive
+            .by_index(index)
+            .map_err(|error| invalid(&error.to_string()))?;
+        expanded = expanded.saturating_add(file.size());
+        if expanded > 512 * 1024 * 1024 || file.size() > 64 * 1024 * 1024 {
+            return Err(invalid(
+                "This resource pack exceeds the previewer's expanded-size limit.",
+            ));
+        }
+        metadata |= file.name() == "pack.mcmeta";
+    }
+    if !metadata {
+        return Err(invalid("The ZIP must contain pack.mcmeta and assets at its top level. Choose a Minecraft Java resource pack."));
+    }
+    let mut custom =
+        ResourcePackSource::from_bytes(bytes).map_err(|error| invalid(&error.to_string()))?;
+    if custom.pack().texture_count() == 0
+        && custom.pack().model_count() == 0
+        && custom.pack().blockstate_count() == 0
+    {
+        return Err(invalid(
+            "This pack has no supported textures or models. Choose a Minecraft Java resource pack.",
+        ));
+    }
+    let mut merged = base.pack().clone();
+    merged.overlay(std::mem::take(custom.pack_mut()));
+    Ok(ResourcePackSource::from_resource_pack(merged))
 }

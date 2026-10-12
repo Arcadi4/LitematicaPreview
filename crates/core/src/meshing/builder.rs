@@ -3,7 +3,7 @@
 use rustc_hash::FxHashMap;
 use schematic_mesher::mesh_output::GreedyMaterialOutput;
 use schematic_mesher::mesher::{element::MeshBuilder, face_culler::FaceCuller, liquid, Mesh};
-use schematic_mesher::resolver::{resolve_block, ModelResolver};
+use schematic_mesher::resolver::{ModelResolver, StateResolver};
 use schematic_mesher::{
     BlockPosition, BoundingBox, InputBlock, MeshLayer, MeshOutput, MesherConfig, ResourcePack,
     TextureAtlas,
@@ -12,14 +12,29 @@ use schematic_mesher::{
 /// Greedy materials have no alpha-test layer. States that can emit a binary-alpha
 /// face remain in the atlas builder, while their opaque faces stay identical.
 /// Missing textures use the atlas sentinel rather than an empty greedy texture.
-pub(super) fn atlas_only(pack: &ResourcePack, block: &InputBlock) -> bool {
-    let Ok(models) = resolve_block(pack, block) else {
+///
+/// `resolver` is shared by the caller across the whole palette, so each
+/// distinct model inheritance chain resolves and merges once for the build
+/// instead of once per palette state; the blockstate side is a lookup plus a
+/// property match, which is the same work `resolve_block` would do.
+pub(super) fn atlas_only(
+    pack: &ResourcePack,
+    resolver: &ModelResolver,
+    block: &InputBlock,
+) -> bool {
+    let Ok(variants) = StateResolver::new(pack).resolve(block) else {
         return true;
     };
-    let resolver = ModelResolver::new(pack);
-    models.iter().any(|resolved| {
-        let textures = resolver.resolve_textures(&resolved.model);
-        resolved.model.elements.iter().any(|element| {
+    let Ok(models) = variants
+        .iter()
+        .map(|variant| resolver.resolve(&variant.model))
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return true;
+    };
+    models.iter().any(|model| {
+        let textures = resolver.resolve_textures(model);
+        model.elements.iter().any(|element| {
             element.faces.values().any(|face| {
                 let path = face
                     .texture

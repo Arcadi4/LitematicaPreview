@@ -4,6 +4,7 @@
 //! and copyright notice are in ThirdParty/Nucleation-LICENSE.txt.
 use nucleation::meshing::{MeshConfig, MeshOutput, ResourcePackSource};
 use nucleation::{BlockState, Entity, NbtValue, UniversalSchematic};
+use schematic_mesher::resolver::ModelResolver;
 use schematic_mesher::{
     BlockPosition, BoundingBox, InputBlock, MesherConfig, ResourcePack, TextureAtlas,
 };
@@ -728,11 +729,18 @@ impl<'a> ChunkMeshes<'a> {
         current()?;
         let config = mesher_config(config);
         let atlas = source.atlas(pack, &config)?;
-        let atlas_only = source
-            .palette
-            .iter()
-            .map(|block| config.greedy_meshing && builder::atlas_only(pack.pack(), block))
-            .collect();
+        let atlas_only: Vec<bool> = if config.greedy_meshing {
+            // Per-palette-state verdicts are independent lookups over the same
+            // shared pack, so they shard cleanly; each worker rebuilds one
+            // ModelResolver, whose inheritance cache stays warm for its shard.
+            crate::parallel::shard_map(
+                &source.palette,
+                || ModelResolver::new(pack.pack()),
+                |resolver, block| builder::atlas_only(pack.pack(), resolver, block),
+            )?
+        } else {
+            vec![false; source.palette.len()]
+        };
         current()?;
         Ok(Self {
             source,

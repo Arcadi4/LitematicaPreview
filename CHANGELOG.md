@@ -1,3 +1,20 @@
+# v0.3.1
+
+## Features
+
+- Gather preview settings, control help, and theme choice in a single settings dialog with Performance, Control, and Appearance sections in a scrollable sidebar layout.
+- Make every preview setting more compact and add an info notice that explains what the setting does without leaving the dialog.
+
+## Improvements
+
+- Keep the window responsive while uploading models by yielding the render loop once per upload page instead of once per GPU allocation.
+
+## ToDos
+
+- Add recent-files history.
+- Add lighting shader.
+- Multi-file preview ([#13](https://github.com/Arcadi4/LitematicaPreview/issues/13))
+
 # v0.3.0
 
 ## Features

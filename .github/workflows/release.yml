@@ -14,18 +14,17 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Build and publish release
-    runs-on: windows-latest
-    env:
-      RUSTFLAGS: "-C target-feature=+crt-static"
-      CARGO_TARGET_DIR: target
-      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+  # `check` gates the whole workflow. When the GitHub release already exists
+  # (a re-run of a published tag) it reports `exists=true` and every downstream
+  # job skips, so no tests or builds run against an already-published release.
+  check:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      exists: ${{ steps.check_tag.outputs.exists }}
+      prerelease: ${{ steps.check_tag.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
       - uses: pnpm/action-setup@v6
         with:
           version: 12
@@ -34,7 +33,8 @@ jobs:
           node-version: "24"
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
       - name: Validate release tag
         id: check_tag
         shell: bash
@@ -69,60 +69,127 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # The frontend checks run on Ubuntu, where pnpm and the Vite+ toolchain are
+  # much faster than on the Windows image, in parallel with the Rust tests.
+  frontend:
+    name: Test frontend
+    runs-on: ubuntu-latest
+    needs: check
+    if: needs.check.outputs.exists != 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
-        if: steps.check_tag.outputs.exists != 'true'
         run: pnpm install --frozen-lockfile
-
       - name: Check frontend formatting
-        if: steps.check_tag.outputs.exists != 'true'
         run: pnpm run format:check
-
       - name: Lint frontend
-        if: steps.check_tag.outputs.exists != 'true'
         run: pnpm run lint
       - name: Test frontend
-        if: steps.check_tag.outputs.exists != 'true'
         run: pnpm run test
 
+  # `core` and `host` run in parallel. They must stay on the same runner image
+  # and target triple to keep their caches useful, but they must keep separate
+  # cache keys: a shared key would make one job's save evict the other's.
+  core:
+    name: Test schematic decoding and meshing
+    runs-on: windows-latest
+    needs: check
+    if: needs.check.outputs.exists != 'true'
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
+      CARGO_TARGET_DIR: target
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.check_tag.outputs.exists != 'true'
         with:
           targets: x86_64-pc-windows-msvc
           components: rustfmt
-
       - uses: Swatinem/rust-cache@v2
-        if: steps.check_tag.outputs.exists != 'true'
         with:
           workspaces: . -> target
+      # `cargo fmt` needs no target, so this one step covers both manifests.
       - name: Check Rust formatting
-        if: steps.check_tag.outputs.exists != 'true'
-        run: pnpm run format:rust
+        shell: bash
+        run: |
+          cargo fmt --manifest-path crates/core/Cargo.toml -- --check
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Test core
+        run: cargo test --manifest-path crates/core/Cargo.toml --locked
 
+  host:
+    name: Test the Tauri host
+    runs-on: windows-latest
+    needs: check
+    if: needs.check.outputs.exists != 'true'
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
+      CARGO_TARGET_DIR: target
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
       # `tauri::generate_context!` embeds `frontendDist` at compile time, so the
       # directory must exist even though the host tests never load the frontend.
       - name: Create placeholder frontend directory
-        if: steps.check_tag.outputs.exists != 'true'
         shell: bash
         run: mkdir -p dist
+      - name: Test host
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
 
-      - name: Test schematic decoding and meshing
-        if: steps.check_tag.outputs.exists != 'true'
-        run: pnpm run test:core
+  publish:
+    name: Build and publish release
+    runs-on: windows-latest
+    needs: [check, frontend, core, host]
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
+      CARGO_TARGET_DIR: target
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      - name: Test the Tauri host
-        if: steps.check_tag.outputs.exists != 'true'
-        run: pnpm run test:host
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      # `tauri build` runs `beforeBuildCommand` (`pnpm run build`), so the
+      # frontend is type-checked and bundled before the Rust release build.
       - name: Build setup and portable packages
-        if: steps.check_tag.outputs.exists != 'true'
         run: pnpm exec tsx scripts/build.ts
 
       - name: Generate package checksums
-        if: steps.check_tag.outputs.exists != 'true'
         run: pnpm run checksums
 
       - uses: actions/upload-artifact@v7
-        if: steps.check_tag.outputs.exists != 'true'
         with:
           name: LitematicaPreview-${{ github.ref_name }}-win-x64
           path: |
@@ -132,7 +199,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload build logs
-        if: always() && steps.check_tag.outputs.exists != 'true'
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: LitematicaPreview-${{ github.ref_name }}-build-logs
@@ -140,7 +207,6 @@ jobs:
           if-no-files-found: ignore
 
       - name: Prepare release notes
-        if: steps.check_tag.outputs.exists != 'true'
         shell: bash
         run: |
           node --input-type=module - "$GITHUB_REF_NAME" "$RUNNER_TEMP/release-notes.md" <<'NODE'
@@ -186,11 +252,10 @@ jobs:
           NODE
 
       - name: Publish GitHub Release
-        if: steps.check_tag.outputs.exists != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          IS_PRERELEASE: ${{ steps.check_tag.outputs.prerelease }}
+          IS_PRERELEASE: ${{ needs.check.outputs.prerelease }}
         run: |
           tag="$GITHUB_REF_NAME"
 

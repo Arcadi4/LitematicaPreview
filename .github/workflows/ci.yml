@@ -31,6 +31,8 @@ jobs:
         run: pnpm run lint
       - name: Test frontend
         run: pnpm run test
+      - name: Build frontend
+        run: pnpm run build
   # `core` and `host` run in parallel. They must stay on the same runner image
   # and target triple to keep their caches useful, but they must keep separate
   # cache keys: a shared key would make one job's save evict the other's.

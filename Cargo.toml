@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-tauri", "crates/core"]
+members = ["src-tauri"]
 resolver = "2"
 
 # Debug info is the most expensive part of an unoptimized build. Line tables

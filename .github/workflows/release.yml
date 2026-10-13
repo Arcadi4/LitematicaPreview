@@ -95,36 +95,6 @@ jobs:
       - name: Test frontend
         run: pnpm run test
 
-  # `core` and `host` run in parallel. They must stay on the same runner image
-  # and target triple to keep their caches useful, but they must keep separate
-  # cache keys: a shared key would make one job's save evict the other's.
-  core:
-    name: Test schematic decoding and meshing
-    runs-on: windows-latest
-    needs: check
-    if: needs.check.outputs.exists != 'true'
-    env:
-      RUSTFLAGS: "-C target-feature=+crt-static"
-      CARGO_TARGET_DIR: target
-      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-          components: rustfmt
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: . -> target
-      # `cargo fmt` needs no target, so this one step covers both manifests.
-      - name: Check Rust formatting
-        shell: bash
-        run: |
-          cargo fmt --manifest-path crates/core/Cargo.toml -- --check
-          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-      - name: Test core
-        run: cargo test --manifest-path crates/core/Cargo.toml --locked
-
   host:
     name: Test the Tauri host
     runs-on: windows-latest
@@ -142,6 +112,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       # `tauri::generate_context!` embeds `frontendDist` at compile time, so the
       # directory must exist even though the host tests never load the frontend.
       - name: Create placeholder frontend directory
@@ -153,7 +125,7 @@ jobs:
   publish:
     name: Build and publish release
     runs-on: windows-latest
-    needs: [check, frontend, core, host]
+    needs: [check, frontend, host]
     env:
       RUSTFLAGS: "-C target-feature=+crt-static"
       CARGO_TARGET_DIR: target

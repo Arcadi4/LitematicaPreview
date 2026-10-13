@@ -7,7 +7,7 @@
     "build:win": "pnpm install --frozen-lockfile && tsx scripts/build.ts",
     "build": "tsc --noEmit && vp build",
     "bump": "tsx scripts/bump-version.ts",
-    "check:host": "cargo check --manifest-path src-tauri/Cargo.toml --all-targets --locked",
+    "check:host": "tsx scripts/cargo.ts check --manifest-path src-tauri/Cargo.toml --all-targets --locked",
     "check": "pnpm run format:check && pnpm run lint && pnpm run format:rust && pnpm run build && pnpm run test && pnpm run test:host",
     "checksums": "tsx scripts/checksums.ts",
     "dev": "vp dev --host 127.0.0.1",
@@ -21,7 +21,7 @@
     "record-memory": "tsx scripts/record-memory.ts",
     "tauri:dev": "tauri dev",
     "tauri": "tauri",
-    "test:host": "cargo test --manifest-path src-tauri/Cargo.toml --locked",
+    "test:host": "tsx scripts/cargo.ts test --manifest-path src-tauri/Cargo.toml --locked",
     "test": "vp test run",
     "version:bump": "tsx scripts/bump-version.ts",
     "version:check": "tsx scripts/bump-version.ts --check"

@@ -3,10 +3,10 @@
 Windows x64 desktop app for offline Minecraft schematic and structure viewing. The root is both a pnpm workspace and a Cargo workspace.
 
 - Root: Tauri 2 desktop application with a Rust host (`src-tauri/`) and Fluent UI React v9 frontend (`src/`). Uses an on-demand WebGL 2 renderer with `gl-matrix`.
-- `crates/core/`: Rust library `litematica-preview-core` (`litematica_preview_core`), used by this app and LitematicaQL without JSON-serializing mesh buffers.
+- The shared engine lives in https://github.com/Arcadi4/litematica-preview-core and is consumed from crates.io as `litematica-preview-core`. Set `LP_CORE_PATH` to a local checkout to build against unpublished core changes; `scripts/cargo.ts` applies the patch. LitematicaQL uses the same variable via its own `Core/cargo.sh`.
 - `Assets/`: Tracked inputs including default resource pack (`Assets/pack.zip`) and application icons.
 - `Fixtures/`: Seven demo schematics in `Demos/` and minimal format fixtures in `Formats/`.
-- `scripts/`: Cross-platform TypeScript tooling (`build.ts`, `checksums.ts`, `record-memory.ts`, `bump-version.ts`) and NSIS installer configuration (`installer.nsi`, `installer-hooks.nsh`).
+- `scripts/`: Cross-platform TypeScript tooling (`build.ts`, `cargo.ts`, `checksums.ts`, `record-memory.ts`, `bump-version.ts`) and NSIS installer configuration (`installer.nsi`, `installer-hooks.nsh`).
 
 Every repository task is a package script in `package.json`; there are no PowerShell entry points. Scripts run through `tsx` except `bump-version.ts`, which stays dependency-free so release tags can be validated before `pnpm install`.
 
@@ -88,11 +88,20 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
   pnpm run format:rust
   ```
 
-- Core decoder and mesher tests:
+- Core decoder and mesher tests run in the core repository, not here:
 
   ```bash
-  pnpm run test:core
+  cd ../litematica-preview-core && cargo test --locked
   ```
+
+- Build the host against a local core checkout:
+
+  ```bash
+  LP_CORE_PATH=../litematica-preview-core pnpm run test:host
+  ```
+
+  This rewrites `Cargo.lock` to point at that checkout; restore it with
+  `git checkout Cargo.lock` before committing.
 
 - Rust Tauri host compile check:
 

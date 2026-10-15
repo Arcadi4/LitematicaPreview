@@ -1,93 +1,11 @@
-import { MAX_READ_RANGES, UPLOAD_CHUNK, type UploadPage } from "./upload-layout"
+import { UPLOAD_CHUNK, type UploadPage } from "./upload-layout"
 const PREPARATION_BYTES = 4 * UPLOAD_CHUNK
 
-export type PreparationWorker = {
-  prepare: (buffer: ArrayBuffer, page: UploadPage) => Promise<ArrayBuffer>
-  terminate: () => void
-}
-
 export type PreparedPage = { page: UploadPage; buffer: ArrayBuffer }
-
-type PooledWorker = {
-  worker: PreparationWorker
-  onError: ((error: Error) => void) | null
-  busy: boolean
-  failed: boolean
-}
-
-// A batch returns an idle lease; a whole load owns and disposes the actual workers.
-// Busy/error leases are never reused, so late replies cannot reach a later batch.
-export class PreparationWorkerPool {
-  private readonly workers = new Set<PooledWorker>()
-  private readonly idle: PooledWorker[] = []
-  private disposed = false
-
-  constructor(
-    private readonly createWorker: (onError: (error: Error) => void) => PreparationWorker,
-  ) {}
-
-  acquire(onError: (error: Error) => void): PreparationWorker {
-    if (this.disposed) throw new Error("Cancelled")
-    let entry = this.idle.pop()
-    while (entry?.failed) {
-      this.workers.delete(entry)
-      entry.worker.terminate()
-      entry = this.idle.pop()
-    }
-    if (!entry) {
-      const created: PooledWorker = {
-        worker: this.createWorker((error) => {
-          created.failed = true
-          created.onError?.(error)
-        }),
-        onError,
-        busy: false,
-        failed: false,
-      }
-      entry = created
-      this.workers.add(entry)
-    }
-    const leased = entry
-    leased.onError = onError
-    let released = false
-    return {
-      prepare: async (buffer, page) => {
-        if (released || this.disposed) throw new Error("Cancelled")
-        leased.busy = true
-        try {
-          return await leased.worker.prepare(buffer, page)
-        } catch (error) {
-          leased.failed = true
-          throw error
-        } finally {
-          leased.busy = false
-        }
-      },
-      terminate: () => {
-        if (released) return
-        released = true
-        leased.onError = null
-        if (!this.disposed && !leased.busy && !leased.failed) this.idle.push(leased)
-        else if (this.workers.delete(leased)) leased.worker.terminate()
-      },
-    }
-  }
-
-  dispose(): void {
-    this.disposed = true
-    for (const entry of this.workers) {
-      entry.onError = null
-      entry.worker.terminate()
-    }
-    this.workers.clear()
-    this.idle.length = 0
-  }
-}
 
 type Result = { buffer: ArrayBuffer } | { error: Error }
 type Slot = {
   page: UploadPage
-  worker: PreparationWorker
   result: Promise<Result>
   finish: (result: Result) => void
 }
@@ -95,11 +13,10 @@ type Slot = {
 const errorOf = (error: unknown): Error =>
   error instanceof Error ? error : new Error(String(error))
 
-// The window includes reads, worker-owned buffers, ready results and the buffer
+// The window includes reads, ready results and the buffer
 // currently being uploaded. A slot is not reused until GL has consumed its bytes.
 export class PreparedUploads {
   readonly drained: Promise<void>
-  private readonly workers: PreparationWorker[] = []
   private readonly slots: Slot[] = []
   private readonly started: Promise<void>
   private readonly finishDrain: () => void
@@ -112,7 +29,6 @@ export class PreparedUploads {
   private readonly pages: Iterator<UploadPage>
   private readonly read: (page: UploadPage) => Promise<ArrayBuffer>
   private readonly guard: () => void
-  private readonly createWorker: (onError: (error: Error) => void) => PreparationWorker
 
   constructor(
     pages: Iterator<UploadPage>,
@@ -120,15 +36,13 @@ export class PreparedUploads {
     count: number,
     speedFirst: boolean,
     guard: () => void,
-    createWorker: (onError: (error: Error) => void) => PreparationWorker,
     preceding: Promise<void> = Promise.resolve(),
   ) {
-    if (!Number.isInteger(count) || count < 2 || count > 8)
-      throw new Error("Invalid preview worker count.")
+    if (!Number.isInteger(count) || count < 1 || count > 8)
+      throw new Error("Invalid preview read window.")
     this.pages = pages
     this.read = read
     this.guard = guard
-    this.createWorker = createWorker
     let finishDrain!: () => void
     const readsDrained = new Promise<void>((resolve) => {
       finishDrain = resolve
@@ -152,9 +66,7 @@ export class PreparedUploads {
             this.ended = true
             break
           }
-          const worker = this.createWorker((error) => this.stop(error))
-          this.workers.push(worker)
-          this.schedule(worker, next.value)
+          this.schedule(next.value)
         }
       } catch (error) {
         this.stop(errorOf(error))
@@ -191,7 +103,7 @@ export class PreparedUploads {
       try {
         const next = this.pages.next()
         if (next.done) this.ended = true
-        else this.schedule(slot.worker, next.value)
+        else this.schedule(next.value)
       } catch (error) {
         this.stop(errorOf(error))
         throw this.failure
@@ -206,12 +118,10 @@ export class PreparedUploads {
     for (const slot of this.slots) slot.finish({ error })
     this.slots.length = 0
     this.held = null
-    for (const worker of this.workers) worker.terminate()
-    this.workers.length = 0
     if (this.reads === 0) this.finishDrain()
   }
 
-  private schedule(worker: PreparationWorker, page: UploadPage): void {
+  private schedule(page: UploadPage): void {
     this.guard()
     if (
       !Number.isSafeInteger(page.byteLength) ||
@@ -223,7 +133,7 @@ export class PreparedUploads {
     const result = new Promise<Result>((resolve) => {
       finish = resolve
     })
-    const slot = { page, worker, result, finish }
+    const slot = { page, result, finish }
     this.slots.push(slot)
     this.reads++
     void this.prepare(slot)
@@ -231,77 +141,17 @@ export class PreparedUploads {
 
   private async prepare(slot: Slot): Promise<void> {
     try {
-      let buffer: ArrayBuffer
-      try {
-        buffer = await this.read(slot.page)
-      } finally {
-        this.reads--
-        if (this.failure && this.reads === 0) this.finishDrain()
-      }
+      const buffer = await this.read(slot.page)
       if (this.failure) return
       this.guard()
       if (!(buffer instanceof ArrayBuffer) || buffer.byteLength !== slot.page.byteLength)
         throw new Error("The preview contains an incomplete data page.")
-      const prepared = await slot.worker.prepare(buffer, slot.page)
-      if (this.failure) return
-      this.guard()
-      if (!(prepared instanceof ArrayBuffer) || prepared.byteLength !== slot.page.byteLength)
-        throw new Error("The preview worker returned an incomplete data page.")
-      slot.finish({ buffer: prepared })
+      slot.finish({ buffer })
     } catch (error) {
       this.stop(errorOf(error))
+    } finally {
+      this.reads--
+      if (this.failure && this.reads === 0) this.finishDrain()
     }
   }
-}
-
-export function validateUpload(buffer: ArrayBuffer, page: UploadPage): void {
-  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength !== page.byteLength)
-    throw new Error("The preview contains an incomplete data page.")
-  if (
-    !Array.isArray(page.slices) ||
-    page.slices.length === 0 ||
-    page.slices.length > MAX_READ_RANGES ||
-    !Number.isSafeInteger(page.byteLength) ||
-    page.byteLength <= 0 ||
-    page.byteLength > UPLOAD_CHUNK ||
-    !Number.isSafeInteger(page.payloadBytes)
-  )
-    throw new Error("Invalid preview preparation page.")
-  let cursor = 0
-  let payloadBytes = 0
-  for (const slice of page.slices) {
-    const expectedOffset = cursor + ((4 - (cursor % 4)) % 4)
-    if (
-      !Number.isSafeInteger(slice.pageOffset) ||
-      slice.pageOffset !== expectedOffset ||
-      !Number.isSafeInteger(slice.length) ||
-      slice.length <= 0 ||
-      slice.length > UPLOAD_CHUNK ||
-      slice.pageOffset + slice.length > page.byteLength
-    )
-      throw new Error("Invalid preview preparation page.")
-    cursor = slice.pageOffset + slice.length
-    payloadBytes += slice.length
-    if (slice.validation === "float32") {
-      if (slice.length % 4 !== 0 || slice.pageOffset % 4 !== 0)
-        throw new Error("Invalid preview preparation page.")
-      for (const value of new Float32Array(buffer, slice.pageOffset, slice.length / 4)) {
-        if (!Number.isFinite(value)) throw new Error("A preview mesh contains invalid coordinates.")
-      }
-    } else if (slice.validation === "uint32") {
-      if (slice.length % 4 !== 0 || slice.pageOffset % 4 !== 0)
-        throw new Error("Invalid preview preparation page.")
-      const vertexCount = slice.vertexCount
-      if (vertexCount === undefined || !Number.isSafeInteger(vertexCount) || vertexCount < 0)
-        throw new Error("A preview mesh has an invalid vertex count.")
-      for (const index of new Uint32Array(buffer, slice.pageOffset, slice.length / 4)) {
-        if (index >= vertexCount)
-          throw new Error("A preview mesh contains an invalid vertex index.")
-      }
-    } else if (slice.validation !== "none") {
-      throw new Error("Invalid preview preparation page.")
-    }
-  }
-  if (cursor !== page.byteLength || payloadBytes !== page.payloadBytes)
-    throw new Error("Invalid preview preparation page.")
 }

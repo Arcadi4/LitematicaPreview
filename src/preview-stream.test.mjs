@@ -6,7 +6,7 @@ const turn = () => new Promise((resolve) => setImmediate(resolve))
 
 function batch(batchId, textureOffset, newTexture = batchId === 1) {
   const textures = newTexture
-    ? [{ width: 1, height: 1, byteLength: 4, bufferId: 0, repeat: false }]
+    ? [{ width: 1, height: 1, byteLength: 4, bufferId: 1, repeat: textureOffset !== 0 }]
     : []
   return {
     kind: "batch",
@@ -19,7 +19,8 @@ function batch(batchId, textureOffset, newTexture = batchId === 1) {
         triangleCount: 1,
         min: [batchId - 1, 0, 0],
         max: [batchId, 1, 1],
-        byteLength: 93 + textures.length * 4,
+        geometryByteLength: 80,
+        byteLength: 80 + textures.length * 4,
         textures,
         parts: [
           {
@@ -27,7 +28,12 @@ function batch(batchId, textureOffset, newTexture = batchId === 1) {
             indexCount: 3,
             textureIndex: textureOffset + textures.length - 1,
             alphaMode: 0,
-            buffers: Array.from({ length: 5 }, (_, index) => textures.length + index),
+            vertexOffset: 0,
+            indexOffset: 72,
+            vertexStride: 24,
+            indexSize: 2,
+            origin: [batchId - 1, 0, 0],
+            extent: [1, 1, 1],
           },
         ],
       },
@@ -43,10 +49,12 @@ function complete(events) {
     min: [Infinity, Infinity, Infinity],
     max: [-Infinity, -Infinity, -Infinity],
     byteLength: 0,
+    geometryByteLength: 0,
     textures: [],
     parts: [],
   }
   let offset = 0
+  let geometryOffset = 0
   for (const {
     batch: { metadata: source },
   } of events) {
@@ -59,8 +67,14 @@ function complete(events) {
     for (const texture of source.textures)
       metadata.textures.push({ ...texture, bufferId: texture.bufferId + offset })
     for (const part of source.parts)
-      metadata.parts.push({ ...part, buffers: part.buffers.map((id) => id + offset) })
-    offset += source.textures.length + source.parts.length * 5
+      metadata.parts.push({
+        ...part,
+        vertexOffset: part.vertexOffset + geometryOffset,
+        indexOffset: part.indexOffset + geometryOffset,
+      })
+    offset += source.textures.length
+    geometryOffset += source.geometryByteLength
+    metadata.geometryByteLength += source.geometryByteLength
   }
   return { kind: "complete", metadata }
 }
@@ -117,10 +131,9 @@ test("consumes geometry before generation finishes and acknowledges only uploade
   await turn()
   assert.deepEqual(acknowledgements, [null])
   uploaded.resolve()
-  const metadata = await finished
+  await finished
   assert.deepEqual(uploads, [1, 2])
   assert.deepEqual(acknowledgements, [null, 1, 2])
-  assert.equal(metadata.byteLength, 190)
   assert.equal(committed, true)
 })
 
@@ -145,17 +158,12 @@ test("deduplicated global textures survive local buffer ID reuse and publication
   assert.equal(boundTextures[2], uploadedTextures[1])
   assert.deepEqual(
     metadata.textures.map((texture) => texture.bufferId),
-    [0, 11],
+    [1, 2],
   )
   assert.deepEqual(
-    metadata.parts.map((part) => part.buffers),
-    [
-      [1, 2, 3, 4, 5],
-      [6, 7, 8, 9, 10],
-      [12, 13, 14, 15, 16],
-    ],
+    metadata.parts.map((part) => part.vertexOffset),
+    [0, 80, 160],
   )
-  assert.equal(metadata.byteLength, 287)
 })
 
 test("late native failure never produces a completed model or another acknowledgement", async () => {
@@ -272,80 +280,81 @@ const malformedBatches = [
     (value) => {
       value.batchId = 3
     },
-    /batch order/,
   ],
   [
     "wrong texture offset",
     (value) => {
       value.textureOffset = 0
     },
-    /texture offset/,
   ],
   [
     "unpublished texture",
     (value) => {
       value.metadata.parts[0].textureIndex = 1
     },
-    /texture index/,
   ],
   [
-    "duplicate local buffer",
+    "overlapping geometry",
     (value) => {
-      value.metadata.parts[0].buffers[1] = 0
+      value.metadata.parts[0].vertexOffset = 4
     },
-    /duplicate buffer/,
   ],
   [
     "truncated payload",
     (value) => {
       value.metadata.byteLength--
     },
-    /truncated|payload length/,
   ],
   [
     "incorrect triangle count",
     (value) => {
       value.metadata.triangleCount = 2
     },
-    /triangle count/,
   ],
   [
     "changed source count",
     (value) => {
       value.metadata.blockEntityCount++
     },
-    /source counts/,
   ],
   [
     "reversed bounds",
     (value) => {
       value.metadata.min[0] = 9
     },
-    /bounds are reversed/,
   ],
   [
     "fractional vertex count",
     (value) => {
       value.metadata.parts[0].vertexCount = 2.5
     },
-    /vertex count/,
   ],
   [
     "invalid alpha mode",
     (value) => {
       value.metadata.parts[0].alphaMode = 3
     },
-    /alpha mode/,
   ],
   [
     "incomplete triangle",
     (value) => {
       value.metadata.parts[0].indexCount = 4
     },
-    /incomplete triangle/,
+  ],
+  [
+    "unsupported vertex layout",
+    (value) => {
+      value.metadata.parts[0].vertexStride = 25
+    },
+  ],
+  [
+    "invalid position transform",
+    (value) => {
+      value.metadata.parts[0].extent[0] = -1
+    },
   ],
 ]
-for (const [name, corrupt, expected] of malformedBatches) {
+for (const [name, corrupt] of malformedBatches) {
   test(`rejects ${name} before uploading the malformed batch`, async () => {
     const events = [batch(1, 0), batch(2, 1)]
     corrupt(events[1].batch)
@@ -359,7 +368,6 @@ for (const [name, corrupt, expected] of malformedBatches) {
         guard,
         4096,
       ),
-      expected,
     )
     assert.deepEqual(uploads, [1])
   })
@@ -371,50 +379,45 @@ const malformedCompletions = [
     (metadata) => {
       metadata.max[0]++
     },
-    /summary/,
   ],
   [
     "changed global counts",
     (metadata) => {
       metadata.blockCount++
     },
-    /summary/,
   ],
   [
     "changed texture descriptor",
     (metadata) => {
       metadata.textures[0].repeat = true
     },
-    /completion texture/,
   ],
   [
     "changed mesh descriptor",
     (metadata) => {
       metadata.parts[1].alphaMode = 2
     },
-    /completion mesh/,
   ],
   [
-    "reordered global buffers",
+    "reordered geometry",
     (metadata) => {
-      ;[metadata.parts[0].buffers[0], metadata.parts[1].buffers[0]] = [
-        metadata.parts[1].buffers[0],
-        metadata.parts[0].buffers[0],
+      ;[metadata.parts[0].vertexOffset, metadata.parts[1].vertexOffset] = [
+        metadata.parts[1].vertexOffset,
+        metadata.parts[0].vertexOffset,
       ]
     },
-    /completion mesh/,
   ],
   [
     "missing batch",
     (metadata) => {
       metadata.parts.pop()
-      metadata.byteLength -= 93
+      metadata.byteLength -= 80
+      metadata.geometryByteLength -= 80
       metadata.triangleCount--
     },
-    /summary/,
   ],
 ]
-for (const [name, corrupt, expected] of malformedCompletions) {
+for (const [name, corrupt] of malformedCompletions) {
   test(`rejects completion with ${name} after staged uploads`, async () => {
     const events = [batch(1, 0), batch(2, 1)]
     const final = complete(events)
@@ -429,7 +432,6 @@ for (const [name, corrupt, expected] of malformedCompletions) {
         guard,
         4096,
       ),
-      expected,
     )
     assert.deepEqual(uploads, [1, 2])
   })

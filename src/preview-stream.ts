@@ -4,6 +4,7 @@ export type PreviewMetadata = {
   triangleCount: number
   min: [number, number, number]
   max: [number, number, number]
+  geometryByteLength: number
   byteLength: number
   textures: {
     width: number
@@ -17,7 +18,12 @@ export type PreviewMetadata = {
     indexCount: number
     textureIndex: number
     alphaMode: 0 | 1 | 2
-    buffers: [number, number, number, number, number]
+    vertexOffset: number
+    indexOffset: number
+    vertexStride: 24 | 28
+    indexSize: 2 | 4
+    origin: [number, number, number]
+    extent: [number, number, number]
   }[]
 }
 
@@ -30,14 +36,6 @@ export type PreviewBatch = {
 export type PreviewStreamEvent =
   | { kind: "batch"; batch: PreviewBatch }
   | { kind: "complete"; metadata: PreviewMetadata }
-
-export const BUFFER_FORMATS = [
-  { size: 3, array: Float32Array, normalized: false },
-  { size: 3, array: Int8Array, normalized: true },
-  { size: 2, array: Float32Array, normalized: false },
-  { size: 4, array: Uint8Array, normalized: true },
-  { size: 1, array: Uint32Array, normalized: false },
-] as const
 
 function integer(
   value: unknown,
@@ -69,6 +67,7 @@ export function validateMetadata(
 ): void {
   const root = record(metadata, "metadata")
   const byteLength = integer(root.byteLength, "payload byte length", Number.MAX_SAFE_INTEGER, 1)
+  const geometryBytes = integer(root.geometryByteLength, "geometry byte length", byteLength, 1)
   integer(root.blockCount, "block count", Number.MAX_SAFE_INTEGER, 1)
   integer(root.blockEntityCount, "block entity count")
   integer(root.triangleCount, "triangle count", Number.MAX_SAFE_INTEGER, 1)
@@ -94,14 +93,9 @@ export function validateMetadata(
   ) {
     throw new Error("The preview must contain textures and renderable mesh parts.")
   }
-  const bufferCount = integer(
-    root.textures.length + root.parts.length * 5,
-    "buffer count",
-    0xffffffff,
-    1,
-  )
-  const bufferIds = new Set<number>()
-  let totalBytes = 0
+  const bufferCount = integer(root.textures.length + 1, "buffer count", 0xffffffff, 1)
+  const bufferIds = new Set<number>([0])
+  let totalBytes = geometryBytes
   const consume = (id: unknown, bytes: number) => {
     const bufferId = integer(id, "buffer ID", bufferCount - 1)
     if (bufferIds.has(bufferId)) throw new Error("The preview contains a duplicate buffer ID.")
@@ -128,6 +122,7 @@ export function validateMetadata(
     consume(texture.bufferId, bytes)
   }
   let triangles = 0
+  let geometryOffset = 0
   for (const value of root.parts) {
     const part = record(value, "mesh part")
     const vertices = integer(part.vertexCount, "vertex count", 0xffffffff, 1)
@@ -135,18 +130,46 @@ export function validateMetadata(
     integer(part.textureIndex, "texture index", root.textures.length + textureOffset - 1)
     integer(part.alphaMode, "alpha mode", 2)
     if (indices % 3 !== 0) throw new Error("A preview mesh contains an incomplete triangle.")
-    if (!Array.isArray(part.buffers) || part.buffers.length !== BUFFER_FORMATS.length)
-      throw new Error("A preview mesh has an invalid buffer list.")
-    for (let attribute = 0; attribute < BUFFER_FORMATS.length; attribute++) {
-      const format = BUFFER_FORMATS[attribute]
-      const count = attribute === 4 ? indices : vertices
-      consume(part.buffers[attribute], count * format.size * format.array.BYTES_PER_ELEMENT)
+    const stride = integer(part.vertexStride, "vertex stride")
+    const indexSize = integer(part.indexSize, "index size")
+    if ((stride !== 24 && stride !== 28) || (indexSize !== 2 && indexSize !== 4))
+      throw new Error("A preview mesh has an invalid packed layout.")
+    if (indexSize === 2 && vertices > 65536)
+      throw new Error("A preview mesh has an invalid index width.")
+    const vertexOffset = integer(part.vertexOffset, "vertex offset", geometryBytes)
+    const indexOffset = integer(part.indexOffset, "index offset", geometryBytes)
+    const end = indexOffset + indices * indexSize
+    if (
+      vertexOffset !== geometryOffset ||
+      indexOffset !== vertexOffset + vertices * stride ||
+      !Number.isSafeInteger(end) ||
+      end > geometryBytes
+    )
+      throw new Error("The preview contains truncated or overlapping geometry.")
+    geometryOffset = Math.ceil(end / 4) * 4
+    for (const [name, bound] of [
+      ["origin", part.origin],
+      ["extent", part.extent],
+    ] as const) {
+      if (
+        !Array.isArray(bound) ||
+        bound.length !== 3 ||
+        bound.some(
+          (value: unknown) =>
+            typeof value !== "number" ||
+            !Number.isFinite(value) ||
+            (name === "extent" && value < 0),
+        )
+      )
+        throw new Error("A preview mesh has an invalid position transform.")
     }
     triangles = integer(triangles + indices / 3, "accumulated triangle count")
   }
   if (triangles !== root.triangleCount)
     throw new Error("The preview triangle count does not match its mesh parts.")
   if (totalBytes !== byteLength) throw new Error("The preview has an unexpected payload length.")
+  if (geometryOffset !== geometryBytes)
+    throw new Error("The preview has an unexpected geometry length.")
 }
 
 // Retain descriptors only, never batch payloads or copies of earlier descriptor arrays.
@@ -191,6 +214,7 @@ export class PreviewStream {
     let textureCount = 0
     let partCount = 0
     let byteLength = 0
+    let geometryByteLength = 0
     let triangleCount = 0
     const minimum = [Infinity, Infinity, Infinity]
     const maximum = [-Infinity, -Infinity, -Infinity]
@@ -212,6 +236,7 @@ export class PreviewStream {
           metadata.textures.length !== textureCount ||
           metadata.parts.length !== partCount ||
           metadata.byteLength !== byteLength ||
+          metadata.geometryByteLength !== geometryByteLength ||
           metadata.triangleCount !== triangleCount ||
           metadata.min.some((bound, axis) => bound !== minimum[axis]) ||
           metadata.max.some((bound, axis) => bound !== maximum[axis])
@@ -220,6 +245,7 @@ export class PreviewStream {
         let textureIndex = 0
         let partIndex = 0
         let bufferOffset = 0
+        let geometryOffset = 0
         for (const batch of batches) {
           for (const source of batch.textures) {
             const final = metadata.textures[textureIndex++]
@@ -239,11 +265,17 @@ export class PreviewStream {
               final.indexCount !== source.indexCount ||
               final.textureIndex !== source.textureIndex ||
               final.alphaMode !== source.alphaMode ||
-              final.buffers.some((id, index) => id !== bufferOffset + source.buffers[index])
+              final.vertexOffset !== geometryOffset + source.vertexOffset ||
+              final.indexOffset !== geometryOffset + source.indexOffset ||
+              final.vertexStride !== source.vertexStride ||
+              final.indexSize !== source.indexSize ||
+              final.origin.some((value, axis) => value !== source.origin[axis]) ||
+              final.extent.some((value, axis) => value !== source.extent[axis])
             )
               throw new Error("The preview completion mesh does not match its batch.")
           }
-          bufferOffset += batch.textures.length + batch.parts.length * BUFFER_FORMATS.length
+          bufferOffset += batch.textures.length
+          geometryOffset += batch.geometryByteLength
         }
         check()
         return metadata
@@ -270,6 +302,10 @@ export class PreviewStream {
       )
       partCount = integer(partCount + metadata.parts.length, "accumulated part count")
       byteLength = integer(byteLength + metadata.byteLength, "accumulated byte length")
+      geometryByteLength = integer(
+        geometryByteLength + metadata.geometryByteLength,
+        "accumulated geometry length",
+      )
       triangleCount = integer(triangleCount + metadata.triangleCount, "accumulated triangle count")
       for (let axis = 0; axis < 3; axis++) {
         minimum[axis] = Math.min(minimum[axis], metadata.min[axis])

@@ -1,8 +1,6 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
 
-use litematica_preview_core::{parts, Preview, PreviewInfo};
+use litematica_preview_core::{MeshBatch, PreviewInfo};
 use serde::{Deserialize, Serialize};
 
 pub const FRAME_BYTES: usize = 1024 * 1024;
@@ -15,6 +13,7 @@ const DATA: u8 = 4;
 const CHECKPOINT: u8 = 5;
 const PROGRESS: u8 = 6;
 const CHUNK: u8 = 7;
+const GEOMETRY: u8 = 8;
 const CONTINUE: u8 = 1;
 const CANCEL: u8 = 0;
 const TOO_LARGE: &str = "The preview is too large to transfer to the graphics device.";
@@ -30,6 +29,7 @@ pub struct Metadata {
     pub triangle_count: u64,
     pub min: [f32; 3],
     pub max: [f32; 3],
+    pub geometry_byte_length: usize,
     pub byte_length: usize,
     pub textures: Vec<TextureMetadata>,
     pub parts: Vec<PartMetadata>,
@@ -60,30 +60,28 @@ pub struct TextureMetadata {
     pub repeat: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PartMetadata {
     pub vertex_count: u32,
     pub index_count: u32,
     pub texture_index: u32,
     pub alpha_mode: u32,
-    pub buffers: [usize; 5],
+    pub vertex_offset: usize,
+    pub index_offset: usize,
+    pub vertex_stride: u32,
+    pub index_size: u32,
+    pub origin: [f32; 3],
+    pub extent: [f32; 3],
 }
 
 #[derive(Serialize, Deserialize)]
 struct TextureRecord {
+    index: u32,
     width: u32,
     height: u32,
     byte_length: usize,
     repeat: bool,
-}
-
-#[derive(Serialize, Deserialize)]
-struct PartRecord {
-    vertex_count: u32,
-    index_count: u32,
-    texture_index: u32,
-    alpha_mode: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -107,6 +105,17 @@ struct Buffer {
     segments: Vec<Vec<u8>>,
     ends: Vec<usize>,
     length: usize,
+}
+
+impl Buffer {
+    fn append(&mut self, other: Self) -> Result<(), String> {
+        let base = self.length;
+        self.length = base.checked_add(other.length).ok_or(TOO_LARGE)?;
+        self.ends
+            .extend(other.ends.into_iter().map(|end| base + end));
+        self.segments.extend(other.segments);
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -177,90 +186,6 @@ impl Payload {
         }
         Ok(bytes)
     }
-
-    fn assemble(
-        mut metadata: Metadata,
-        mut source: Vec<Buffer>,
-        current: impl Fn() -> bool,
-    ) -> io::Result<Self> {
-        let mut buffers = Vec::new();
-        for texture in &mut metadata.textures {
-            let buffer = std::mem::take(&mut source[texture.buffer_id]);
-            texture.buffer_id = buffers.len();
-            buffers.push(buffer);
-        }
-        let mut merged: Vec<PartMetadata> = Vec::new();
-        let mut groups = std::collections::HashMap::new();
-        for part in metadata.parts {
-            if !current() {
-                return Err(io::Error::new(io::ErrorKind::Interrupted, "Cancelled"));
-            }
-            let key = (part.texture_index, part.alpha_mode);
-            let existing = groups.get(&key).copied().filter(|&index| {
-                let target: &PartMetadata = &merged[index];
-                target
-                    .vertex_count
-                    .checked_add(part.vertex_count)
-                    .is_some_and(|count| count <= i32::MAX as u32)
-                    && target
-                        .index_count
-                        .checked_add(part.index_count)
-                        .is_some_and(|count| count <= i32::MAX as u32)
-            });
-            let group = if let Some(index) = existing {
-                index
-            } else {
-                // Keep each merged draw batch within the renderer's i32::MAX counts.
-                let index = merged.len();
-                let base = buffers.len();
-                buffers.extend((0..5).map(|_| Buffer::default()));
-                merged.push(PartMetadata {
-                    vertex_count: 0,
-                    index_count: 0,
-                    texture_index: part.texture_index,
-                    alpha_mode: part.alpha_mode,
-                    buffers: [base, base + 1, base + 2, base + 3, base + 4],
-                });
-                groups.insert(key, index);
-                index
-            };
-            let target = &mut merged[group];
-            let vertex_offset = target.vertex_count;
-            target.vertex_count = target
-                .vertex_count
-                .checked_add(part.vertex_count)
-                .filter(|n| *n <= i32::MAX as u32)
-                .ok_or_else(|| invalid(TOO_LARGE))?;
-            target.index_count = target
-                .index_count
-                .checked_add(part.index_count)
-                .filter(|n| *n <= i32::MAX as u32)
-                .ok_or_else(|| invalid(TOO_LARGE))?;
-            for attribute in 0..5 {
-                let mut buffer = std::mem::take(&mut source[part.buffers[attribute]]);
-                if attribute == 4 && vertex_offset != 0 {
-                    for segment in &mut buffer.segments {
-                        for bytes in segment.chunks_exact_mut(4) {
-                            let index =
-                                u32::from_le_bytes(bytes.try_into().unwrap()) + vertex_offset;
-                            bytes.copy_from_slice(&index.to_le_bytes());
-                        }
-                    }
-                }
-                let destination = &mut buffers[target.buffers[attribute]];
-                let base = destination.length;
-                destination.length = base
-                    .checked_add(buffer.length)
-                    .ok_or_else(|| invalid(TOO_LARGE))?;
-                destination
-                    .ends
-                    .extend(buffer.ends.into_iter().map(|end| base + end));
-                destination.segments.extend(buffer.segments);
-            }
-        }
-        metadata.parts = merged;
-        Ok(Self { metadata, buffers })
-    }
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -294,17 +219,11 @@ fn read_packet(stream: &mut impl Read) -> io::Result<(u8, Vec<u8>)> {
 
 pub struct Encoder<'a, S> {
     stream: &'a mut S,
-    textures: Vec<(u64, TextureRecord, Vec<u8>)>,
-    atlas_sent: bool,
 }
 
 impl<'a, S: Read + Write> Encoder<'a, S> {
     pub fn new(stream: &'a mut S) -> Self {
-        Self {
-            stream,
-            textures: Vec::new(),
-            atlas_sent: false,
-        }
+        Self { stream }
     }
 
     pub fn checkpoint(&mut self) -> Result<(), String> {
@@ -343,102 +262,49 @@ impl<'a, S: Read + Write> Encoder<'a, S> {
         Ok(())
     }
 
-    fn repeating_texture(&mut self, width: u32, height: u32, pixels: &[u8]) -> Result<u32, String> {
-        let mut hash = DefaultHasher::new();
-        (width, height, pixels).hash(&mut hash);
-        let key = hash.finish();
-        if let Some(index) = self.textures.iter().position(|(h, record, prior)| {
-            *h == key && record.width == width && record.height == height && prior == pixels
-        }) {
-            return u32::try_from(index + 1).map_err(|_| TOO_LARGE.into());
-        }
-        // Atlas occupies global texture zero; this cache contains repeating textures only.
-        let index = u32::try_from(self.textures.len() + 1).map_err(|_| TOO_LARGE)?;
-        let record = TextureRecord {
-            width,
-            height,
-            byte_length: pixels.len(),
-            repeat: true,
-        };
-        self.record(TEXTURE, &record)?;
-        self.bytes(pixels)?;
-        self.textures.push((key, record, pixels.to_vec()));
-        Ok(index)
-    }
-
-    pub fn chunk(&mut self, preview: Preview) -> Result<(), String> {
-        let atlas = &preview.mesh.atlas;
-        let mut textures = Vec::with_capacity(preview.textures.len() + 1);
-        if !self.atlas_sent {
-            if atlas.pixels.is_empty() {
-                return Err("The first preview chunk has no texture atlas.".into());
-            }
+    pub fn chunk(&mut self, batch: MeshBatch) -> Result<(), String> {
+        for texture in &batch.textures {
             self.record(
                 TEXTURE,
                 &TextureRecord {
-                    width: atlas.width,
-                    height: atlas.height,
-                    byte_length: atlas.pixels.len(),
-                    repeat: false,
+                    index: texture.index,
+                    width: texture.width,
+                    height: texture.height,
+                    byte_length: texture.pixels.len(),
+                    repeat: texture.repeat,
                 },
             )?;
-            self.bytes(&atlas.pixels)?;
-            self.atlas_sent = true;
+            self.bytes(&texture.pixels)?;
         }
-        textures.push(0);
-        for texture in &preview.textures {
-            textures.push(self.repeating_texture(
-                texture.width,
-                texture.height,
-                &texture.pixels,
-            )?);
+        for part in &batch.parts {
+            self.record(
+                PART,
+                &PartMetadata {
+                    vertex_count: part.vertex_count,
+                    index_count: part.index_count,
+                    texture_index: part.texture_index,
+                    alpha_mode: part.alpha_mode,
+                    vertex_offset: part.vertex_offset,
+                    index_offset: part.index_offset,
+                    vertex_stride: batch.vertex_stride,
+                    index_size: part.index_size,
+                    origin: batch.origin,
+                    extent: batch.extent,
+                },
+            )?;
         }
-        for (part, texture, alpha_mode) in parts(&preview.mesh) {
-            let record = PartRecord {
-                vertex_count: u32::try_from(part.positions.len()).map_err(|_| TOO_LARGE)?,
-                index_count: u32::try_from(part.indices.len()).map_err(|_| TOO_LARGE)?,
-                texture_index: textures[texture as usize],
-                alpha_mode,
-            };
-            self.record(PART, &record)?;
-            self.bytes(bytemuck::cast_slice(&part.positions))?;
-            self.quantized(part.normals.iter().flatten().copied(), true)?;
-            self.bytes(bytemuck::cast_slice(&part.uvs))?;
-            self.quantized(part.colors.iter().flatten().copied(), false)?;
-            self.bytes(bytemuck::cast_slice(&part.indices))?;
-        }
+        self.send(GEOMETRY, &(batch.geometry.len() as u64).to_le_bytes())?;
+        self.bytes(&batch.geometry)?;
         self.record(
             CHUNK,
             &Summary {
-                block_count: preview.info.block_count,
-                block_entity_count: preview.info.block_entity_count,
-                triangle_count: preview.info.triangle_count,
-                min: preview.info.min,
-                max: preview.info.max,
+                block_count: batch.info.block_count,
+                block_entity_count: batch.info.block_entity_count,
+                triangle_count: batch.info.triangle_count,
+                min: batch.info.min,
+                max: batch.info.max,
             },
         )
-    }
-
-    fn quantized(&mut self, values: impl Iterator<Item = f32>, signed: bool) -> Result<(), String> {
-        let mut bytes = Vec::with_capacity(FRAME_BYTES);
-        for value in values {
-            if !value.is_finite() {
-                return Err("The mesher produced a non-finite attribute.".into());
-            }
-            bytes.push(if signed {
-                (value.clamp(-1.0, 1.0) * 127.0).round() as i8 as u8
-            } else {
-                (value.clamp(0.0, 1.0) * 255.0).round() as u8
-            });
-            if bytes.len() == FRAME_BYTES {
-                self.send(DATA, &bytes)?;
-                bytes.clear();
-            }
-        }
-        if !bytes.is_empty() {
-            self.send(DATA, &bytes)?;
-        }
-        Ok(())
     }
 }
 
@@ -479,15 +345,14 @@ pub fn receive(
     current: impl Fn() -> bool,
     on_progress: impl FnMut(u64, u64),
 ) -> io::Result<Result<Payload, String>> {
-    let mut buffers = Vec::new();
+    let mut buffers = vec![Buffer::default()];
     let result = receive_stream(stream, &current, on_progress, |_, payload| {
-        buffers.extend(payload.buffers);
+        let mut source = payload.buffers.into_iter();
+        buffers[0].append(source.next().expect("A chunk has geometry"))?;
+        buffers.extend(source);
         Ok(())
     })?;
-    match result {
-        Ok(metadata) => Payload::assemble(metadata, buffers, current).map(Ok),
-        Err(error) => Ok(Err(error)),
-    }
+    Ok(result.map(|metadata| Payload { metadata, buffers }))
 }
 
 pub fn receive_stream(
@@ -497,14 +362,14 @@ pub fn receive_stream(
     mut on_chunk: impl FnMut(usize, Payload) -> Result<(), String>,
 ) -> io::Result<Result<Metadata, String>> {
     let mut textures = Vec::new();
-    let mut parts = Vec::new();
-    let mut buffers: Vec<Buffer> = Vec::new();
-    let mut pending = std::collections::VecDeque::new();
+    let mut parts: Vec<PartMetadata> = Vec::new();
+    let mut buffers = vec![Buffer::default()];
+    let mut pending: Option<usize> = None;
+    let mut geometry_end = 0usize;
     let mut total = 0usize;
     let mut cancelled = false;
     let mut progress = None;
     let mut published: Option<Metadata> = None;
-    let mut buffer_offset = 0usize;
     let mut texture_offset = 0usize;
     let mut consumer_error = None;
     loop {
@@ -525,7 +390,12 @@ pub fn receive_stream(
             if cancelled {
                 return Ok(Err(consumer_error.unwrap_or_else(|| "Cancelled".into())));
             }
-            if !pending.is_empty() || !buffers.is_empty() {
+            if pending.is_some()
+                || buffers.len() != 1
+                || buffers[0].length != 0
+                || !parts.is_empty()
+                || !textures.is_empty()
+            {
                 return Err(invalid("The decoder preview is truncated."));
             }
             if progress.is_some_and(|(completed, total)| completed != total) {
@@ -546,19 +416,19 @@ pub fn receive_stream(
             buffers.clear();
             textures.clear();
             parts.clear();
-            pending.clear();
+            pending = None;
             published = None;
             stream.write_all(&[CANCEL])?;
             continue;
         }
         match kind {
-            CHUNK if pending.is_empty() => {
-                let counted = parts
-                    .iter()
-                    .try_fold(0u64, |count, part: &PartMetadata| {
-                        count.checked_add(u64::from(part.index_count / 3))
-                    })
-                    .ok_or_else(|| invalid(TOO_LARGE))?;
+            CHUNK if pending.is_none() && buffers[0].length != 0 => {
+                let counted = parts.iter().try_fold(0u64, |count, part| {
+                    validate_indices(&buffers[0], part)?;
+                    count
+                        .checked_add(u64::from(part.index_count / 3))
+                        .ok_or_else(|| invalid(TOO_LARGE))
+                })?;
                 let summary = parse_summary(&bytes, counted)?;
                 let metadata = Metadata {
                     block_count: summary.block_count,
@@ -566,6 +436,7 @@ pub fn receive_stream(
                     triangle_count: counted,
                     min: summary.min,
                     max: summary.max,
+                    geometry_byte_length: buffers[0].length,
                     byte_length: std::mem::take(&mut total),
                     textures: std::mem::take(&mut textures),
                     parts: std::mem::take(&mut parts),
@@ -576,6 +447,7 @@ pub fn receive_stream(
                     triangle_count: 0,
                     min: metadata.min,
                     max: metadata.max,
+                    geometry_byte_length: 0,
                     byte_length: 0,
                     textures: Vec::new(),
                     parts: Vec::new(),
@@ -597,44 +469,57 @@ pub fn receive_stream(
                     aggregate.min[axis] = aggregate.min[axis].min(metadata.min[axis]);
                     aggregate.max[axis] = aggregate.max[axis].max(metadata.max[axis]);
                 }
-                let next_buffer_offset = buffer_offset
-                    .checked_add(buffers.len())
-                    .ok_or_else(|| invalid(TOO_LARGE))?;
                 for texture in &metadata.textures {
                     let mut texture = texture.clone();
-                    texture.buffer_id += buffer_offset;
+                    texture.buffer_id = texture
+                        .buffer_id
+                        .checked_add(texture_offset)
+                        .ok_or_else(|| invalid(TOO_LARGE))?;
                     aggregate.textures.push(texture);
                 }
                 for part in &metadata.parts {
                     let mut part = part.clone();
-                    for id in &mut part.buffers {
-                        *id += buffer_offset;
-                    }
+                    part.vertex_offset = part
+                        .vertex_offset
+                        .checked_add(aggregate.geometry_byte_length)
+                        .ok_or_else(|| invalid(TOO_LARGE))?;
+                    part.index_offset = part
+                        .index_offset
+                        .checked_add(aggregate.geometry_byte_length)
+                        .ok_or_else(|| invalid(TOO_LARGE))?;
                     aggregate.parts.push(part);
                 }
-                buffer_offset = next_buffer_offset;
+                aggregate.geometry_byte_length = aggregate
+                    .geometry_byte_length
+                    .checked_add(metadata.geometry_byte_length)
+                    .ok_or_else(|| invalid(TOO_LARGE))?;
                 let previous_textures = texture_offset;
                 texture_offset = aggregate.textures.len();
+                geometry_end = 0;
                 let payload = Payload {
                     metadata,
-                    buffers: std::mem::take(&mut buffers),
+                    buffers: std::mem::replace(&mut buffers, vec![Buffer::default()]),
                 };
                 if let Err(error) = on_chunk(previous_textures, payload) {
                     consumer_error = Some(error);
                     cancelled = true;
                 }
             }
-            TEXTURE if pending.is_empty() && parts.is_empty() => {
+            TEXTURE if pending.is_none() && parts.is_empty() && buffers[0].length == 0 => {
                 let record: TextureRecord =
-                    serde_json::from_slice(&bytes).map_err(|e| invalid(e.to_string()))?;
+                    serde_json::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?;
                 let size = (record.width as usize)
                     .checked_mul(record.height as usize)
-                    .and_then(|n| n.checked_mul(4));
-                if record.width == 0 || record.height == 0 || size != Some(record.byte_length) {
+                    .and_then(|value| value.checked_mul(4));
+                if record.width == 0
+                    || record.height == 0
+                    || size != Some(record.byte_length)
+                    || record.index as usize != texture_offset + textures.len()
+                {
                     return Err(invalid("The decoder returned an invalid texture."));
                 }
                 let id = add_buffer(&mut buffers, &mut total, record.byte_length)?;
-                pending.push_back((id, None));
+                pending = Some(id);
                 textures.push(TextureMetadata {
                     width: record.width,
                     height: record.height,
@@ -643,52 +528,31 @@ pub fn receive_stream(
                     repeat: record.repeat,
                 });
             }
-            PART if pending.is_empty() => {
-                let record: PartRecord =
-                    serde_json::from_slice(&bytes).map_err(|e| invalid(e.to_string()))?;
-                if record.vertex_count == 0
-                    || record.vertex_count > i32::MAX as u32
-                    || record.index_count == 0
-                    || record.index_count > i32::MAX as u32
-                    || record.index_count % 3 != 0
-                    || record.texture_index as usize >= texture_offset + textures.len()
-                    || record.alpha_mode > 2
-                {
-                    return Err(invalid("The decoder returned an invalid mesh part."));
+            PART if pending.is_none() && buffers[0].length == 0 => {
+                let part: PartMetadata =
+                    serde_json::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?;
+                geometry_end = validate_part(&part, geometry_end, texture_offset + textures.len())?;
+                parts.push(part);
+            }
+            GEOMETRY
+                if pending.is_none()
+                    && !parts.is_empty()
+                    && buffers[0].length == 0
+                    && bytes.len() == 8 =>
+            {
+                let length = usize::try_from(u64::from_le_bytes(bytes.try_into().unwrap()))
+                    .map_err(|_| invalid(TOO_LARGE))?;
+                if length == 0 || length != geometry_end {
+                    return Err(invalid("The decoder returned an invalid geometry length."));
                 }
-                let v = record.vertex_count as usize;
-                let lengths = [
-                    v.checked_mul(12),
-                    v.checked_mul(3),
-                    v.checked_mul(8),
-                    v.checked_mul(4),
-                    (record.index_count as usize).checked_mul(4),
-                ];
-                let mut ids = [0; 5];
-                for (i, length) in lengths.into_iter().enumerate() {
-                    let length = length.ok_or_else(|| invalid(TOO_LARGE))?;
-                    ids[i] = add_buffer(&mut buffers, &mut total, length)?;
-                    pending.push_back((
-                        ids[i],
-                        if i == 4 {
-                            Some(record.vertex_count)
-                        } else {
-                            None
-                        },
-                    ));
-                }
-                parts.push(PartMetadata {
-                    vertex_count: record.vertex_count,
-                    index_count: record.index_count,
-                    texture_index: record.texture_index,
-                    alpha_mode: record.alpha_mode,
-                    buffers: ids,
-                });
+                total = total
+                    .checked_add(length)
+                    .ok_or_else(|| invalid(TOO_LARGE))?;
+                buffers[0].length = length;
+                pending = Some(0);
             }
             DATA => {
-                let &(id, index_limit) = pending
-                    .front()
-                    .ok_or_else(|| invalid("Unexpected preview buffer."))?;
+                let id = pending.ok_or_else(|| invalid("Unexpected preview buffer."))?;
                 let buffer = &mut buffers[id];
                 let received = buffer.ends.last().copied().unwrap_or(0);
                 let expected = buffer
@@ -699,21 +563,13 @@ pub fn receive_stream(
                 if bytes.len() != expected {
                     return Err(invalid("The decoder buffer is truncated or oversized."));
                 }
-                if let Some(limit) = index_limit {
-                    if bytes
-                        .chunks_exact(4)
-                        .any(|value| u32::from_le_bytes(value.try_into().unwrap()) >= limit)
-                    {
-                        return Err(invalid("The decoder returned an out-of-range mesh index."));
-                    }
-                }
                 buffer.segments.push(bytes);
                 buffer.ends.push(received + expected);
                 if received + expected == buffer.length {
-                    pending.pop_front();
+                    pending = None;
                 }
             }
-            PROGRESS if pending.is_empty() && bytes.len() == 16 => {
+            PROGRESS if pending.is_none() && bytes.len() == 16 => {
                 let completed = u64::from_le_bytes(bytes[..8].try_into().unwrap());
                 let count = u64::from_le_bytes(bytes[8..].try_into().unwrap());
                 if count == 0
@@ -727,11 +583,82 @@ pub fn receive_stream(
                 progress = Some((completed, count));
                 on_progress(completed, count);
             }
-            CHECKPOINT if pending.is_empty() && bytes.is_empty() => {}
+            CHECKPOINT if pending.is_none() && bytes.is_empty() => {}
             _ => return Err(invalid("Unexpected decoder record.")),
         }
         stream.write_all(&[if cancelled { CANCEL } else { CONTINUE }])?;
     }
+}
+
+fn validate_part(part: &PartMetadata, offset: usize, texture_count: usize) -> io::Result<usize> {
+    if part.vertex_count == 0
+        || part.vertex_count > i32::MAX as u32
+        || part.index_count == 0
+        || part.index_count > i32::MAX as u32
+        || part.index_count % 3 != 0
+        || part.alpha_mode > 2
+        || part.texture_index as usize >= texture_count
+        || !matches!(part.vertex_stride, 24 | 28)
+        || !matches!(part.index_size, 2 | 4)
+        || (part.index_size == 2 && part.vertex_count > 65_536)
+        || part.vertex_offset != offset
+        || part
+            .origin
+            .iter()
+            .chain(&part.extent)
+            .any(|value| !value.is_finite())
+        || part.extent.iter().any(|&value| value < 0.0)
+    {
+        return Err(invalid("The decoder returned an invalid mesh part."));
+    }
+    let vertex_end = (part.vertex_count as usize)
+        .checked_mul(part.vertex_stride as usize)
+        .and_then(|length| part.vertex_offset.checked_add(length));
+    if vertex_end != Some(part.index_offset) {
+        return Err(invalid("The decoder returned overlapping geometry."));
+    }
+    (part.index_count as usize)
+        .checked_mul(part.index_size as usize)
+        .and_then(|length| part.index_offset.checked_add(length))
+        .and_then(align4)
+        .ok_or_else(|| invalid(TOO_LARGE))
+}
+
+fn validate_indices(geometry: &Buffer, part: &PartMetadata) -> io::Result<()> {
+    let width = part.index_size as usize;
+    let mut remaining = part.index_count as usize * width;
+    let start = geometry
+        .ends
+        .partition_point(|&end| end <= part.index_offset);
+    let base = if start == 0 {
+        0
+    } else {
+        geometry.ends[start - 1]
+    };
+    let mut offset = part.index_offset - base;
+    for segment in &geometry.segments[start..] {
+        let length = remaining.min(segment.len() - offset);
+        let bytes = &segment[offset..offset + length];
+        if bytes.len() % width != 0 {
+            return Err(invalid("The decoder returned truncated indices."));
+        }
+        for bytes in bytes.chunks_exact(width) {
+            let index = if width == 2 {
+                u32::from(u16::from_le_bytes(bytes.try_into().unwrap()))
+            } else {
+                u32::from_le_bytes(bytes.try_into().unwrap())
+            };
+            if index >= part.vertex_count {
+                return Err(invalid("The decoder returned an out-of-range mesh index."));
+            }
+        }
+        remaining -= length;
+        if remaining == 0 {
+            return Ok(());
+        }
+        offset = 0;
+    }
+    Err(invalid("The decoder returned truncated indices."))
 }
 
 fn parse_summary(bytes: &[u8], counted: u64) -> io::Result<Summary> {
@@ -824,7 +751,7 @@ pub(crate) mod tests {
                         ..PreviewOptions::default()
                     },
                     |preview| {
-                        native_alpha.extend(parts(&preview.mesh).map(|(_, _, alpha)| alpha));
+                        native_alpha.extend(preview.parts.iter().map(|part| part.alpha_mode));
                         encoder.chunk(preview)
                     },
                     |_, _| Ok(()),
@@ -860,33 +787,21 @@ pub(crate) mod tests {
                     for part in &payload.metadata.parts {
                         assert!((part.texture_index as usize) < textures);
                         alpha.insert(part.alpha_mode);
-                        let ranges: Vec<_> = part
-                            .buffers
-                            .iter()
-                            .map(|&id| range(id, 0, payload.buffers[id].length))
-                            .collect();
-                        let page = payload.read_ranges(&ranges).unwrap();
-                        let mut cursor = 0;
-                        for descriptor in ranges {
-                            cursor = align4(cursor).unwrap();
-                            let source = &payload.buffers[descriptor.buffer_id];
-                            let expected: Vec<_> =
-                                source.segments.iter().flatten().copied().collect();
-                            assert_eq!(&page[cursor..cursor + descriptor.length], expected);
-                            cursor += descriptor.length;
-                        }
-                        assert_eq!(page.len(), cursor);
                         let indices = payload
                             .read_ranges(&[range(
-                                part.buffers[4],
                                 0,
-                                part.index_count as usize * 4,
+                                part.index_offset,
+                                part.index_count as usize * part.index_size as usize,
                             )])
                             .unwrap();
-                        assert!(indices
-                            .chunks_exact(4)
-                            .all(|bytes| u32::from_le_bytes(bytes.try_into().unwrap())
-                                < part.vertex_count));
+                        assert!(indices.chunks_exact(part.index_size as usize).all(|bytes| {
+                            let index = if part.index_size == 2 {
+                                u32::from(u16::from_le_bytes(bytes.try_into().unwrap()))
+                            } else {
+                                u32::from_le_bytes(bytes.try_into().unwrap())
+                            };
+                            index < part.vertex_count
+                        }));
                     }
                     chunks += 1;
                     Ok(())
@@ -960,28 +875,31 @@ pub(crate) mod tests {
         assert_eq!(batches[0].1.metadata.textures.len(), 1);
         assert!(batches[1].1.metadata.textures.is_empty());
         assert_eq!(batches[1].1.metadata.parts[0].texture_index, 0);
-        assert_eq!(batches[1].1.metadata.parts[0].buffers, [0, 1, 2, 3, 4]);
-        assert_eq!(metadata.parts[1].buffers, [6, 7, 8, 9, 10]);
-        assert_eq!(metadata.byte_length, 4 + 2 * 39);
+        assert_eq!(batches[1].1.metadata.parts[0].vertex_offset, 0);
+        assert_eq!(metadata.parts[1].vertex_offset, 32);
+        assert_eq!(metadata.geometry_byte_length, 64);
         assert_eq!(metadata.triangle_count, 2);
     }
 
     #[test]
-    fn serial_receiver_still_merges_completed_chunks_and_rebases_indices() {
+    fn completed_chunks_preserve_local_indices_without_merging_or_repacking() {
         let payload = receive(&mut wire(stream_fixture(2)), || true, |_, _| {})
             .unwrap()
             .unwrap();
-        assert_eq!(payload.metadata.textures.len(), 1);
-        assert_eq!(payload.metadata.parts.len(), 1);
-        let part = &payload.metadata.parts[0];
-        assert_eq!((part.vertex_count, part.index_count), (2, 6));
-        let indices: Vec<_> = payload
-            .read_ranges(&[range(part.buffers[4], 0, 24)])
-            .unwrap()
-            .chunks_exact(4)
-            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
-            .collect();
-        assert_eq!(indices, [0, 0, 0, 1, 1, 1]);
+        assert_eq!(payload.metadata.parts.len(), 2);
+        for part in &payload.metadata.parts {
+            assert_eq!((part.vertex_count, part.index_count), (1, 3));
+            let indices = payload
+                .read_ranges(&[range(
+                    0,
+                    part.index_offset,
+                    part.index_count as usize * part.index_size as usize,
+                )])
+                .unwrap();
+            assert_eq!(indices, [0; 6]);
+        }
+        assert_eq!(payload.metadata.parts[1].vertex_offset, 32);
+        assert_eq!(payload.metadata.textures[0].buffer_id, 1);
     }
 
     #[test]
@@ -1010,7 +928,7 @@ pub(crate) mod tests {
         let next = receive(&mut connection, || true, |_, _| {})
             .unwrap()
             .unwrap();
-        assert_eq!(next.read_ranges(&[range(0, 0, 4)]).unwrap(), [255; 4]);
+        assert_eq!(next.read_ranges(&[range(1, 0, 4)]).unwrap(), [255; 4]);
     }
 
     #[test]
@@ -1035,6 +953,7 @@ pub(crate) mod tests {
     fn declared_buffers_above_two_gib_wait_for_payload_without_eager_allocation() {
         let mut bytes = Vec::new();
         let texture = TextureRecord {
+            index: 0,
             width: 1 << 30,
             height: 1,
             byte_length: 4usize << 30,
@@ -1057,18 +976,21 @@ pub(crate) mod tests {
     #[test]
     fn preview_accepts_more_than_one_hundred_thousand_texture_records() {
         let mut bytes = Vec::new();
-        let texture = serde_json::to_vec(&TextureRecord {
-            width: 1,
-            height: 1,
-            byte_length: 4,
-            repeat: false,
-        })
-        .unwrap();
-        for _ in 0..100_000 {
-            write_packet(&mut bytes, TEXTURE, &texture).unwrap();
+        for index in 0..100_001 {
+            let texture = TextureRecord {
+                index,
+                width: 1,
+                height: 1,
+                byte_length: 4,
+                repeat: index != 0,
+            };
+            write_packet(&mut bytes, TEXTURE, &serde_json::to_vec(&texture).unwrap()).unwrap();
             write_packet(&mut bytes, DATA, &[255; 4]).unwrap();
         }
-        bytes.extend(part_packets(0));
+        let mut suffix = io::Cursor::new(part_packets(0));
+        read_packet(&mut suffix).unwrap();
+        read_packet(&mut suffix).unwrap();
+        bytes.extend_from_slice(&suffix.get_ref()[suffix.position() as usize..]);
         let payload = receive(&mut wire(bytes), || true, |_, _| {})
             .unwrap()
             .unwrap();
@@ -1082,56 +1004,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn gpu_batch_count_boundary_starts_a_new_draw_instead_of_rejecting_the_model() {
-        let max_triangular_indices = i32::MAX as u32 - 1;
-        let records = vec![
-            PartMetadata {
-                vertex_count: 1,
-                index_count: max_triangular_indices,
-                texture_index: 0,
-                alpha_mode: 0,
-                buffers: [0, 1, 2, 3, 4],
-            },
-            PartMetadata {
-                vertex_count: 1,
-                index_count: 3,
-                texture_index: 0,
-                alpha_mode: 0,
-                buffers: [5, 6, 7, 8, 9],
-            },
-        ];
-        let source = (0..10).map(|_| Buffer::default()).collect();
-        let payload = Payload::assemble(
-            Metadata {
-                block_count: 2,
-                block_entity_count: 0,
-        assert!(payload
-            .read_ranges(&[range(0, 0, FRAME_BYTES - 3), range(0, 0, 1)])
-            .is_err());
-        assert!(payload.read_ranges(&[]).is_err());
-        assert!(payload
-            .read_ranges(&vec![range(0, 0, 1); MAX_READ_RANGES + 1])
-            .is_err());
-                triangle_count: u64::from(max_triangular_indices / 3) + 1,
-                min: [0.0; 3],
-                max: [1.0; 3],
-                byte_length: 0,
-                textures: vec![],
-                parts: records,
-            },
-            source,
-            || true,
-        )
-        .unwrap();
-        assert_eq!(payload.metadata.parts.len(), 2);
-        assert_eq!(
-            payload.metadata.parts[0].index_count,
-            max_triangular_indices
-        );
-        assert_eq!(payload.metadata.parts[1].index_count, 3);
-    }
-
-    #[test]
     fn range_reads_cross_segments_without_flattening_and_reject_overflow() {
         let payload = Payload {
             metadata: Metadata {
@@ -1140,6 +1012,7 @@ pub(crate) mod tests {
                 triangle_count: 1,
                 min: [0.0; 3],
                 max: [1.0; 3],
+                geometry_byte_length: FRAME_BYTES + 3,
                 byte_length: FRAME_BYTES + 3,
                 textures: vec![],
                 parts: vec![],
@@ -1172,6 +1045,7 @@ pub(crate) mod tests {
                 triangle_count: 0,
                 min: [0.0; 3],
                 max: [0.0; 3],
+                geometry_byte_length: 5,
                 byte_length: 11,
                 textures: vec![],
                 parts: vec![],
@@ -1216,6 +1090,7 @@ pub(crate) mod tests {
                 triangle_count: 0,
                 min: [0.0; 3],
                 max: [0.0; 3],
+                geometry_byte_length: FRAME_BYTES,
                 byte_length: FRAME_BYTES,
                 textures: vec![],
                 parts: vec![],
@@ -1230,6 +1105,13 @@ pub(crate) mod tests {
             payload.read_ranges(&[range(0, 0, FRAME_BYTES)]).unwrap(),
             vec![42; FRAME_BYTES]
         );
+        assert!(payload
+            .read_ranges(&[range(0, 0, FRAME_BYTES - 3), range(0, 0, 1)])
+            .is_err());
+        assert!(payload.read_ranges(&[]).is_err());
+        assert!(payload
+            .read_ranges(&vec![range(0, 0, 1); MAX_READ_RANGES + 1])
+            .is_err());
         for bad in [
             range(0, 0, 0),
             range(1, 0, 1),
@@ -1258,64 +1140,6 @@ pub(crate) mod tests {
         assert!(
             serde_json::from_str::<ReadRange>(r#"{"bufferId":0,"offset":0.5,"length":1}"#).is_err()
         );
-    }
-
-    #[test]
-    fn merging_chunks_rebases_indices_and_preserves_attribute_boundaries() {
-        let mut buffers = Vec::new();
-        let mut records = Vec::new();
-        for value in [10u8, 20] {
-            let base = buffers.len();
-            for data in [
-                vec![value; 12],
-                vec![value; 3],
-                vec![value; 8],
-                vec![value; 4],
-                vec![0; 12],
-            ] {
-                let length = data.len();
-                buffers.push(Buffer {
-                    segments: vec![data],
-                    ends: vec![length],
-                    length,
-                });
-            }
-            records.push(PartMetadata {
-                vertex_count: 1,
-                index_count: 3,
-                texture_index: 0,
-                alpha_mode: 0,
-                buffers: [base, base + 1, base + 2, base + 3, base + 4],
-            });
-        }
-        let metadata = Metadata {
-            block_count: 2,
-            block_entity_count: 0,
-            triangle_count: 2,
-            min: [0.0; 3],
-            max: [1.0; 3],
-            byte_length: 78,
-            textures: vec![],
-            parts: records,
-        };
-        let payload = Payload::assemble(metadata, buffers, || true).unwrap();
-        let part = &payload.metadata.parts[0];
-        assert_eq!(payload.metadata.parts.len(), 1);
-        assert_eq!((part.vertex_count, part.index_count), (2, 6));
-        assert_eq!(
-            payload
-                .read_ranges(&[range(part.buffers[1], 2, 3)])
-                .unwrap(),
-            [10, 20, 20]
-        );
-        let indices = payload
-            .read_ranges(&[range(part.buffers[4], 0, 24)])
-            .unwrap();
-        let values: Vec<_> = indices
-            .chunks_exact(4)
-            .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
-            .collect();
-        assert_eq!(values, [0, 0, 0, 1, 1, 1]);
     }
 
     struct Wire {
@@ -1349,6 +1173,7 @@ pub(crate) mod tests {
     fn part_packets(index: u32) -> Vec<u8> {
         let mut bytes = Vec::new();
         let texture = TextureRecord {
+            index: 0,
             width: 1,
             height: 1,
             byte_length: 4,
@@ -1356,22 +1181,26 @@ pub(crate) mod tests {
         };
         write_packet(&mut bytes, TEXTURE, &serde_json::to_vec(&texture).unwrap()).unwrap();
         write_packet(&mut bytes, DATA, &[255; 4]).unwrap();
-        let part = PartRecord {
+        let part = PartMetadata {
             vertex_count: 1,
             index_count: 3,
             texture_index: 0,
             alpha_mode: 0,
+            vertex_offset: 0,
+            index_offset: 24,
+            vertex_stride: 24,
+            index_size: 2,
+            origin: [0.0; 3],
+            extent: [1.0; 3],
         };
         write_packet(&mut bytes, PART, &serde_json::to_vec(&part).unwrap()).unwrap();
-        for data in [
-            vec![0; 12],
-            vec![0; 3],
-            vec![0; 8],
-            vec![255; 4],
-            [index.to_le_bytes(); 3].concat(),
-        ] {
-            write_packet(&mut bytes, DATA, &data).unwrap();
+        let mut geometry = vec![0; 32];
+        geometry[20..24].fill(255);
+        for target in geometry[24..30].chunks_exact_mut(2) {
+            target.copy_from_slice(&(index as u16).to_le_bytes());
         }
+        write_packet(&mut bytes, GEOMETRY, &32u64.to_le_bytes()).unwrap();
+        write_packet(&mut bytes, DATA, &geometry).unwrap();
         write_packet(
             &mut bytes,
             CHUNK,
@@ -1424,9 +1253,9 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(
             payload
-                .read_ranges(&[range(payload.metadata.parts[0].buffers[4], 0, 12)])
+                .read_ranges(&[range(0, payload.metadata.parts[0].index_offset, 6)])
                 .unwrap(),
-            [0; 12]
+            [0; 6]
         );
     }
 
@@ -1489,7 +1318,7 @@ pub(crate) mod tests {
             .unwrap();
         worker.publish(10, payload).unwrap();
         worker.release(9);
-        assert_eq!(worker.read(10, None, &[range(0, 0, 4)]).unwrap(), [255; 4]);
+        assert_eq!(worker.read(10, None, &[range(1, 0, 4)]).unwrap(), [255; 4]);
         worker.advance(11);
         assert!(worker.read(10, None, &[range(0, 0, 4)]).is_err());
         let payload = receive(&mut wire(part_packets(0)), || true, |_, _| {})
@@ -1497,7 +1326,7 @@ pub(crate) mod tests {
             .unwrap();
         worker.publish(11, payload).unwrap();
         worker.release(10);
-        assert_eq!(worker.read(11, None, &[range(0, 0, 4)]).unwrap(), [255; 4]);
+        assert_eq!(worker.read(11, None, &[range(1, 0, 4)]).unwrap(), [255; 4]);
         worker.release(11);
         assert!(worker.read(11, None, &[range(0, 0, 4)]).is_err());
     }
@@ -1510,7 +1339,7 @@ pub(crate) mod tests {
             .unwrap()
             .unwrap();
         let texture = payload.metadata.textures[0].buffer_id;
-        let positions = payload.metadata.parts[0].buffers[0];
+        let positions = 0;
         worker.publish(10, payload).unwrap();
         let start = std::sync::Barrier::new(4);
         std::thread::scope(|scope| {
@@ -1539,28 +1368,5 @@ pub(crate) mod tests {
         });
         worker.release(10);
         assert!(worker.read(10, None, &[range(texture, 0, 4)]).is_err());
-    }
-
-    #[test]
-    fn quantized_attributes_preserve_endpoints_and_rounding_error() {
-        let mut connection = wire(vec![CONTINUE; 2]);
-        let mut encoder = Encoder::new(&mut connection);
-        encoder
-            .quantized([-1.0, 0.0, 1.0, 0.5].into_iter(), true)
-            .unwrap();
-        encoder
-            .quantized([0.0, 0.5, 1.0].into_iter(), false)
-            .unwrap();
-        let mut records = io::Cursor::new(connection.outgoing);
-        assert_eq!(
-            read_packet(&mut records).unwrap(),
-            (DATA, vec![129, 0, 127, 64])
-        );
-        assert_eq!(
-            read_packet(&mut records).unwrap(),
-            (DATA, vec![0, 128, 255])
-        );
-        assert!((64.0f32 / 127.0 - 0.5).abs() <= 0.5 / 127.0 + f32::EPSILON);
-        assert!((128.0f32 / 255.0 - 0.5).abs() <= 0.5 / 255.0 + f32::EPSILON);
     }
 }

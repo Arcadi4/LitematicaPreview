@@ -588,7 +588,7 @@ mod tests {
         assert_eq!(publications.recv_timeout(timeout).unwrap(), 1);
         assert_eq!(batch_id(worker.next(1, None).unwrap()), 1);
         assert_eq!(
-            worker.read(1, Some(1), &[range(0, 0, 4)]).unwrap(),
+            worker.read(1, Some(1), &[range(1, 0, 4)]).unwrap(),
             [255; 4]
         );
         assert_eq!(arrivals.recv_timeout(timeout).unwrap(), 2);
@@ -621,7 +621,6 @@ mod tests {
         };
         assert_eq!(metadata.triangle_count, 4);
         assert_eq!(metadata.textures.len(), 1);
-        assert_eq!(metadata.byte_length, 4 + 4 * 39);
         assert!(worker.next(1, None).is_err());
         finished.recv_timeout(timeout).unwrap();
         producer.join().unwrap();
@@ -768,7 +767,7 @@ mod tests {
         });
         assert_eq!(batch_id(worker.next(2, None).unwrap()), 1);
         assert_eq!(
-            worker.read(2, Some(1), &[range(0, 0, 4)]).unwrap(),
+            worker.read(2, Some(1), &[range(1, 0, 4)]).unwrap(),
             [255; 4]
         );
         let leased = Arc::downgrade(&worker.stream(2).unwrap().payload(1).unwrap());

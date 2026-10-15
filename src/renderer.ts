@@ -1,19 +1,8 @@
 import { mat4, vec3 } from "gl-matrix"
-import {
-  PreparedUploads,
-  PreparationWorkerPool,
-  validateUpload,
-  type PreparationWorker,
-} from "./upload-preparation"
-import {
-  buildUploadLayout,
-  UPLOAD_CHUNK,
-  type PreviewReadRange,
-  type UploadPage,
-} from "./upload-layout"
+import { PreparedUploads } from "./upload-preparation"
+import { buildUploadLayout, UPLOAD_CHUNK, type PreviewReadRange } from "./upload-layout"
 
 import {
-  BUFFER_FORMATS,
   PreviewStream,
   validateMetadata,
   type PreviewMetadata,
@@ -27,6 +16,9 @@ type Part = {
   texture: WebGLTexture
   count: number
   alphaMode: 0 | 1 | 2
+  indexType: number
+  origin: readonly [number, number, number]
+  extent: readonly [number, number, number]
 }
 
 type Model = {
@@ -45,6 +37,8 @@ type Pipeline = {
   fullscreen: WebGLVertexArrayObject
   matrix: WebGLUniformLocation
   offset: WebGLUniformLocation
+  meshOrigin: WebGLUniformLocation
+  meshExtent: WebGLUniformLocation
   alphaMode: WebGLUniformLocation
   grid: WebGLUniformLocation
 }
@@ -66,6 +60,8 @@ const FOV = (28 * Math.PI) / 180
 const HALF_FOV_TAN = Math.tan(FOV / 2)
 const MAX_RENDER_PIXELS = 16 * 1024 * 1024
 const UP = new Float32Array([0, 1, 0])
+const ZERO = [0, 0, 0] as const
+const ONE = [1, 1, 1] as const
 
 function required<T>(value: T | null, name: string): T {
   if (value === null)
@@ -79,57 +75,6 @@ function errorOf(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error))
 }
 
-function createPreparationWorker(onError: (error: Error) => void): PreparationWorker {
-  const worker = new Worker(new URL("./upload-worker.ts", import.meta.url), { type: "module" })
-  let pending: { resolve: (buffer: ArrayBuffer) => void; reject: (error: Error) => void } | null =
-    null
-  let failure: Error | null = null
-  const fail = (error: Error, notify = true) => {
-    failure = error
-    const task = pending
-    pending = null
-    task?.reject(error)
-    if (notify) onError(error)
-  }
-  worker.onmessage = (event: MessageEvent<{ buffer?: ArrayBuffer; error?: string }>) => {
-    const task = pending
-    if (!task) return
-    if (event.data?.buffer instanceof ArrayBuffer) {
-      pending = null
-      task.resolve(event.data.buffer)
-    } else {
-      fail(new Error(event.data?.error || "Preview preparation failed."))
-    }
-  }
-  worker.onerror = (event) => {
-    event.preventDefault()
-    fail(new Error(event.message || "Preview preparation failed."))
-  }
-  worker.onmessageerror = () => fail(new Error("The preview worker returned unreadable data."))
-  return {
-    prepare: (buffer, page) =>
-      new Promise<ArrayBuffer>((resolve, reject) => {
-        if (failure) {
-          reject(failure)
-          return
-        }
-        pending = { resolve, reject }
-        try {
-          worker.postMessage({ buffer, page }, [buffer])
-        } catch (error) {
-          fail(errorOf(error))
-        }
-      }),
-    terminate: () => {
-      fail(new Error("Cancelled"), false)
-      worker.onmessage = null
-      worker.onerror = null
-      worker.onmessageerror = null
-      worker.terminate()
-    },
-  }
-}
-
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
 layout(location=0) in vec3 position;
@@ -138,11 +83,13 @@ layout(location=2) in vec2 uv;
 layout(location=3) in vec4 color;
 uniform mat4 mvp;
 uniform vec3 offset;
+uniform vec3 meshOrigin;
+uniform vec3 meshExtent;
 out vec3 surfaceNormal;
 out vec2 textureUv;
 out vec4 tint;
 void main() {
-  gl_Position = mvp * vec4(position + offset, 1.0);
+  gl_Position = mvp * vec4(meshOrigin + position * meshExtent + offset, 1.0);
   surfaceNormal = normal;
   textureUv = uv;
   tint = color;
@@ -241,7 +188,6 @@ export class SchematicRenderer {
   private readonly staged = new Set<Model>()
   private preparation: PreparedUploads | null = null
   private stream: PreviewStream | null = null
-  private preparationPool: PreparationWorkerPool | null = null
   // Context recovery replaces the renderer, but old IPC reads must drain first.
   private static pendingPreparationReads: Promise<void> = Promise.resolve()
   private readonly yieldChannel = new MessageChannel()
@@ -376,8 +322,6 @@ export class SchematicRenderer {
     return this.loadModel(isCurrent, async (model, guard) => {
       const stream = new PreviewStream()
       this.stream = stream
-      const pool = new PreparationWorkerPool(createPreparationWorker)
-      this.preparationPool = pool
       let uploadedBytes = 0
       try {
         onUploadProgress(0)
@@ -395,7 +339,6 @@ export class SchematicRenderer {
               },
               threadCount,
               speedFirst,
-              pool,
             )
           },
           guard,
@@ -403,8 +346,6 @@ export class SchematicRenderer {
         )
       } finally {
         stream.cancel()
-        pool.dispose()
-        if (this.preparationPool === pool) this.preparationPool = null
         if (this.stream === stream) this.stream = null
       }
     })
@@ -480,53 +421,29 @@ export class SchematicRenderer {
     reportUploaded: (bytes: number) => void,
     threadCount: number | null,
     speedFirst: boolean,
-    pool?: PreparationWorkerPool,
   ): Promise<void> {
-    const layout = buildUploadLayout(metadata, threadCount !== null)
+    const layout = buildUploadLayout(metadata)
     const pages = layout.pages[Symbol.iterator]()
     const arenaBuffers: (WebGLBuffer[] | undefined)[] = []
     const firstTexture = model.textures.length
+    const firstPart = model.parts.length
     const gl = this.gl
     const budget: UploadBudget = { bytes: 0, started: performance.now() }
-    let preparation: PreparedUploads | null = null
+    const preparation = new PreparedUploads(
+      pages,
+      (page) => readBuffer(page.slices),
+      threadCount ?? 1,
+      speedFirst,
+      guard,
+      SchematicRenderer.pendingPreparationReads,
+    )
+    this.preparation = preparation
+    SchematicRenderer.pendingPreparationReads = preparation.drained
     try {
-      guard()
-      if (threadCount !== null) {
-        preparation = new PreparedUploads(
-          pages,
-          (page) => readBuffer(page.slices),
-          threadCount,
-          speedFirst,
-          guard,
-          pool ? (onError) => pool.acquire(onError) : createPreparationWorker,
-          SchematicRenderer.pendingPreparationReads,
-        )
-        this.preparation = preparation
-        SchematicRenderer.pendingPreparationReads = preparation.drained
-      } else {
-        await SchematicRenderer.pendingPreparationReads
-        guard()
-      }
       while (true) {
-        let page: UploadPage
-        let buffer: ArrayBuffer
-        if (preparation) {
-          const prepared = await preparation.take()
-          if (!prepared) break
-          ;({ page, buffer } = prepared)
-        } else {
-          const next = pages.next()
-          if (next.done) break
-          page = next.value
-          const pendingRead = readBuffer(page.slices)
-          SchematicRenderer.pendingPreparationReads = pendingRead.then(
-            () => {},
-            () => {},
-          )
-          buffer = await pendingRead
-          guard()
-          validateUpload(buffer, page)
-        }
+        const prepared = await preparation.take()
+        if (!prepared) break
+        const { page, buffer } = prepared
         // A page never exceeds UPLOAD_CHUNK bytes, so a single budgeted yield per
         // page keeps the window responsive without a round trip per slice.
         let pageBytes = 0
@@ -574,13 +491,13 @@ export class SchematicRenderer {
             if (!buffers) {
               buffers = []
               arenaBuffers[partLayout.arenaIndex] = buffers
-              for (let attribute = 0; attribute < 5; attribute++) {
+              for (let attribute = 0; attribute < 2; attribute++) {
                 gl.bindVertexArray(null)
                 guard()
                 const gpu = required(gl.createBuffer(), "a mesh buffer")
                 buffers.push(gpu)
                 model.buffers.push(gpu)
-                const bindTarget = attribute === 4 ? gl.ELEMENT_ARRAY_BUFFER : gl.ARRAY_BUFFER
+                const bindTarget = attribute === 1 ? gl.ELEMENT_ARRAY_BUFFER : gl.ARRAY_BUFFER
                 gl.bindBuffer(bindTarget, gpu)
                 gl.bufferData(
                   bindTarget,
@@ -590,44 +507,51 @@ export class SchematicRenderer {
                 this.checkGraphics("allocate a mesh buffer")
               }
             }
-            let part = model.parts[model.parts.length - 1]
+            let part = model.parts[firstPart + target.partIndex]
             const expected = metadata.parts[target.partIndex]
-            if (target.attribute === 0 && slice.offset === 0) {
+            if (!target.index && slice.offset === expected.vertexOffset) {
               part = {
                 vao: required(gl.createVertexArray(), "a mesh vertex array"),
-                indexByteOffset: partLayout.offsets[4],
+                indexByteOffset: partLayout.offsets[1],
                 texture: model.textures[expected.textureIndex],
                 count: expected.indexCount,
                 alphaMode: expected.alphaMode,
+                indexType: expected.indexSize === 2 ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT,
+                origin: expected.vertexStride === 24 ? expected.origin : ZERO,
+                extent: expected.vertexStride === 24 ? expected.extent : ONE,
               }
               model.parts.push(part)
               gl.bindVertexArray(part.vao)
-              for (let attribute = 0; attribute < 4; attribute++) {
-                const format = BUFFER_FORMATS[attribute]
-                const type =
-                  attribute === 1 ? gl.BYTE : attribute === 3 ? gl.UNSIGNED_BYTE : gl.FLOAT
-                gl.bindBuffer(gl.ARRAY_BUFFER, buffers[attribute])
+              gl.bindBuffer(gl.ARRAY_BUFFER, buffers[0])
+              for (let attribute = 0; attribute < 4; attribute++)
                 gl.enableVertexAttribArray(attribute)
-                gl.vertexAttribPointer(
-                  attribute,
-                  format.size,
-                  type,
-                  format.normalized,
-                  0,
-                  partLayout.offsets[attribute],
-                )
-              }
-              gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers[4])
+              const compact = expected.vertexStride === 24
+              const stride = expected.vertexStride
+              const offset = partLayout.offsets[0]
+              gl.vertexAttribPointer(
+                0,
+                compact ? 4 : 3,
+                compact ? gl.UNSIGNED_SHORT : gl.FLOAT,
+                compact,
+                stride,
+                offset,
+              )
+              gl.vertexAttribPointer(1, 4, gl.BYTE, true, stride, offset + (compact ? 16 : 20))
+              gl.vertexAttribPointer(2, 2, gl.FLOAT, false, stride, offset + (compact ? 8 : 12))
+              gl.vertexAttribPointer(
+                3,
+                4,
+                gl.UNSIGNED_BYTE,
+                true,
+                stride,
+                offset + (compact ? 20 : 24),
+              )
+              gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers[1])
               this.checkGraphics("configure a mesh vertex array")
             }
-            const attribute = target.attribute
-            const bindTarget = attribute === 4 ? gl.ELEMENT_ARRAY_BUFFER : gl.ARRAY_BUFFER
-            const format = BUFFER_FORMATS[attribute]
-            const values = new format.array(
-              buffer,
-              slice.pageOffset,
-              slice.length / format.array.BYTES_PER_ELEMENT,
-            )
+            const attribute = target.index ? 1 : 0
+            const bindTarget = target.index ? gl.ELEMENT_ARRAY_BUFFER : gl.ARRAY_BUFFER
+            const values = new Uint8Array(buffer, slice.pageOffset, slice.length)
             gl.bindVertexArray(part.vao)
             gl.bindBuffer(bindTarget, buffers[attribute])
             gl.bufferSubData(bindTarget, target.gpuOffset, values)
@@ -637,14 +561,14 @@ export class SchematicRenderer {
           pageBytes += slice.length
         }
         await this.checkpoint(budget, pageBytes, guard)
-        preparation?.release()
+        preparation.release()
       }
       guard()
     } finally {
-      preparation?.stop()
+      preparation.stop()
       if (this.preparation === preparation) this.preparation = null
     }
-    if (preparation) await preparation.drained
+    await preparation.drained
     guard()
   }
 
@@ -737,6 +661,8 @@ export class SchematicRenderer {
         fullscreen,
         matrix: uniform("mvp"),
         offset: uniform("offset"),
+        meshOrigin: uniform("meshOrigin"),
+        meshExtent: uniform("meshExtent"),
         alphaMode: uniform("alphaMode"),
         grid: uniform("isGrid"),
       }
@@ -1010,6 +936,8 @@ export class SchematicRenderer {
         gl.useProgram(pipeline.scene)
         gl.uniformMatrix4fv(pipeline.matrix, false, this.mvp)
         gl.activeTexture(gl.TEXTURE0)
+        gl.uniform3f(pipeline.meshOrigin, 0, 0, 0)
+        gl.uniform3f(pipeline.meshExtent, 1, 1, 1)
         // The grid shader does not sample, but a non-feedback sampler binding is
         // still needed when the resolved color texture was bound by the last frame.
         gl.bindTexture(gl.TEXTURE_2D, this.model.textures[0])
@@ -1066,9 +994,11 @@ export class SchematicRenderer {
     if (part.alphaMode === 0) gl.enable(gl.CULL_FACE)
     else gl.disable(gl.CULL_FACE)
     gl.uniform1i(pipeline.alphaMode, part.alphaMode)
+    gl.uniform3f(pipeline.meshOrigin, part.origin[0], part.origin[1], part.origin[2])
+    gl.uniform3f(pipeline.meshExtent, part.extent[0], part.extent[1], part.extent[2])
     gl.bindTexture(gl.TEXTURE_2D, part.texture)
     gl.bindVertexArray(part.vao)
-    gl.drawElements(gl.TRIANGLES, part.count, gl.UNSIGNED_INT, part.indexByteOffset)
+    gl.drawElements(gl.TRIANGLES, part.count, part.indexType, part.indexByteOffset)
   }
 
   private invalidate(): void {
@@ -1119,8 +1049,6 @@ export class SchematicRenderer {
     this.stream = null
     this.preparation?.stop()
     this.preparation = null
-    this.preparationPool?.dispose()
-    this.preparationPool = null
     for (const model of this.staged) this.releaseModel(model)
     this.staged.clear()
     while (this.pendingYields.length) this.pendingYields.shift()!()

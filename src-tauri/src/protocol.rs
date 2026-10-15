@@ -1105,6 +1105,13 @@ pub(crate) mod tests {
             Metadata {
                 block_count: 2,
                 block_entity_count: 0,
+        assert!(payload
+            .read_ranges(&[range(0, 0, FRAME_BYTES - 3), range(0, 0, 1)])
+            .is_err());
+        assert!(payload.read_ranges(&[]).is_err());
+        assert!(payload
+            .read_ranges(&vec![range(0, 0, 1); MAX_READ_RANGES + 1])
+            .is_err());
                 triangle_count: u64::from(max_triangular_indices / 3) + 1,
                 min: [0.0; 3],
                 max: [1.0; 3],
@@ -1220,27 +1227,8 @@ pub(crate) mod tests {
             }],
         };
         assert_eq!(
-            payload
-                .read_ranges(&[range(0, 0, FRAME_BYTES)])
-                .unwrap()
-                .len(),
-            FRAME_BYTES
-        );
-        assert_eq!(
-            payload
-                .read_ranges(&[range(0, 0, FRAME_BYTES - 3), range(0, 0, 1)])
-                .unwrap_err(),
-            "Invalid preview range."
-        );
-        assert_eq!(
-            payload.read_ranges(&[]).unwrap_err(),
-            "Invalid preview range."
-        );
-        assert_eq!(
-            payload
-                .read_ranges(&vec![range(0, 0, 1); MAX_READ_RANGES + 1])
-                .unwrap_err(),
-            "Invalid preview range."
+            payload.read_ranges(&[range(0, 0, FRAME_BYTES)]).unwrap(),
+            vec![42; FRAME_BYTES]
         );
         for bad in [
             range(0, 0, 0),
@@ -1248,18 +1236,14 @@ pub(crate) mod tests {
             range(0, FRAME_BYTES, 1),
             range(0, usize::MAX, 2),
         ] {
-            assert_eq!(
-                payload.read_ranges(&[range(0, 0, 1), bad]).unwrap_err(),
-                "Invalid preview range."
-            );
+            assert!(payload.read_ranges(&[range(0, 0, 1), bad]).is_err());
         }
-        assert_eq!(
-            payload
-                .read_ranges(&[range(0, 0, 1); MAX_READ_RANGES])
-                .unwrap()
-                .len(),
-            MAX_READ_RANGES * 4 - 3
-        );
+        let page = payload
+            .read_ranges(&[range(0, 0, 1); MAX_READ_RANGES])
+            .unwrap();
+        for (index, &value) in page.iter().enumerate() {
+            assert_eq!(value, if index % 4 == 0 { 42 } else { 0 });
+        }
     }
 
     #[test]

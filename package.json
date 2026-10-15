@@ -19,6 +19,7 @@
     "lint": "vp lint",
     "preview": "vp preview --host 127.0.0.1",
     "record-memory": "tsx scripts/record-memory.ts",
+    "resolve:host": "tsx scripts/cargo.ts update --manifest-path src-tauri/Cargo.toml -p litematica-preview",
     "tauri:dev": "tauri dev",
     "tauri": "tauri",
     "test:host": "tsx scripts/cargo.ts test --manifest-path src-tauri/Cargo.toml --locked",

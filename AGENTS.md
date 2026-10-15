@@ -151,8 +151,17 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
 
 ## Ownership and Constraints
 
-- Rust owns decoded previews until binary IPC serialization finishes. The WebView
-  uploads typed-array views to WebGL and releases superseded CPU/GPU resources.
+- The shared core produces validated upload-ready geometry and first-use RGBA
+  textures. The host transports segmented bytes without quantizing attributes,
+  rebasing indices, or caching texture pixels. The WebView uploads typed-array
+  views and releases superseded CPU/GPU resources.
+- Batches use 24-byte compact vertices or 28-byte absolute float positions for
+  spans above 256 blocks. Bind attributes from each part's `vertexStride` and
+  `indexSize`; use an identity position transform for the float layout while
+  keeping actual bounds for framing. Vertex and index GPU buffers stay separate.
+- Upload reads retain their bounded 1/4/8-page window and generation-drain
+  ordering. Core owns content validation; no browser validation-worker pool is
+  needed.
 - A persistent isolated decoder process caches the resource pack and serializes
   decode/mesh calls. Windows limits it to 2 GiB and kills it with the host.
   Cancel queued work and dispose stale results; Nucleation itself is not cancellable.

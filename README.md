@@ -54,6 +54,10 @@ Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https:
 
 ## Development
 
+Decoding, mesh packing, and first-use texture preparation live in
+[LitematicaPreview Core](https://github.com/Arcadi4/litematica-preview-core).
+The host transfers prepared bytes; WebGL uploads them without converting attributes.
+
 Run the desktop app in development mode:
 
 ```bash

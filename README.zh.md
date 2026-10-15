@@ -52,6 +52,10 @@ Litematica Preview 是一款适用于 Windows 桌面的 Minecraft 投影与结�
 
 ## 开发
 
+解码、网格打包和纹理首次使用时的准备工作由
+[LitematicaPreview Core](https://github.com/Arcadi4/litematica-preview-core) 完成。
+宿主直接传输准备好的字节，WebGL 无需再次转换顶点属性。
+
 在开发模式下运行桌面应用：
 
 ```bash

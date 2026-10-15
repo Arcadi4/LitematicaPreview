@@ -69,6 +69,15 @@ pnpm run tauri:dev
 pnpm run check
 ```
 
+使用尚未发布的本地核心库时，先更新锁文件中的依赖来源：
+
+```bash
+LP_CORE_PATH=../litematica-preview-core pnpm run resolve:host
+LP_CORE_PATH=../litematica-preview-core pnpm run test:host
+```
+
+提交前，不设置该环境变量运行 `pnpm run resolve:host`，即可恢复使用已发布的依赖。
+
 ### 构建
 
 - Node.js 24 LTS 与 pnpm

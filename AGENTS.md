@@ -97,11 +97,13 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
 - Build the host against a local core checkout:
 
   ```bash
+  LP_CORE_PATH=../litematica-preview-core pnpm run resolve:host
   LP_CORE_PATH=../litematica-preview-core pnpm run test:host
   ```
 
-  This rewrites `Cargo.lock` to point at that checkout; restore it with
-  `git checkout Cargo.lock` before committing.
+  This rewrites `Cargo.lock` to point at that checkout. Run
+  `pnpm run resolve:host` without the override to restore the published dependency
+  before committing.
 
 - Rust Tauri host compile check:
 

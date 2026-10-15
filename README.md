@@ -71,6 +71,16 @@ Run frontend and Rust checks (the same set CI runs):
 pnpm run check
 ```
 
+To exercise an unpublished core checkout, resolve its lockfile entry first:
+
+```bash
+LP_CORE_PATH=../litematica-preview-core pnpm run resolve:host
+LP_CORE_PATH=../litematica-preview-core pnpm run test:host
+```
+
+Run `pnpm run resolve:host` without the override to restore the published dependency
+before committing.
+
 ### Build
 
 - Node.js 24 LTS and pnpm

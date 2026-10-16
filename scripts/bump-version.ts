@@ -1,13 +1,7 @@
 #!/usr/bin/env node
 
-// Tags a release: bump the version, commit, and tag.
-//
-// Takes the component to raise, so the current version never has to be looked
-// up: a bare `pnpm run version:bump` and `pnpm run version:bump patch` both give
-// 0.3.1 from 0.3.0, `pnpm run version:bump minor` gives 0.4.0, and
-// `pnpm run version:bump major` gives 1.0.0. Runs only on main from a clean
-// workspace, so the tag always names exactly what was reviewed. Push the
-// commit and the tag yourself; the release workflow fires on the tag.
+// Tags a release with `pnpm run version:bump [major|minor|patch]`.
+// Runs only on main from a clean workspace. Push the commit and tag yourself.
 
 import { execSync } from "node:child_process"
 import fs from "node:fs"

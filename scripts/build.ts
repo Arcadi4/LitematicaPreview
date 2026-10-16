@@ -207,7 +207,6 @@ function assertPortableIsUnlocked(portableRoot: string): void {
 }
 
 function stageResources(resources: Record<string, string>, portableRoot: string): void {
-  // The destination map mirrors the NSIS bundler; the executable already embeds the frontend assets.
   for (const [resource, destination] of Object.entries(resources)) {
     const source = path.join(TAURI_ROOT, resource)
     if (!fs.existsSync(source)) {

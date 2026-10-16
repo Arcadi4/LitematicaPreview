@@ -54,6 +54,6 @@ test("disabled preview controls retain enabled and described help buttons", () =
   )
   assert.ok(described.length > 0, "Settings must expose described help buttons")
   for (const { tag } of described) assert.doesNotMatch(tag, /\bdisabled(?:=|>|\s)/)
-  // A copied description id would attach one setting's help text to another's control.
+  // Distinct ids ensure each help description stays linked to its own control.
   assert.equal(new Set(described.map(({ id }) => id)).size, described.length)
 })

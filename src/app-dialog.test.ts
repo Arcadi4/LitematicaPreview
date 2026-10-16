@@ -11,7 +11,7 @@ import type { Bootstrap, DialogKind, ThemePreference } from "./app-model"
 import { defaultPreviewSettings, type PreviewSettings } from "./preview-settings"
 
 declare global {
-  // react-dom reads this flag; @types/react does not declare it.
+  // React reads this flag; its type declaration omits it.
   // eslint-disable-next-line no-var
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
 }
@@ -97,7 +97,7 @@ function selectedPanel() {
   return panel
 }
 
-/** The radio input for one theme value; asserted so a missing control fails loudly. */
+/** Finds a theme radio and fails clearly if it is absent. */
 function radio(value: string) {
   const element = selectedPanel().querySelector<HTMLInputElement>(`input[value="${value}"]`)
   assert.ok(element, `Missing radio input for ${value}`)

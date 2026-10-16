@@ -106,7 +106,7 @@ pub struct NativeRenderer {
 impl NativeRenderer {
     /// Creates a renderer from a raw window handle, an optional raw display
     /// handle and a physical pixel size. Fails with `Initialization` when no
-    /// Direct3D 12 adapter is available on Windows â€” no software fallback is
+    /// Direct3D 12 adapter is available on Windows ¡ª no software fallback is
     /// attempted.
     ///
     /// The dedicated path the Tauri layer uses is [`Self::new_from_hwnd`],
@@ -210,6 +210,7 @@ impl NativeRenderer {
             staged: None,
         };
         renderer.rebuild_targets();
+        renderer.refresh_camera();
         Ok(renderer)
     }
 
@@ -346,9 +347,9 @@ impl NativeRenderer {
 
     /// Feeds the camera the CSS-sized viewport derived from the physical one.
     fn refresh_camera(&mut self) {
-        let css_width = (self.config.width as f64 / self.scale) as u32;
-        let css_height = (self.config.height as f64 / self.scale) as u32;
-        self.camera.resize(css_width.max(1), css_height.max(1));
+        let css_width = (self.config.width as f64 / self.scale) as f32;
+        let css_height = (self.config.height as f64 / self.scale) as f32;
+        self.camera.resize(css_width, css_height);
     }
 
     /// Starts a load: staged accumulation from an earlier unfinished

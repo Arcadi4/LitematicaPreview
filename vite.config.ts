@@ -270,7 +270,7 @@ export default defineConfig({
     },
     overrides: [
       {
-        files: ["**/*.test.mjs"],
+        files: ["**/*.test.ts", "**/*.test.tsx"],
         rules: {
           "typescript/restrict-template-expressions": "off",
         },

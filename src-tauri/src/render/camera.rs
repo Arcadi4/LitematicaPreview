@@ -112,12 +112,12 @@ impl Camera {
     /// The viewport size changed. Matches `syncSize`'s aspect handling: the fit
     /// is recomputed when the aspect changes, and the current zoom ratio is
     /// preserved.
-    pub fn resize(&mut self, width: u32, height: u32) {
-        if width == 0 || height == 0 {
+    pub fn resize(&mut self, width: f32, height: f32) {
+        if width <= 0.0 || height <= 0.0 {
             return;
         }
-        let aspect = width as f32 / height as f32;
-        self.viewport_height = height as f32;
+        let aspect = width / height;
+        self.viewport_height = height;
         if aspect != self.aspect {
             self.aspect = aspect;
             if self.has_model {
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn model_bounds_are_centred_and_fit_inside_the_view() {
         let mut camera = model_camera();
-        camera.resize(800, 600);
+        camera.resize(800.0, 600.0);
         let centre = project(&camera, [1.0, 0.0, -1.0]);
         assert!(centre[0].abs() < 1e-5 && centre[1].abs() < 1e-5);
         for x in [-1.0, 3.0] {
@@ -374,7 +374,7 @@ mod tests {
     #[test]
     fn pan_moves_the_model_by_the_drag_pixels_on_screen() {
         let mut camera = model_camera();
-        camera.resize(800, 600);
+        camera.resize(800.0, 600.0);
         camera.orbit(73.0, -31.0);
         let before = project(&camera, [1.0, 0.0, -1.0]);
         camera.pan(50.0, 30.0);
@@ -404,8 +404,8 @@ mod tests {
         for panning in [false, true] {
             let mut keyboard = model_camera();
             let mut pointer = model_camera();
-            keyboard.resize(800, 600);
-            pointer.resize(800, 600);
+            keyboard.resize(800.0, 600.0);
+            pointer.resize(800.0, 600.0);
             keyboard.arrow(18.0, -18.0, panning);
             if panning {
                 pointer.pan(18.0, -18.0);
@@ -421,7 +421,7 @@ mod tests {
     #[test]
     fn fit_restores_the_webgl_isometric_elevation() {
         let mut camera = model_camera();
-        camera.resize(600, 600);
+        camera.resize(600.0, 600.0);
         camera.orbit(87.0, -42.0);
         camera.pan(20.0, -10.0);
         camera.zoom(2.0);
@@ -468,10 +468,10 @@ mod tests {
         assert!((camera.distance - pixels).abs() < 1e-4);
         // mode 2 scales by the viewport height.
         let mut camera = model_camera();
-        camera.resize(1000, 1000);
+        camera.resize(1000.0, 1000.0);
         camera.zoom_wheel(-0.075, 2);
         camera.set_model_bounds([-1.0, -2.0, -3.0], [3.0, 2.0, 1.0]);
-        camera.resize(1000, 1000);
+        camera.resize(1000.0, 1000.0);
         camera.zoom_wheel(-75.0, 0);
         assert!((camera.distance - pixels).abs() < 1e-4);
     }
@@ -481,7 +481,7 @@ mod tests {
         let mut camera = model_camera();
         camera.zoom(2.0);
         let ratio = camera.distance / camera.fitted_distance;
-        camera.resize(1600, 1200);
+        camera.resize(1600.0, 1200.0);
         assert!((camera.aspect - 1600.0 / 1200.0).abs() < 1e-6);
         assert!((camera.distance / camera.fitted_distance - ratio).abs() < 1e-5);
     }
@@ -489,7 +489,7 @@ mod tests {
     #[test]
     fn resize_ignores_zero_sized_viewports() {
         let mut camera = model_camera();
-        camera.resize(0, 0);
+        camera.resize(0.0, 0.0);
         assert_eq!(camera.aspect, 1.0);
     }
 }

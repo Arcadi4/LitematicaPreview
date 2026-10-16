@@ -615,9 +615,16 @@ fn create_viewer(handle: &AppHandle) -> ViewerState {
         }
     };
     match render::context::NativeRenderer::new_from_hwnd(surface.hwnd(), surface.size()) {
-        Ok(renderer) => ViewerState {
-            renderer: Arc::new(Mutex::new(Some(renderer))),
-        },
+        Ok(mut renderer) => {
+            if let Some(window) = handle.get_webview_window("main") {
+                if let Ok(scale) = window.scale_factor() {
+                    renderer.set_scale(scale);
+                }
+            }
+            ViewerState {
+                renderer: Arc::new(Mutex::new(Some(renderer))),
+            }
+        }
         Err(error) => {
             let _ = handle.emit(
                 "viewport-failed",
@@ -655,11 +662,16 @@ fn run() -> Result<(), String> {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 window.state::<HostState>().worker.advance(u64::MAX);
             }
-            if let tauri::WindowEvent::Resized(size) = &event {
+            if matches!(
+                event,
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
+            ) {
                 if let Some(viewer) = window.try_state::<ViewerState>() {
                     if let Ok(mut renderer) = viewer.renderer.lock() {
                         if let Some(renderer) = renderer.as_mut() {
-                            renderer.resize(size.width, size.height);
+                            if let Ok(size) = window.inner_size() {
+                                renderer.resize(size.width, size.height);
+                            }
                             if let Ok(scale) = window.scale_factor() {
                                 renderer.set_scale(scale);
                             }

@@ -5,6 +5,8 @@ export type Bootstrap = {
   version: string
   requestId: number
   maxWorkerThreads: number
+  /** Replay of a native viewport failure that predates event listeners. */
+  viewportError: string | null
 }
 export type ThemePreference = "system" | "light" | "dark"
 /**

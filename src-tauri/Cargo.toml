@@ -20,7 +20,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-litematica-preview-core = "0.1.2"
+litematica-preview-core = "0.1.4"
 nucleation = { version = "=0.10.14", default-features = false, features = ["meshing"] }
 
 [target.'cfg(windows)'.dependencies]

@@ -56,7 +56,7 @@ export type Loaded = { path: string; metadata: Metadata; seconds: number }
 export type Notice = { intent: "error" | "success" | "info"; message: string }
 export type DialogKind = "about" | "settings" | "error"
 export type NativeCommand = "register_associations" | "unregister_associations" | "show_licenses"
-/** Camera and grid commands the native viewport applies on the next frame. */
+/** Camera, grid and stage-layout commands the native viewport applies on the next frame. */
 export type ViewportCommand =
   | { kind: "orbit"; dx: number; dy: number }
   | { kind: "pan"; dx: number; dy: number }
@@ -65,6 +65,8 @@ export type ViewportCommand =
   | { kind: "arrow"; dx: number; dy: number; panning: boolean }
   | { kind: "fit" }
   | { kind: "grid"; visible: boolean }
+  /** The visible preview rectangle in CSS pixels; geometry is clipped to it. */
+  | { kind: "stage"; left: number; top: number; width: number; height: number }
 export type PreviewLoaded = { requestId: number; metadata: Metadata }
 export type PreviewFailed = { requestId: number; message: string }
 export type ViewportFailed = { message: string }

@@ -489,6 +489,16 @@ enum ViewportInput {
     Grid {
         visible: bool,
     },
+    /// The visible preview rectangle in CSS pixels, re-reported by the
+    /// frontend whenever the DOM chrome around it changes. It is not camera
+    /// input, but it rides the same ordered per-frame stream so a layout
+    /// change and its re-fit land in one presented frame.
+    Stage {
+        left: f32,
+        top: f32,
+        width: f32,
+        height: f32,
+    },
 }
 
 /// Applies ordered input accumulated for one display frame, then presents once.
@@ -513,6 +523,14 @@ fn viewport_input(
             ViewportInput::Arrow { dx, dy, panning } => renderer.camera().arrow(dx, dy, panning),
             ViewportInput::Fit {} => renderer.camera().fit(),
             ViewportInput::Grid { visible } => renderer.camera().set_grid(visible),
+            ViewportInput::Stage {
+                left,
+                top,
+                width,
+                height,
+            } => {
+                renderer.set_stage(left, top, width, height);
+            }
         }
     }
     renderer.render().map_err(|error| error.to_string())

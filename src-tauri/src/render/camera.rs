@@ -20,15 +20,14 @@ const HALF_FOV_TAN: f32 = 0.249_328_0;
 const ORBIT_SPEED: f32 = 0.008;
 /// Pitch clamp in radians, matching `Math.max(-1.5, Math.min(1.5, ...))`.
 const PITCH_LIMIT: f32 = 1.5;
-/// Arrow-key step in pixels, matching renderer.ts.
-const ARROW_STEP: f32 = 18.0;
 /// Fit padding divisor from renderer.ts's `fittingDistance` (`/ 1.18`).
 const FIT_PADDING: f32 = 1.18;
 /// Fit floor from renderer.ts (`let fit = 0.1`).
 const FIT_FLOOR: f32 = 0.1;
 /// The camera always starts from this orientation, matching `fit()`.
 const DEFAULT_YAW: f32 = std::f32::consts::PI / 4.0;
-const DEFAULT_PITCH: f32 = 1.0 / core::f32::consts::SQRT_2;
+/// `atan(1 / sqrt(2))`, the isometric elevation used by renderer.ts.
+const DEFAULT_PITCH: f32 = 0.615_479_7;
 
 /// The per-frame camera uniforms. `offset` is the `-centre` translation that
 /// puts the model's bounding-box centre at the origin before the view-projection
@@ -175,15 +174,15 @@ impl Camera {
         self.dirty = true;
     }
 
-    /// Arrow-key dolly/orbit, matching the arrow cases of `onKeyDown`.
+    /// Arrow-key orbit/pan delta in pixels, matching `onKeyDown`.
     pub fn arrow(&mut self, dx: f32, dy: f32, panning: bool) {
         if !self.has_model {
             return;
         }
         if panning {
-            self.pan(dx * ARROW_STEP, dy * ARROW_STEP);
+            self.pan(dx, dy);
         } else {
-            self.orbit(dx * ARROW_STEP, dy * ARROW_STEP);
+            self.orbit(dx, dy);
         }
     }
 
@@ -305,14 +304,47 @@ mod tests {
         camera
     }
 
+    fn project(camera: &Camera, point: Vec3) -> Vec3 {
+        let frame = camera.frame_camera(false);
+        let point = add3(point, frame.offset);
+        let point = [point[0], point[1], point[2], 1.0];
+        let clip: [f32; 4] = std::array::from_fn(|row| {
+            (0..4)
+                .map(|column| frame.view_projection[column * 4 + row] * point[column])
+                .sum()
+        });
+        assert!(
+            clip[3] > 0.0,
+            "point must be in front of the camera: {clip:?}"
+        );
+        [clip[0] / clip[3], clip[1] / clip[3], clip[2] / clip[3]]
+    }
+
+    fn assert_projection_eq(left: Vec3, right: Vec3) {
+        for axis in 0..3 {
+            assert!(
+                (left[axis] - right[axis]).abs() < 1e-5,
+                "{left:?} != {right:?}"
+            );
+        }
+    }
+
     #[test]
-    fn model_bounds_center_and_fit() {
-        let camera = model_camera();
-        assert_eq!(camera.centre, [1.0, 0.0, -1.0]);
-        assert_eq!(camera.minimum, [-2.0, -2.0, -2.0]);
-        assert_eq!(camera.maximum, [2.0, 2.0, 2.0]);
-        assert!(camera.fitted_distance > FIT_FLOOR);
-        assert_eq!(camera.fitted_distance, camera.distance);
+    fn model_bounds_are_centred_and_fit_inside_the_view() {
+        let mut camera = model_camera();
+        camera.resize(800, 600);
+        let centre = project(&camera, [1.0, 0.0, -1.0]);
+        assert!(centre[0].abs() < 1e-5 && centre[1].abs() < 1e-5);
+        for x in [-1.0, 3.0] {
+            for y in [-2.0, 2.0] {
+                for z in [-3.0, 1.0] {
+                    let point = project(&camera, [x, y, z]);
+                    assert!(point[0].abs() <= 1.0 / 1.18 + 1e-5);
+                    assert!(point[1].abs() <= 1.0 / 1.18 + 1e-5);
+                    assert!((0.0..1.0).contains(&point[2]));
+                }
+            }
+        }
     }
 
     #[test]
@@ -327,20 +359,90 @@ mod tests {
     }
 
     #[test]
-    fn pitch_stays_within_the_clamp() {
+    fn pitch_clamps_without_flipping_the_view() {
         let mut camera = model_camera();
-        camera.orbit(0.0, 10_000.0);
-        let frame = camera.frame_camera(false);
-        let _ = frame.view_projection;
-        camera.orbit(0.0, -10_000.0);
+        for dy in [10_000.0, -10_000.0] {
+            camera.orbit(0.0, dy);
+            let point = project(&camera, [2.0, 1.0, 0.0]);
+            camera.orbit(0.0, dy);
+            assert_projection_eq(project(&camera, [2.0, 1.0, 0.0]), point);
+            let centre = project(&camera, [1.0, 0.0, -1.0]);
+            assert!(centre[0].abs() < 1e-5 && centre[1].abs() < 1e-5);
+        }
     }
 
     #[test]
-    fn pan_moves_the_target_in_the_camera_plane() {
+    fn pan_moves_the_model_by_the_drag_pixels_on_screen() {
         let mut camera = model_camera();
-        let before = camera.target;
-        camera.pan(50.0, 0.0);
-        assert_ne!(before, camera.target);
+        camera.resize(800, 600);
+        camera.orbit(73.0, -31.0);
+        let before = project(&camera, [1.0, 0.0, -1.0]);
+        camera.pan(50.0, 30.0);
+        let after = project(&camera, [1.0, 0.0, -1.0]);
+        assert!(((after[0] - before[0]) * 400.0 - 50.0).abs() < 1e-3);
+        assert!(((before[1] - after[1]) * 300.0 - 30.0).abs() < 1e-3);
+        assert!((after[2] - before[2]).abs() < 1e-5);
+    }
+
+    #[test]
+    fn rightward_orbit_drag_moves_the_front_of_the_model_rightward() {
+        let mut camera = model_camera();
+        let front = [2.0, 1.0, 0.0];
+        let before = project(&camera, front);
+        camera.orbit(18.0, 0.0);
+        let after = project(&camera, front);
+        assert!(
+            after[0] > before[0],
+            "rightward drag must move the front rightward"
+        );
+        let centre = project(&camera, [1.0, 0.0, -1.0]);
+        assert!(centre[0].abs() < 1e-5 && centre[1].abs() < 1e-5);
+    }
+
+    #[test]
+    fn arrow_pixels_match_the_equivalent_orbit_and_pan_drags() {
+        for panning in [false, true] {
+            let mut keyboard = model_camera();
+            let mut pointer = model_camera();
+            keyboard.resize(800, 600);
+            pointer.resize(800, 600);
+            keyboard.arrow(18.0, -18.0, panning);
+            if panning {
+                pointer.pan(18.0, -18.0);
+            } else {
+                pointer.orbit(18.0, -18.0);
+            }
+            for point in [[1.0, 0.0, -1.0], [-1.0, 2.0, 1.0], [3.0, -2.0, -3.0]] {
+                assert_projection_eq(project(&keyboard, point), project(&pointer, point));
+            }
+        }
+    }
+
+    #[test]
+    fn fit_restores_the_webgl_isometric_elevation() {
+        let mut camera = model_camera();
+        camera.resize(600, 600);
+        camera.orbit(87.0, -42.0);
+        camera.pan(20.0, -10.0);
+        camera.zoom(2.0);
+        camera.fit();
+        let centre = [1.0, 0.0, -1.0];
+        let projected_centre = project(&camera, centre);
+        assert!(projected_centre[0].abs() < 1e-5 && projected_centre[1].abs() < 1e-5);
+        let lengths: [f32; 3] = std::array::from_fn(|axis| {
+            let mut point = centre;
+            point[axis] += 1.0;
+            let projected = project(&camera, point);
+            (projected[0] - projected_centre[0]).hypot(projected[1] - projected_centre[1])
+        });
+        assert!(
+            (lengths[0] - lengths[1]).abs() < 1e-5,
+            "equal isometric axis scales: {lengths:?}"
+        );
+        assert!(
+            (lengths[1] - lengths[2]).abs() < 1e-5,
+            "equal isometric axis scales: {lengths:?}"
+        );
     }
 
     #[test]
@@ -372,13 +474,6 @@ mod tests {
         camera.resize(1000, 1000);
         camera.zoom_wheel(-75.0, 0);
         assert!((camera.distance - pixels).abs() < 1e-4);
-    }
-
-    #[test]
-    fn grid_offset_is_zero_and_part_offset_is_negative_centre() {
-        let camera = model_camera();
-        assert_eq!(camera.frame_camera(true).offset, [0.0; 3]);
-        assert_eq!(camera.frame_camera(false).offset, [-1.0, 0.0, 1.0]);
     }
 
     #[test]

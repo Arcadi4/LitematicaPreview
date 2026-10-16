@@ -427,6 +427,9 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         generation.current = Math.max(generation.current, result.requestId)
         bootstrapRef.current = result
         setBootstrap(result)
+        // Failures from the setup hook ran before any listener existed, so
+        // `bootstrap` replays them; anything later arrives as a live event.
+        if (result.viewportError) setViewportError(result.viewportError)
         const settings = previewSettingsRef.current
         updatePreviewSettings({
           multithreadingEnabled:

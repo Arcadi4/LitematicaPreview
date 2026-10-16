@@ -33,14 +33,18 @@ struct HostState {
 /// The native viewport. The renderer exists once the wgpu surface was created
 /// for the main window and stays `None` after a creation failure, so the DOM
 /// can show the actionable `viewport-failed` error without the app exiting.
+/// `init_error` retains that failure for `bootstrap`, which the setup hook
+/// completed before the frontend could subscribe to the event.
 struct ViewerState {
     renderer: Arc<Mutex<Option<NativeRenderer>>>,
+    init_error: Arc<Mutex<Option<String>>>,
 }
 
 impl ViewerState {
-    fn unavailable() -> Self {
+    fn unavailable(initial_error: Option<String>) -> Self {
         Self {
             renderer: Arc::new(Mutex::new(None)),
+            init_error: Arc::new(Mutex::new(initial_error)),
         }
     }
 }
@@ -75,13 +79,22 @@ struct Bootstrap {
     version: &'static str,
     request_id: u64,
     max_worker_threads: u8,
+    viewport_error: Option<String>,
 }
 
 #[tauri::command]
-async fn bootstrap(state: State<'_, HostState>) -> Result<Bootstrap, String> {
+async fn bootstrap(
+    state: State<'_, HostState>,
+    viewer: State<'_, ViewerState>,
+) -> Result<Bootstrap, String> {
     let resources = state.resources.clone();
     let initial_path = state.initial_path.clone();
     let request_id = state.worker.begin_session();
+    let viewport_error = viewer
+        .init_error
+        .lock()
+        .ok()
+        .and_then(|error| error.clone());
     tauri::async_runtime::spawn_blocking(move || {
         Ok(Bootstrap {
             extensions: EXTENSIONS,
@@ -90,6 +103,7 @@ async fn bootstrap(state: State<'_, HostState>) -> Result<Bootstrap, String> {
             version: env!("CARGO_PKG_VERSION"),
             request_id,
             max_worker_threads: litematica_preview_core::max_worker_threads(),
+            viewport_error,
         })
     })
     .await
@@ -616,20 +630,22 @@ fn initial_path() -> Result<Option<String>, String> {
 
 /// Composes the native viewport under the transparent DOM layer and creates
 /// the renderer for the main window's surface. A failure leaves the renderer
-/// absent and emits `viewport-failed`, so the DOM shows the actionable error
-/// while the app keeps running.
+/// absent, emits `viewport-failed` and retains the message in `ViewerState`,
+/// where `bootstrap` replays it for listeners the setup hook preceded, while
+/// the app keeps running.
 #[cfg(target_os = "windows")]
 fn create_viewer(handle: &AppHandle) -> ViewerState {
     let surface = match render::viewport::install(handle) {
         Ok(surface) => surface,
         Err(error) => {
+            let message = error.to_string();
             let _ = handle.emit(
                 "viewport-failed",
                 ViewportFailed {
-                    message: error.to_string(),
+                    message: message.clone(),
                 },
             );
-            return ViewerState::unavailable();
+            return ViewerState::unavailable(Some(message));
         }
     };
     match render::context::NativeRenderer::new_from_hwnd(surface.hwnd(), surface.size()) {
@@ -641,23 +657,25 @@ fn create_viewer(handle: &AppHandle) -> ViewerState {
             }
             ViewerState {
                 renderer: Arc::new(Mutex::new(Some(renderer))),
+                init_error: Arc::new(Mutex::new(None)),
             }
         }
         Err(error) => {
+            let message = error.to_string();
             let _ = handle.emit(
                 "viewport-failed",
                 ViewportFailed {
-                    message: error.to_string(),
+                    message: message.clone(),
                 },
             );
-            ViewerState::unavailable()
+            ViewerState::unavailable(Some(message))
         }
     }
 }
 
 #[cfg(not(target_os = "windows"))]
 fn create_viewer(_handle: &AppHandle) -> ViewerState {
-    ViewerState::unavailable()
+    ViewerState::unavailable(None)
 }
 
 fn run() -> Result<(), String> {

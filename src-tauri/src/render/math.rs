@@ -83,15 +83,15 @@ pub fn look_at(eye: Vec3, centre: Vec3, up: Vec3) -> Mat4 {
     let y = cross3(z, x);
     [
         x[0],
-        x[1],
-        x[2],
-        0.0, //
         y[0],
-        y[1],
-        y[2],
-        0.0, //
         z[0],
+        0.0, //
+        x[1],
+        y[1],
         z[1],
+        0.0, //
+        x[2],
+        y[2],
         z[2],
         0.0,           //
         -dot3(x, eye), //
@@ -120,20 +120,20 @@ pub fn multiply4(a: &Mat4, b: &Mat4) -> Mat4 {
 mod tests {
     use super::*;
 
+    fn transform(matrix: &Mat4, point: [f32; 4]) -> [f32; 4] {
+        std::array::from_fn(|row| {
+            (0..4)
+                .map(|column| matrix[column * 4 + row] * point[column])
+                .sum()
+        })
+    }
+
     #[test]
     fn perspective_maps_near_and_far_to_zero_and_one() {
         let m = perspective(28.0f32.to_radians(), 1.5, 0.01, 0.24);
         let near = [0.0, 0.0, -0.01, 1.0];
         let far = [0.0, 0.0, -0.24, 1.0];
-        let clip = |v: [f32; 4]| {
-            [
-                m[0] * v[0] + m[4] * v[1] + m[8] * v[2] + m[12] * v[3],
-                m[1] * v[0] + m[5] * v[1] + m[9] * v[2] + m[13] * v[3],
-                m[2] * v[0] + m[6] * v[1] + m[10] * v[2] + m[14] * v[3],
-                m[3] * v[0] + m[7] * v[1] + m[11] * v[2] + m[15] * v[3],
-            ]
-        };
-        let (nc, fc) = (clip(near), clip(far));
+        let (nc, fc) = (transform(&m, near), transform(&m, far));
         assert!(nc[3] > 0.0 && fc[3] > 0.0);
         assert!((nc[2] / nc[3]).abs() < 1e-6, "near must map to z = 0");
         assert!(
@@ -143,11 +143,11 @@ mod tests {
     }
 
     #[test]
-    fn multiply_matches_identity_order() {
-        let identity: Mat4 = [
-            1.0, 0.0, 0.0, 0.0, //
-            0.0, 1.0, 0.0, 0.0, //
-            0.0, 0.0, 1.0, 0.0, //
+    fn multiply_applies_the_right_hand_transform_first() {
+        let scale: Mat4 = [
+            2.0, 0.0, 0.0, 0.0, //
+            0.0, 3.0, 0.0, 0.0, //
+            0.0, 0.0, 4.0, 0.0, //
             0.0, 0.0, 0.0, 1.0,
         ];
         let translation: Mat4 = [
@@ -156,20 +156,56 @@ mod tests {
             0.0, 0.0, 1.0, 0.0, //
             5.0, 6.0, 7.0, 1.0,
         ];
-        let both = multiply4(&translation, &identity);
-        assert_eq!(both, translation);
+        let point = [1.0, 2.0, 3.0, 1.0];
+        assert_eq!(
+            transform(&multiply4(&translation, &scale), point),
+            [7.0, 12.0, 19.0, 1.0]
+        );
+        assert_eq!(
+            transform(&multiply4(&scale, &translation), point),
+            [12.0, 24.0, 40.0, 1.0]
+        );
     }
 
     #[test]
-    fn look_at_puts_the_target_on_the_negative_z_axis() {
-        let view = look_at([0.0, 5.0, 10.0], [0.0, 0.0, 0.0], UP);
-        let target = [
-            view[0] * 0.0 + view[4] * 0.0 + view[8] * 0.0 + view[12] * 1.0,
-            view[1] * 0.0 + view[5] * 0.0 + view[9] * 0.0 + view[13] * 1.0,
-            view[2] * 0.0 + view[6] * 0.0 + view[10] * 0.0 + view[14] * 1.0,
-            view[3] * 0.0 + view[7] * 0.0 + view[11] * 0.0 + view[15] * 1.0,
-        ];
-        assert!(target[0].abs() < 1e-6 && target[1].abs() < 1e-6);
-        assert!(target[2] < 0.0, "the target sits in front of the camera");
+    fn look_at_transforms_an_arbitrary_eye_to_the_origin() {
+        let eye = [-3.0, 4.0, 9.0];
+        let view = look_at(eye, [2.0, -1.0, 5.0], UP);
+        let camera_origin = transform(&view, [eye[0], eye[1], eye[2], 1.0]);
+        for coordinate in &camera_origin[..3] {
+            assert!(
+                coordinate.abs() < 1e-5,
+                "eye must map to the origin: {camera_origin:?}"
+            );
+        }
+        assert_eq!(camera_origin[3], 1.0);
+    }
+
+    #[test]
+    fn look_at_centres_an_off_axis_target_throughout_an_orbit() {
+        let target = [3.0, -2.0, 5.0];
+        let projection = perspective(28.0f32.to_radians(), 1.5, 0.1, 100.0);
+        for (yaw, pitch) in [(0.0f32, 0.0f32), (0.7, 0.6), (-1.2, -0.4), (2.4, 1.2)] {
+            let eye = [
+                target[0] + 10.0 * pitch.cos() * yaw.sin(),
+                target[1] + 10.0 * pitch.sin(),
+                target[2] + 10.0 * pitch.cos() * yaw.cos(),
+            ];
+            let view = look_at(eye, target, UP);
+            let point = [target[0], target[1], target[2], 1.0];
+            let viewed = transform(&view, point);
+            assert!(
+                viewed[0].abs() < 1e-5 && viewed[1].abs() < 1e-5,
+                "target: {viewed:?}"
+            );
+            assert!(
+                (viewed[2] + 10.0).abs() < 1e-5,
+                "target must be ten units in front"
+            );
+            let clip = transform(&multiply4(&projection, &view), point);
+            assert!(clip[3] > 0.0);
+            assert!((clip[0] / clip[3]).abs() < 1e-5 && (clip[1] / clip[3]).abs() < 1e-5);
+            assert!((0.0..1.0).contains(&(clip[2] / clip[3])));
+        }
     }
 }

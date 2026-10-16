@@ -91,8 +91,7 @@ impl StreamQueue {
         while state.queue.len() + usize::from(state.leased.is_some()) >= self.capacity
             && state.error.is_none()
         {
-            // Keep the incoming payload outside the queue while the bounded window
-            // is full. Waiting releases the lock so upload reads can proceed.
+            // Keep the incoming payload outside the bounded queue while full; waiting releases the lock.
             state = self
                 .changed
                 .wait(state)
@@ -262,8 +261,7 @@ impl PreviewWorker {
         Ok(event)
     }
 
-    /// The payload leased for `batch_id`, so a consumer can join its buffers
-    /// without touching the queue's storage.
+    /// Returns the leased payload without accessing queue storage.
     pub fn batch_payload(
         &self,
         request_id: u64,
@@ -324,8 +322,7 @@ impl PreviewWorker {
             match result {
                 Ok(result) => result,
                 Err(error) => {
-                    // Notify the queue before dropping the broken decoder so consumers
-                    // do not wait for process teardown.
+                    // Wake consumers before decoder teardown.
                     stream.fail(error.clone());
                     self.worker_pid.store(0, Ordering::Release);
                     process.take();
@@ -475,8 +472,6 @@ mod tests {
         assert_eq!(arrivals.recv_timeout(timeout).unwrap(), 1);
         assert_eq!(publications.recv_timeout(timeout).unwrap(), 1);
         assert_eq!(batch_id(worker.next(1, None).unwrap()), 1);
-        // Leased-payload reads keep the same texture bytes; page reads are
-        // gone in favour of whole-buffer joins.
         assert_eq!(
             queue.payload(1).unwrap().joined_buffers(&[1]).unwrap()[0][..4],
             [255; 4]
@@ -838,10 +833,9 @@ mod tests {
     }
 }
 
-/// Decodes a schematic inside the isolated decoder process.
+/// Decodes a schematic in the isolated decoder process.
 ///
-/// The coordinator sends ordered chunks while native workers retain a bounded result
-/// set for the current request. Only the resource pack survives across requests.
+/// The coordinator sends ordered chunks; the resource pack survives across requests.
 pub(crate) fn decode(
     path: &Path,
     pack_path: &Path,

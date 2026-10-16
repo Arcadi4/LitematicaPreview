@@ -5,13 +5,12 @@ export type Bootstrap = {
   version: string
   requestId: number
   maxWorkerThreads: number
-  /** Replay of a native viewport failure that predates event listeners. */
+  /** Replays a native viewport failure from before event listeners. */
   viewportError: string | null
 }
 export type ThemePreference = "system" | "light" | "dark"
 /**
- * The completed preview descriptors, exactly as the native `preview-loaded`
- * event serializes the protocol metadata (camelCase field names).
+ * Metadata serialized by the native `preview-loaded` event, with camelCase fields.
  */
 export type Metadata = {
   blockCount: number
@@ -58,7 +57,7 @@ export type Loaded = { path: string; metadata: Metadata; seconds: number }
 export type Notice = { intent: "error" | "success" | "info"; message: string }
 export type DialogKind = "about" | "settings" | "error"
 export type NativeCommand = "register_associations" | "unregister_associations" | "show_licenses"
-/** Camera, grid and stage-layout commands the native viewport applies on the next frame. */
+/** Camera, grid and stage commands applied by the native viewport. */
 export type ViewportCommand =
   | { kind: "orbit"; dx: number; dy: number }
   | { kind: "pan"; dx: number; dy: number }
@@ -67,7 +66,7 @@ export type ViewportCommand =
   | { kind: "arrow"; dx: number; dy: number; panning: boolean }
   | { kind: "fit" }
   | { kind: "grid"; visible: boolean }
-  /** The visible preview rectangle in CSS pixels; geometry is clipped to it. */
+  /** Visible preview rectangle in CSS pixels; the native viewport clips geometry to it. */
   | { kind: "stage"; left: number; top: number; width: number; height: number }
 export type PreviewLoaded = { requestId: number; metadata: Metadata }
 export type PreviewFailed = { requestId: number; message: string }

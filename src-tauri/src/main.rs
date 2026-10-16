@@ -30,11 +30,7 @@ struct HostState {
     initial_path: Option<String>,
 }
 
-/// The native viewport. The renderer exists once the wgpu surface was created
-/// for the main window and stays `None` after a creation failure, so the DOM
-/// can show the actionable `viewport-failed` error without the app exiting.
-/// `init_error` retains that failure for `bootstrap`, which the setup hook
-/// completed before the frontend could subscribe to the event.
+/// A failed viewport remains unavailable; its error is retained for bootstrap.
 struct ViewerState {
     renderer: Arc<Mutex<Option<NativeRenderer>>>,
     init_error: Arc<Mutex<Option<String>>>,
@@ -49,8 +45,8 @@ impl ViewerState {
     }
 }
 
-/// Locks the renderer, treating a poisoned lock as an unavailable viewport
-/// instead of unwinding. Callers never hold the lock across blocking waits.
+/// A poisoned lock makes the viewport unavailable; callers must not hold it
+/// across blocking waits.
 fn lock_renderer(
     renderer: &Mutex<Option<NativeRenderer>>,
 ) -> Result<MutexGuard<'_, Option<NativeRenderer>>, String> {
@@ -59,7 +55,7 @@ fn lock_renderer(
         .map_err(|_| VIEWPORT_UNAVAILABLE.to_string())
 }
 
-/// Runs one renderer action while holding the lock.
+/// Renderer actions hold the viewport lock only for their duration.
 fn with_renderer<T>(
     renderer: &Arc<Mutex<Option<NativeRenderer>>>,
     action: impl FnOnce(&mut NativeRenderer) -> T,
@@ -202,7 +198,6 @@ fn report_progress(
     }
 }
 
-/// Uploads one decoded batch's joined buffers to the staged renderer scene.
 fn attach_batch(
     renderer: &Arc<Mutex<Option<NativeRenderer>>>,
     batch: &protocol::Batch,
@@ -245,9 +240,7 @@ fn cancel_staged(renderer: &Arc<Mutex<Option<NativeRenderer>>>) {
     }
 }
 
-/// Ends a failed load: the staged model is dropped, the producer is unblocked,
-/// the request's bookkeeping is released and the DOM sees the actionable
-/// `preview-failed` message.
+/// Failed loads discard staged state and release the request.
 fn fail_load(
     app: &AppHandle,
     worker: &PreviewWorker,
@@ -267,19 +260,14 @@ fn fail_load(
     message
 }
 
-/// Drains one request's preview batches into the native renderer, attaching
-/// each leased payload and reporting the outcome as `preview-loaded` or
-/// `preview-failed`. The lock is only held around renderer calls, so window
-/// events keep flowing while the decoder produces. A superseded request stops
-/// silently, matching the session's generation rules.
+/// Drains a request's batches; the lock is held only for renderer calls.
 fn consume_batches(
     app: &AppHandle,
     worker: &PreviewWorker,
     renderer: &Arc<Mutex<Option<NativeRenderer>>>,
     request_id: u64,
 ) -> Result<protocol::Metadata, String> {
-    // Every load starts from a clean staged scene: an interrupted earlier
-    // request may have left one behind.
+    // A load starts with a clean staged scene; an interrupted request may leave one behind.
     if let Err(error) = with_renderer(renderer, |renderer| renderer.begin_load()) {
         return Err(fail_load(app, worker, renderer, request_id, error));
     }
@@ -320,8 +308,7 @@ fn consume_batches(
                         );
                         return Ok(metadata);
                     }
-                    // The staged model is already displayed; only the frame
-                    // failure is reported.
+                    // The staged model is already displayed; only the frame failure is reported.
                     Ok(Err(error)) => {
                         return Err(fail_load(
                             app,
@@ -365,15 +352,13 @@ async fn load_preview(
     tauri::async_runtime::spawn_blocking(move || {
         worker.ensure_current(request_id)?;
         let pack_path = resources.pack()?;
-        // The blocking preview keeps its command synchronous: the producer
-        // runs on its own thread inside the bounded queue while this task
-        // drains it, so the answer still means the whole model is attached.
+        // Keep the command synchronous while a producer thread feeds the bounded queue;
+        // completion means the whole model is attached.
         worker.begin_stream(request_id, options)?;
         let producer = Arc::clone(&worker);
         let producer_app = app.clone();
         let producing = std::thread::spawn(move || {
-            // A panicking producer must still end the stream, or this task's
-            // consumer would wait for batches that never arrive.
+            // A panic must end the stream or the consumer waits forever.
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 producer.load_stream(
                     &path,
@@ -397,8 +382,7 @@ async fn load_preview(
             })
         });
         let consumed = consume_batches(&app, &worker, &renderer, request_id);
-        // The producer stops once the consumer ends the stream; its own error
-        // was already surfaced through the consumer.
+        // Producer errors reach the consumer; the consumer also stops the producer.
         let produced = producing.join();
         match consumed {
             Err(error) => Err(error),
@@ -441,9 +425,7 @@ fn start_preview(
                 report_progress(&producer_app, &producer, request_id, completed, total)
             })
         });
-        // The consumer drains the same bounded queue, so it runs beside the
-        // producer instead of waiting for it: the producer stops at the
-        // queue's window until uploads release leases.
+        // Drain beside the producer; it blocks at the queue window until uploads release leases.
         let consumer_worker = Arc::clone(&worker);
         let consumer_app = app.clone();
         let consuming = tauri::async_runtime::spawn_blocking(move || {
@@ -457,9 +439,7 @@ fn start_preview(
                 format!("The preview worker stopped unexpectedly: {error}"),
             ),
         }
-        // Every outcome already reached the DOM as `preview-progress`,
-        // `preview-loaded` or `preview-failed`, and the consumer released the
-        // request's CPU bookkeeping.
+        // The consumer reports outcomes and releases the request's CPU bookkeeping.
         let _ = consuming.await;
     });
     Ok(())
@@ -503,10 +483,8 @@ enum ViewportInput {
     Grid {
         visible: bool,
     },
-    /// The visible preview rectangle in CSS pixels, re-reported by the
-    /// frontend whenever the DOM chrome around it changes. It is not camera
-    /// input, but it rides the same ordered per-frame stream so a layout
-    /// change and its re-fit land in one presented frame.
+    /// The visible preview rectangle in CSS pixels, re-reported when DOM chrome changes.
+    /// It rides the ordered per-frame stream; see [`NativeRenderer::set_stage`].
     Stage {
         left: f32,
         top: f32,
@@ -583,8 +561,7 @@ fn open_folder(path: &std::path::Path) -> Result<(), String> {
 
     let folder: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let open: Vec<u16> = "open\0".encode_utf16().collect();
-    // Pass the directory as a separate UTF-16 argument. ShellExecute does not
-    // execute an interpolated command, and resource paths may contain spaces.
+    // Separate UTF-16 arguments avoid command interpolation and preserve paths with spaces.
     let result = unsafe {
         ShellExecuteW(
             std::ptr::null_mut(),
@@ -628,11 +605,9 @@ fn initial_path() -> Result<Option<String>, String> {
     resources::path_string(&absolute).map(Some)
 }
 
-/// Composes the native viewport under the transparent DOM layer and creates
-/// the renderer for the main window's surface. A failure leaves the renderer
-/// absent, emits `viewport-failed` and retains the message in `ViewerState`,
-/// where `bootstrap` replays it for listeners the setup hook preceded, while
-/// the app keeps running.
+/// Composes the native viewport and builds the renderer for the main window's
+/// surface. A failure emits `viewport-failed` and leaves the renderer absent,
+/// so the app keeps running without a viewport.
 #[cfg(target_os = "windows")]
 fn create_viewer(handle: &AppHandle) -> ViewerState {
     let surface = match render::viewport::install(handle) {
@@ -689,8 +664,6 @@ fn run() -> Result<(), String> {
                 resources,
                 initial_path,
             });
-            // Synchronous init, matching the WebGL renderer it replaces: the
-            // surface and renderer exist before the first frame.
             app.manage(create_viewer(app.handle()));
             Ok(())
         })
@@ -711,9 +684,8 @@ fn run() -> Result<(), String> {
                             if let Ok(scale) = window.scale_factor() {
                                 renderer.set_scale(scale);
                             }
-                            // A failed frame here is retried by the next
-                            // input; only load failures reach the DOM as
-                            // `preview-failed`.
+                            // A failed frame here is retried by the next input; only load
+                            // failures reach the DOM as `preview-failed`.
                             let _ = renderer.render();
                         }
                     }
@@ -739,8 +711,7 @@ fn run() -> Result<(), String> {
 fn main() {
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
-    // Decoder mode bypasses Tauri and WebView2. It receives authentication
-    // through the inherited stdin pipe, not process arguments or a Tauri command.
+    // Decoder mode bypasses Tauri and WebView2; stdin carries its authentication token.
     if first
         .as_deref()
         .is_some_and(|argument| argument == "--preview-worker")
@@ -772,8 +743,7 @@ fn main() {
         }
         _ => None,
     };
-    // Installer hooks must exit before Tauri, WebView2, or the Settings dialog
-    // starts; NSIS reports the nonzero process status.
+    // Installer hooks exit before Tauri, WebView2, or Settings starts; NSIS reads the status.
     if let Some(result) = registration {
         if let Err(error) = result {
             eprintln!("{error}");

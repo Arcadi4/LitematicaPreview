@@ -26,8 +26,7 @@ impl Resources {
         if path.exists() {
             return Ok(path);
         }
-        // Development builds fall back to the crate-relative source path. Release
-        // builds use only installed resources.
+        // Development uses crate-relative sources; release uses installed resources only.
         #[cfg(dev)]
         {
             let path = Path::new(env!("CARGO_MANIFEST_DIR"))

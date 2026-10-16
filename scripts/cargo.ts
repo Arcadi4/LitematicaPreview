@@ -1,9 +1,5 @@
-// Runs cargo against the published core crate. Set LP_CORE_PATH to a checkout of
-// https://github.com/Arcadi4/litematica-preview-core to build that one instead,
-// which is how core changes are exercised in the host before a release.
-//
-// This mirrors litematicaql's Core/cargo.sh, so both consumers opt into local
-// core development the same way.
+// Runs cargo against the published core crate, or a checkout in LP_CORE_PATH.
+// Use `pnpm run check:host`, `pnpm run test:host`, or `pnpm run resolve:host`.
 
 import { spawnSync } from "node:child_process"
 import fs from "node:fs"

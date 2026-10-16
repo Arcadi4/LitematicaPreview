@@ -1,37 +1,29 @@
-//! The orbit camera, ported from the `SchematicRenderer` camera state in
-//! src/renderer.ts (the `basis`, `fit`, `zoom`, `pan`, `orbit`, `syncSize`,
-//! `fittingDistance` and the per-frame `view`/`projection`/`mvp` setup).
-//!
-//! Input handling (pointer, wheel, keyboard) stays in the integrator; this
-//! module only applies the deltas with the exact same constants and clamps
-//! as the WebGL renderer. Every mutating call marks the camera dirty so the
-//! renderer can keep its on-demand (event-driven) frame policy.
+//! Orbit, pan, and zoom camera. Input handling lives outside this module.
+//! Mutating calls mark the camera dirty for the on-demand frame policy in
+//! [`super::context`].
 
 use crate::render::math::{
     self, add3, cross3, dot3, mul3, normalize3, scale_and_add3, sub3, Mat4, Vec3, UP,
 };
 
-/// The vertical field of view in degrees, from renderer.ts.
+/// Vertical field of view in degrees.
 const FOV_DEGREES: f32 = 28.0;
-/// `tan(FOV / 2)`, the fitting scale from renderer.ts.
+/// Tangent of half the vertical field of view, used for fitting and panning.
 const HALF_FOV_TAN: f32 = 0.249_328_0;
-/// 0.10.14 renders keep `is_empty()` blind to greedy parts; nothing here
-/// depends on it because the camera only consumes the metadata bounds.
+/// Orbit sensitivity in radians per pixel.
 const ORBIT_SPEED: f32 = 0.008;
-/// Pitch clamp in radians, matching `Math.max(-1.5, Math.min(1.5, ...))`.
+/// Maximum absolute pitch in radians.
 const PITCH_LIMIT: f32 = 1.5;
-/// Fit padding divisor from renderer.ts's `fittingDistance` (`/ 1.18`).
+/// Divisor for the fit margin.
 const FIT_PADDING: f32 = 1.18;
-/// Fit floor from renderer.ts (`let fit = 0.1`).
+/// Minimum fitted distance.
 const FIT_FLOOR: f32 = 0.1;
-/// The camera always starts from this orientation, matching `fit()`.
+/// Initial yaw in radians.
 const DEFAULT_YAW: f32 = std::f32::consts::PI / 4.0;
-/// `atan(1 / sqrt(2))`, the isometric elevation used by renderer.ts.
+/// Initial pitch in radians.
 const DEFAULT_PITCH: f32 = 0.615_479_7;
 
-/// The per-frame camera uniforms. `offset` is the `-centre` translation that
-/// puts the model's bounding-box centre at the origin before the view-projection
-/// transform; the grid is drawn with a zero offset, exactly like renderer.ts.
+/// Per-frame camera uniforms. `offset` centres the model; the grid uses zero.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct FrameCamera {
@@ -55,7 +47,7 @@ impl FrameCamera {
     }
 }
 
-/// The orbit/pan/zoom camera. Mirrors the mutable renderer.ts state.
+/// Orbit, pan, and zoom camera state.
 pub struct Camera {
     yaw: f32,
     pitch: f32,
@@ -66,8 +58,7 @@ pub struct Camera {
     minimum: Vec3,
     maximum: Vec3,
     aspect: f32,
-    /// Viewport height in pixels; the `pan` scale divides by it, matching
-    /// renderer.ts's `cssHeight`.
+    /// Viewport height in pixels; pan scale divides by this value.
     viewport_height: f32,
     grid_visible: bool,
     dirty: bool,
@@ -87,15 +78,13 @@ impl Camera {
             maximum: [0.0; 3],
             aspect: 1.0,
             viewport_height: 1.0,
-            // renderer.ts shows the grid by default (`gridVisible = true`).
             grid_visible: true,
             dirty: true,
             has_model: false,
         }
     }
 
-    /// A model's metadata bounds arrived; adopt the default orientation and fit
-    /// the camera, matching renderer.ts's end-of-`loadModel` block.
+    /// Adopt the default orientation and fit the camera to the model bounds.
     pub fn set_model_bounds(&mut self, min: [f32; 3], max: [f32; 3]) {
         self.centre = [
             (min[0] + max[0]) * 0.5,
@@ -109,9 +98,7 @@ impl Camera {
         self.dirty = true;
     }
 
-    /// The viewport size changed. Matches `syncSize`'s aspect handling: the fit
-    /// is recomputed when the aspect changes, and the current zoom ratio is
-    /// preserved.
+    /// Refit when the aspect changes while preserving the current zoom ratio.
     pub fn resize(&mut self, width: f32, height: f32) {
         if width <= 0.0 || height <= 0.0 {
             return;
@@ -129,14 +116,14 @@ impl Camera {
         self.dirty = true;
     }
 
-    /// Pressed-drag orbit delta in pixels, matching `orbit(dx, dy)`.
+    /// Apply an orbit delta in pixels.
     pub fn orbit(&mut self, dx: f32, dy: f32) {
         self.yaw = (self.yaw - dx * ORBIT_SPEED) % (std::f32::consts::PI * 2.0);
         self.pitch = (self.pitch + dy * ORBIT_SPEED).clamp(-PITCH_LIMIT, PITCH_LIMIT);
         self.dirty = true;
     }
 
-    /// Pressed-drag pan delta in pixels, matching `pan(dx, dy)`.
+    /// Apply a pan delta in pixels.
     pub fn pan(&mut self, dx: f32, dy: f32) {
         if !self.has_model {
             return;
@@ -163,8 +150,8 @@ impl Camera {
         self.zoom((clamped * 0.001).exp());
     }
 
-    /// Raw multiplicative zoom, matching `zoom(factor)`: clamped to
-    /// `[fitted * 0.05, fitted * 8]` and rejected for non-finite factors.
+    /// Multiplicative zoom clamped to `[fitted * 0.05, fitted * 8]`;
+    /// non-finite and non-positive factors are ignored.
     pub fn zoom(&mut self, factor: f32) {
         if !self.has_model || !factor.is_finite() || factor <= 0.0 {
             return;
@@ -174,7 +161,7 @@ impl Camera {
         self.dirty = true;
     }
 
-    /// Arrow-key orbit/pan delta in pixels, matching `onKeyDown`.
+    /// Apply an arrow-key orbit or pan delta in pixels.
     pub fn arrow(&mut self, dx: f32, dy: f32, panning: bool) {
         if !self.has_model {
             return;
@@ -186,7 +173,7 @@ impl Camera {
         }
     }
 
-    /// Reset the default orientation and refit, matching `fit()`.
+    /// Reset the orientation and refit.
     pub fn fit(&mut self) {
         self.yaw = DEFAULT_YAW;
         self.pitch = DEFAULT_PITCH;
@@ -208,7 +195,7 @@ impl Camera {
         self.grid_visible
     }
 
-    /// Whether a new frame is warranted. The renderer clears this after drawing.
+    /// Whether the camera has changed since the last frame.
     pub fn dirty(&self) -> bool {
         self.dirty
     }
@@ -217,8 +204,7 @@ impl Camera {
         self.dirty = false;
     }
 
-    /// Camera uniform bytes for the current state. `grid` selects the zero
-    /// offset renderer.ts used for the grid pass instead of `-centre`.
+    /// Camera uniforms; non-grid frames offset the model by `-centre`.
     pub(crate) fn frame_camera(&self, grid: bool) -> FrameCamera {
         let direction = self.basis();
         let eye = add3(self.target, mul3(direction, self.distance));
@@ -239,13 +225,13 @@ impl Camera {
         }
     }
 
-    /// The orbit direction (`target -> eye`), matching `basis()`.
+    /// The orbit direction from target to eye.
     fn basis(&self) -> Vec3 {
         let cp = self.pitch.cos();
         [cp * self.yaw.sin(), self.pitch.sin(), cp * self.yaw.cos()]
     }
 
-    /// The camera's right and up basis vectors, recomputed like `basis()`.
+    /// The camera's right and up basis vectors.
     fn plane(&self) -> (Vec3, Vec3) {
         let forward = mul3(self.basis(), -1.0);
         let right = normalize3(cross3(forward, UP));
@@ -253,7 +239,7 @@ impl Camera {
         (right, up)
     }
 
-    /// The distance that fits the bounds, matching `fittingDistance()`.
+    /// Distance that fits the bounds with `FIT_PADDING`.
     fn fitting_distance(&self) -> f32 {
         let forward = mul3(self.basis(), -1.0);
         let right = normalize3(cross3(forward, UP));
@@ -419,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn fit_restores_the_webgl_isometric_elevation() {
+    fn fit_restores_the_default_isometric_orientation() {
         let mut camera = model_camera();
         camera.resize(600.0, 600.0);
         camera.orbit(87.0, -42.0);
@@ -456,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn wheel_unit_matches_renderer_ts() {
+    fn wheel_modes_share_one_scroll_unit() {
         // deltaMode 1 multiplies the raw delta by 16 before the clamp, so the
         // same physical scroll produces the same factor as mode 0 with a
         // sixteenth of the delta.

@@ -77,9 +77,8 @@ fn quad(compact: bool, alpha_mode: u32) -> (Vec<u8>, protocol::Metadata, FrameCa
             extent,
         }],
     };
-    // Both wire layouts describe the same screen-space quad after centering.
-    // A real nonzero mesh origin catches accidentally transforming wide
-    // absolute positions a second time; a planar extent catches vec3 padding.
+    // Both layouts describe one quad; a nonzero origin catches double-transforming wide positions,
+    // and a planar extent catches vec3 padding.
     let camera = FrameCamera {
         view_projection: [
             scale, 0.0, 0.0, 0.0, 0.0, scale, 0.0, 0.0, 0.0, 0.0, 0.01, 0.0, -0.75, -0.6, 0.25, 1.0,

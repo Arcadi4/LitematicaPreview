@@ -56,14 +56,13 @@ export default function App({ initialError }: { initialError?: string }) {
   }, [])
 
   const dark = theme === "dark" || (theme === "system" && systemDark)
-  // Storage failures do not change in-memory preferences.
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark)
     document.documentElement.style.colorScheme = dark ? "dark" : "light"
     try {
       localStorage.setItem("litematica-preview-theme", theme)
     } catch {
-      /* Theme still works when storage is disabled. */
+      // Storage is optional; the theme still applies for this session.
     }
   }, [dark, theme])
 
@@ -71,12 +70,11 @@ export default function App({ initialError }: { initialError?: string }) {
     try {
       localStorage.setItem("litematica-preview-settings", JSON.stringify(previewSettings))
     } catch {
-      /* Preview settings still work when storage is disabled. */
+      // Storage is optional; the settings still apply for this session.
     }
   }, [previewSettings])
 
-  // Effect Events keep the keydown subscription stable while still seeing the
-  // latest callbacks and state.
+  // Effect Events keep the subscription stable while using current state.
   const requestFile = useEffectEvent(() => openFile())
   const returnHome = useEffectEvent(() => home())
 
@@ -118,8 +116,7 @@ export default function App({ initialError }: { initialError?: string }) {
       theme={dark ? webDarkTheme : webLightTheme}
       // Portals inherit theme tokens, not the full-window app-shell layout.
       applyStylesToPortals={false}
-      // FluentProvider paints an opaque theme background by default. Override it
-      // so the native swapchain shows through; chrome keeps its own surfaces.
+      // Keep FluentProvider's opaque background off the native swapchain.
       className={`flex flex-col w-full h-full min-w-[320px] bg-transparent! text-text ${dark ? "dark theme-dark" : "theme-light"}`}
     >
       <AppHeader actionBusy={actionBusy} onNativeAction={nativeAction} onOpenDialog={openDialog} />

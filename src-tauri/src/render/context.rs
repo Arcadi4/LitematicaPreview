@@ -26,6 +26,10 @@
 //!   pan scale by the CSS viewport height), so `resize` resizes the swapchain
 //!   with physical pixels and feeds the camera a CSS-converted size using the
 //!   current DPI scale (`set_scale`), keeping pointer deltas meaningful.
+//! * Drawn geometry is clipped to the stage rectangle the DOM reports
+//!   (`set_stage`): the clear still spans the whole window beneath the DOM
+//!   chrome, while the camera's aspect and the NDC centre refer to the visible
+//!   preview area so framing and pointer math match it exactly.
 //! * A `Surface::get_current_texture` failure reconfigures once and retries;
 //!   if the retry still fails the frame is dropped with `SurfaceLost`, and
 //!   exposed commands return the typed message. wgpu v30 removed
@@ -93,6 +97,9 @@ pub struct NativeRenderer {
     config: wgpu::SurfaceConfiguration,
     /// Physical-logical scale for the camera's CSS-pixel math.
     scale: f64,
+    /// The visible stage rectangle in CSS pixels, from the DOM; the drawn
+    /// viewport and the camera size refer to it.
+    stage_css: Option<(f32, f32, f32, f32)>,
     /// MSAA attachment view (`samples` > 1 only).
     color_view: Option<wgpu::TextureView>,
     depth_view: Option<wgpu::TextureView>,
@@ -203,6 +210,7 @@ impl NativeRenderer {
             camera,
             config,
             scale,
+            stage_css: None,
             color_view,
             depth_view,
             samples,
@@ -345,10 +353,37 @@ impl NativeRenderer {
         self.refresh_camera();
     }
 
-    /// Feeds the camera the CSS-sized viewport derived from the physical one.
+    /// Records the visible stage rectangle in CSS pixels and re-fits the
+    /// camera when its size changed. Invalid or unchanged values are ignored.
+    pub fn set_stage(&mut self, left: f32, top: f32, width: f32, height: f32) {
+        let next = Some((left, top, width, height));
+        if !left.is_finite()
+            || !top.is_finite()
+            || !width.is_finite()
+            || !height.is_finite()
+            || width <= 0.0
+            || height <= 0.0
+            || self.stage_css == next
+        {
+            return;
+        }
+        self.stage_css = next;
+        self.refresh_camera();
+    }
+
+    /// Feeds the camera the CSS size that matches the drawn geometry: the
+    /// reported stage rectangle once the DOM sent one, or the whole window
+    /// until then.
     fn refresh_camera(&mut self) {
-        let css_width = (self.config.width as f64 / self.scale) as f32;
-        let css_height = (self.config.height as f64 / self.scale) as f32;
+        let (css_width, css_height) = self.stage_css.map_or_else(
+            || {
+                (
+                    (self.config.width as f64 / self.scale) as f32,
+                    (self.config.height as f64 / self.scale) as f32,
+                )
+            },
+            |(_, _, width, height)| (width, height),
+        );
         self.camera.resize(css_width, css_height);
     }
 
@@ -454,6 +489,20 @@ impl NativeRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            // The clear fills the whole window beneath the DOM chrome; the
+            // schematic is clipped to the stage rectangle the DOM reported,
+            // scaled from CSS pixels back to physical ones.
+            if let Some((left, top, width, height)) = self.stage_css {
+                let scale = self.scale as f32;
+                pass.set_viewport(
+                    left * scale,
+                    top * scale,
+                    width * scale,
+                    height * scale,
+                    0.0,
+                    1.0,
+                );
+            }
             if let Some(scene) = self.scene.as_ref() {
                 let grid_visible = self.camera.grid_visible();
                 scene.draw(&self.pipelines, &mut pass, grid_visible)?;

@@ -162,6 +162,29 @@ export function PreviewStage({
     return () => element.removeEventListener("wheel", onWheel)
   }, [loaded, onViewportInput, viewportRef])
 
+  // The native viewport clears the whole window behind the DOM chrome, so
+  // framing needs the visible stage rectangle. ResizeObserver catches layout
+  // changes the notice bar and chrome cause that never produce a Tauri
+  // window event.
+  useEffect(() => {
+    const element = viewportRef.current
+    if (!element) return
+    const report = () => {
+      const rect = element.getBoundingClientRect()
+      onViewportInput({
+        kind: "stage",
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      })
+    }
+    report()
+    const observer = new ResizeObserver(report)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [onViewportInput, viewportRef])
+
   return (
     <section
       className={`absolute inset-0 ${stageActive ? "visible pointer-events-auto" : "invisible pointer-events-none"}`}

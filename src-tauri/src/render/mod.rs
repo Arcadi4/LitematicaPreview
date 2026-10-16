@@ -1,7 +1,10 @@
-// Native rendering pipeline. Replaces the in-page WebGL 2 renderer: broken
-// only at the boundary where the integrator wires it into the app lifecycle.
-// Module layout is pinned; ownership is discovered via the shared dispatch
-// contract in this module's header documentation. Do not add modules here.
+//! Render modules:
+//! `camera`: camera state and orbit/pan/zoom.
+//! `context`: device, surface, frame orchestration.
+//! `math`: vector/matrix helpers.
+//! `pipelines`: render pipelines and camera uniforms.
+//! `scene`: GPU resources and draw batches.
+//! `viewport`: surface/WebView2 composition.
 pub mod camera;
 pub mod context;
 pub mod math;

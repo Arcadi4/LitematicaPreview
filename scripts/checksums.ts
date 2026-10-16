@@ -1,5 +1,4 @@
-// Writes SHA256SUMS.txt for the generated release packages. Run it through the
-// package script: `pnpm run checksums`.
+// Writes `SHA256SUMS.txt` for the release packages; run `pnpm run checksums`.
 
 import { createHash } from "node:crypto"
 import fs from "node:fs"

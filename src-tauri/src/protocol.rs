@@ -92,8 +92,7 @@ struct Summary {
     max: [f32; 3],
 }
 
-/// Stores one logical renderer payload as allocation-sized segments without
-/// flattening it into a contiguous model. Packed IPC reads copy at most 1 MiB per page.
+/// Stores payload buffers in allocation-sized segments; packed IPC reads copy at most 1 MiB per page.
 pub struct Payload {
     pub metadata: Metadata,
     buffers: Vec<Buffer>,
@@ -111,8 +110,7 @@ fn align4(value: usize) -> Option<usize> {
 }
 
 impl Payload {
-    /// Joins the requested buffers' segments into contiguous bytes. The preview
-    /// reads copy at most one buffer per call; ids must be valid (`Err` otherwise).
+    /// Joins requested buffers into contiguous bytes; invalid ids return `Err`.
     pub fn joined_buffers(&self, ids: &[usize]) -> Result<Vec<Vec<u8>>, String> {
         let mut joined = Vec::with_capacity(ids.len());
         for &id in ids {
@@ -629,10 +627,7 @@ fn add_buffer(buffers: &mut Vec<Buffer>, total: &mut usize, length: usize) -> io
 pub(crate) mod tests {
     use super::*;
 
-    /// One-shot framing kept for byte-level fixture tests. Production always
-    /// streams, so this merges every chunk's buffers back into a single
-    /// payload the way the removed `receive` helper did: chunk 0's geometry
-    /// first, then each chunk's texture buffers in receipt order.
+    /// Merges streamed chunks into one payload: chunk 0's geometry, then texture buffers in receipt order.
     fn receive(
         stream: &mut (impl Read + Write),
         current: impl Fn() -> bool,

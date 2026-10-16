@@ -54,18 +54,14 @@ export interface PreviewSession {
 }
 
 export interface PreviewSessionOptions {
-  /** The shell already recovered from a failure, so no path opens on its own. */
   initialError: string | undefined
 }
 
 /**
- * Owns the whole preview session: the native startup subscription, the load
- * pipeline and the ground grid. The schematic is rendered by the native
- * viewport behind the WebView, so this hook only orchestrates: `generation`
- * increases whenever a request supersedes or cancels the previous one, so late
- * native replies and stale samples are ignored instead of overwriting the
- * current view.
+ * Owns native startup subscriptions, loading and memory sampling.
+ * `generation` rejects late native replies after a request is superseded.
  */
+
 export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const [dialog, setDialog] = useState<DialogKind>(initialError ? "error" : "settings")
   const [dialogOpen, setDialogOpen] = useState(Boolean(initialError))
@@ -93,10 +89,6 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const titleQueue = useRef<Promise<void> | null>(null)
   const memoryRequestRef = useRef<number | null>(null)
   const sampleMemoryRef = useRef<(() => void) | null>(null)
-  // The only request the load events may resolve. A superseded or cancelled
-  // load leaves it null (or stale), so its late events are dropped. `stream`
-  // marks the event-driven producer: that command resolves while the native
-  // stream is still running, unlike the serial one that awaits it.
   const pendingRequest = useRef<{
     id: number
     path: string
@@ -104,8 +96,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     stream: boolean
   } | null>(null)
 
-  // The native viewport failed to initialize: every preview keeps failing, so
-  // the message survives the notice resets later loads perform.
+  // Persistent viewport failures remain visible across per-load notice resets.
   const notice = useMemo(
     () =>
       viewportError !== null ? ({ intent: "error", message: viewportError } as const) : rawNotice,
@@ -120,7 +111,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
 
   const isCurrent = useCallback((id: number) => mounted.current && generation.current === id, [])
 
-  // Serialize title changes so a delayed native call cannot restore an old filename.
+  // Serialize title updates to prevent delayed calls restoring stale names.
   const updateTitle = useCallback(
     (path: string | null, id: number) => {
       const previous = titleQueue.current ?? Promise.resolve()
@@ -195,10 +186,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     viewportInput({ kind: "grid", visible })
   }, [viewportInput])
 
-  // A fatal notice tears down the stage and shows the recovery dialog. Failures
-  // while recovering are appended to that same dialog, never raised as a second.
-  // The durable viewport failure only shows in the notice bar, so this effect
-  // keys on the raw notice instead of the composed one.
+  // Raw errors open recovery; durable viewport failures stay in the notice bar.
   useEffect(() => {
     if (rawNotice?.intent !== "error") return
     setErrorDetails(rawNotice.message)
@@ -218,8 +206,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     void getCurrentWindow().setTitle(appName).catch(recoveryFailed)
   }, [rawNotice, isCurrent])
 
-  // Surface uncaught failures in the same place as every other notice instead of
-  // losing them to the default browser reporting.
+  // Route uncaught failures through the notice bar.
   useEffect(() => {
     const onError = (event: ErrorEvent) => {
       event.preventDefault()
@@ -237,11 +224,8 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     }
   }, [])
 
-  // Load completion is event-driven for both the serial and the streaming
-  // command. The listeners live for the whole session so a native event can
-  // never race the command promise's cleanup, and they resolve only the request
-  // that is still current. Progress needs the same session lifetime because the
-  // streaming command resolves while the native stream is still running.
+  // Session-lifetime listeners avoid cleanup races and track progress after streaming resolves.
+  // They resolve only the current request.
   useEffect(() => {
     let active = true
     const unlisteners: Array<() => void> = []
@@ -304,8 +288,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const loadPath = useCallback(
     async (path: string) => {
       if (!mounted.current) return
-      // Read current settings without rebuilding startup and drag-and-drop subscriptions.
-      // This request keeps its own snapshot even if settings change during decoding.
+      // Each request snapshots settings, even if they change during decoding.
       const settings = previewSettingsRef.current
       const speedFirst = settings.multithreadingEnabled && !settings.conservativeMemoryScheduling
       const options = {
@@ -338,9 +321,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         stream: options.threadCount !== null,
       }
       try {
-        // Serial mode decodes and meshes inside the command; streaming mode
-        // starts the native producer and resolves early. Both hand control to
-        // the preview events, whose progress listener lives for the session.
+        // Serial mode awaits decoding; streaming resolves early. Both finish through events.
         await invoke(options.threadCount === null ? "load_preview" : "start_preview", {
           path,
           requestId: id,
@@ -363,7 +344,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     choosingRef.current = true
     setChoosing(true)
     const id = generation.current
-    // Dismissing the picker must leave the current preview or load intact.
+    // Canceling the picker preserves the active preview or load.
     try {
       const path = await invoke<string | null>("choose_file")
       if (path && isCurrent(id)) void loadPath(path)
@@ -427,8 +408,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         generation.current = Math.max(generation.current, result.requestId)
         bootstrapRef.current = result
         setBootstrap(result)
-        // Failures from the setup hook ran before any listener existed, so
-        // `bootstrap` replays them; anything later arrives as a live event.
+        // Bootstrap replays viewport failures that occurred before listeners were installed.
         if (result.viewportError) setViewportError(result.viewportError)
         const settings = previewSettingsRef.current
         updatePreviewSettings({
@@ -502,9 +482,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     }
   }, [cancelNative, isCurrent, loadPath, updatePreviewSettings])
 
-  // The sampler subscribes once for the lifetime of the app: the active request
-  // id is mirrored into a ref, so starting or cancelling a load never
-  // re-subscribes the interval and a late sample can never write stale memory.
+  // One session-long subscription reads the active request id from a ref.
   useEffect(() => {
     let inFlight = false
     const sample = async () => {

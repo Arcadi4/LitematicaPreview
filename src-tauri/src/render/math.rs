@@ -1,23 +1,16 @@
-//! Minimal column-major vector and matrix math for the camera.
+//! Column-major vector and matrix helpers uploaded directly to WGSL
+//! `mat4x4<f32>`.
 //!
-//! Only the operations the WebGL renderer needed are ported: the `gl-matrix`
-//! `perspective`, `lookAt` and `multiply` calls plus the small `vec3`
-//! helpers used by the orbit/pan fitting math. Matrices are column-major, so
-//! they can be uploaded to WGSL `mat4x4<f32>` uniforms (also column-major)
-//! without transposition.
-//!
-//! One deliberate difference from `gl-matrix`: WebGL clip space is `z in
-//! [-1, 1]` while WebGPU/wgpu is `z in [0, 1]`. [`perspective`] produces the
-//! wgpu convention (near maps to 0, far maps to 1); every other routine is
-//! identical to the WebGL math.
+//! Perspective matrices use wgpu clip space: `z` is in `[0, 1]`, with near
+//! mapping to 0 and far to 1.
 
-/// A 3-component vector; matches the `vec3` usages in renderer.ts.
+/// A 3-component vector.
 pub type Vec3 = [f32; 3];
 
 /// A 4x4 matrix in column-major order.
 pub type Mat4 = [f32; 16];
 
-/// The world-up vector the WebGL renderer orbited around.
+/// World-up direction for camera orbit.
 pub const UP: Vec3 = [0.0, 1.0, 0.0];
 
 pub fn dot3(a: Vec3, b: Vec3) -> f32 {
@@ -61,9 +54,8 @@ pub fn mul3(v: Vec3, scale: f32) -> Vec3 {
     [v[0] * scale, v[1] * scale, v[2] * scale]
 }
 
-/// A right-handed perspective matrix mapping near to 0 and far to 1 in NDC,
-/// matching `1 / tan(fov / 2)` for the vertical field of view. `aspect` is
-/// width over height.
+/// Right-handed perspective matrix; `near` maps to 0 and `far` to 1.
+/// `fov_y_radians` is the vertical field of view; `aspect` is width over height.
 pub fn perspective(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -> Mat4 {
     let f = 1.0 / (fov_y_radians / 2.0).tan();
     let mut m = [0.0f32; 16];
@@ -75,8 +67,7 @@ pub fn perspective(fov_y_radians: f32, aspect: f32, near: f32, far: f32) -> Mat4
     m
 }
 
-/// A right-handed look-at matrix, identical to `gl-matrix`'s `lookAt`:
-/// the camera looks down its negative Z axis towards `centre`.
+/// Right-handed look-at matrix; the camera looks down negative Z towards `centre`.
 pub fn look_at(eye: Vec3, centre: Vec3, up: Vec3) -> Mat4 {
     let z = normalize3(sub3(eye, centre));
     let x = normalize3(cross3(up, z));
@@ -101,7 +92,7 @@ pub fn look_at(eye: Vec3, centre: Vec3, up: Vec3) -> Mat4 {
     ]
 }
 
-/// Returns `a * b` in the same convention as `gl-matrix`'s `multiply(out, a, b)`.
+/// Returns `a * b`, applying `b` before `a`.
 pub fn multiply4(a: &Mat4, b: &Mat4) -> Mat4 {
     let mut out = [0.0f32; 16];
     for column in 0..4 {

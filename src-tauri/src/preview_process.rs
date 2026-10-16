@@ -12,8 +12,7 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct DecoderProcess {
     child: Child,
     stream: Option<TcpStream>,
-    // Retain the child's stdin so its host-lifetime watchdog remains active
-    // during native calls.
+    // Keep stdin open to keep the watchdog active during native calls.
     input: Option<ChildStdin>,
     memory_limit_mb: Option<u16>,
     #[cfg(windows)]
@@ -43,8 +42,7 @@ impl DecoderProcess {
             .arg("--preview-worker")
             .arg(address.port().to_string())
             .stdin(Stdio::piped())
-            // Decoder output carries no protocol data. Null streams prevent native
-            // writes from filling a pipe and deadlocking the decoder.
+            // Null output streams prevent native writes from filling a pipe and deadlocking.
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         #[cfg(windows)]
@@ -195,8 +193,7 @@ impl DecoderProcess {
     }
 
     fn failure(&mut self, error: io::Error) -> String {
-        // EOF can precede the operating system's exit notification. Allow brief
-        // teardown, but bound the wait if the peer remains stuck.
+        // EOF can precede the exit notification; bound the teardown wait.
         let deadline = Instant::now() + Duration::from_millis(250);
         loop {
             match self.child.try_wait() {
@@ -214,8 +211,7 @@ impl DecoderProcess {
 
 impl Drop for DecoderProcess {
     fn drop(&mut self) {
-        // Closing stdin makes the child watchdog terminate the process, including
-        // during native calls. kill/wait prevents zombies during ordinary replacement.
+        // Closing stdin triggers watchdog termination, even during native calls.
         self.input.take();
         self.stream.take();
         let _ = self.child.kill();
@@ -279,8 +275,7 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
     io::stdin()
         .read_exact(&mut token)
         .map_err(|e| format!("Unable to read decoder authentication: {e}"))?;
-    // Accept the launch memory cap only from the inherited host pipe, never from
-    // a request packet.
+    // Accept the memory cap only from the host pipe, never a request packet.
     let mut cap = [0; 2];
     io::stdin()
         .read_exact(&mut cap)
@@ -291,8 +286,6 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
         ..PreviewOptions::default()
     }
     .validate()?;
-    // The child may be stuck in native code that cannot unwind. Its watchdog exits
-    // when the host closes stdin, preventing an orphaned decoder.
     std::thread::Builder::new()
         .name("preview-host-lifetime".into())
         .spawn(|| {
@@ -403,8 +396,7 @@ fn decoder_job(memory_limit_mb: Option<u16>) -> Result<std::os::windows::io::Own
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         JOB_OBJECT_LIMIT_PROCESS_MEMORY,
     };
-    // Keep the job handle non-inheritable so host termination closes the last handle
-    // and triggers JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE. Refuse to decode if setup fails.
+    // A non-inheritable handle triggers kill-on-close when the host exits.
     let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
     if handle.is_null() {
         return Err(format!(

@@ -1,16 +1,9 @@
-//! Render pipelines, bind group layouts and the shared camera uniforms.
+//! Render pipelines and shared camera uniforms.
 //!
-//! Ported from the WebGL renderer's `Pipeline` object: one scene program for
-//! block geometry and one grid program, each bound to a camera uniform. WebGL
-//! toggled `gl.enable(BLEND)` and `gl.enable(CULL_FACE)` per part and used one
-//! program for both grid and scene; wgpu expresses both as pipeline state, so
-//! the same two shader modules are baked into multiple pipelines:
-//!
-//! * `grid` — grid lines, position-only layout, depth recorded, no blending;
-//! * `compact_*` / `float_*` — the 24-byte and 28-byte vertex layouts, each
-//!   with back-face culling (opaque), no culling (cutout) and alpha blending
-//!   with depth writes off (transparent), matching renderer.ts's per-part
-//!   `gl.enable(gl.CULL_FACE)` / `gl.enable(gl.BLEND)` toggles.
+//! Pipeline families selected by `scene.rs`:
+//! * `grid` — depth-tested, no blending;
+//! * `compact_*` / `float_*` — opaque with back-face culling, cutout without
+//!   culling, transparent with blending and depth writes disabled.
 
 use crate::render::camera::FrameCamera;
 
@@ -93,8 +86,7 @@ const GRID_VERTEX_LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBuffer
 pub struct Pipelines {
     /// Per-part uniform (origin/extent/alpha_mode) plus texture and sampler.
     part_layout: wgpu::BindGroupLayout,
-    /// Two camera uniform instances: the grid draws with a zero offset, the
-    /// scene with `-centre`, mirroring renderer.ts's per-pass uniform writes.
+    /// Grid uses a zero camera offset; the scene uses `-centre`.
     grid_camera_buffer: wgpu::Buffer,
     scene_camera_buffer: wgpu::Buffer,
     grid_camera: wgpu::BindGroup,
@@ -201,8 +193,8 @@ impl Pipelines {
                 resource: scene_camera_buffer.as_entire_binding(),
             }],
         });
-        // renderer.ts set NEAREST magnification/minification with no mips;
-        // only the address mode differs (atlas clamps, materials repeat).
+        // NEAREST filtering, no mips; atlas and material samplers differ only
+        // in address mode.
         let sampler = |label, mode| wgpu::SamplerDescriptor {
             label: Some(label),
             address_mode_u: mode,
@@ -244,10 +236,7 @@ impl Pipelines {
             mask: !0,
             alpha_to_coverage_enabled: false,
         };
-        // Straight-alpha source-over, matching
-        // `gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)`. The sRGB
-        // render target blends in linear space, as the WebGL sRGB attachment
-        // did.
+        // Straight-alpha source-over blending into the linear-space target.
         let blend = wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::SrcAlpha,
@@ -419,9 +408,7 @@ impl Pipelines {
         }
     }
 
-    /// Uploads both camera uniform instances. The grid receives its zero
-    /// offset and the scene its `-centre` offset, so each pass binds the
-    /// buffer the WebGL renderer's per-pass uniform write would have produced.
+    /// Uploads both camera uniforms, including the grid's zero offset.
     pub(crate) fn write_cameras(&self, queue: &wgpu::Queue, grid: FrameCamera, scene: FrameCamera) {
         queue.write_buffer(&self.grid_camera_buffer, 0, &grid.encode());
         queue.write_buffer(&self.scene_camera_buffer, 0, &scene.encode());

@@ -1,6 +1,6 @@
 import type { ViewportCommand } from "./app-model"
 
-/** One native frame in flight; input received during rendering joins the next frame. */
+/** One frame is in flight; input received meanwhile joins the next frame. */
 export class ViewportInputQueue {
   private pending: ViewportCommand[] = []
   private frame: number | null = null

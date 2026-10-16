@@ -10,7 +10,7 @@ export interface SettingsPanelProps {
   settings: PreviewSettings
 }
 
-/** Reads a spin button value typed as text into a validated integer, or null. */
+/** The numeric value, else the typed digits parsed to an integer, else null. */
 function spinValue(value: number | null, displayValue: string | undefined) {
   if (value !== null) return value
   if (!displayValue || !/^\d+$/.test(displayValue)) return null

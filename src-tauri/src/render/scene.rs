@@ -1,16 +1,11 @@
-//! The decoded but not-yet-live model: GPU resources accumulated while a
-//! preview streams batches, swapped in as a whole when the load finishes.
+//! How a streamed load becomes GPU state.
 //!
-//! Ported from the WebGL renderer's `Model` plus its batch-append path: each
-//! wire batch carries ONE geometry buffer addressed per part (a part's vertex
-//! run starts at `vertex_offset` and is followed immediately by its index
-//! run; `protocol::validate_part` proves the runs contiguous and 4-byte
-//! aligned, so one GPU batch buffer replaces the JS arena repacking). Parts
-//! draw in the wire's order; the passes mirror `drawFrame`: grid first, then
-//! opaque/cutout parts, then transparent parts with depth writes off.
-//! `PartMetadata::texture_index` values are stream-global (the decoder
-//! validates them against `texture_offset + batch textures`), so texture slots
-//! span batches and a `Part` binds whatever the slot holds.
+//! [`protocol::Batch`] carries one geometry buffer addressed per part; each
+//! part draws a slice of that buffer. [`protocol::PartMetadata`] and
+//! `protocol::validate_part` define the wire metadata and validation.
+//! `PartMetadata::texture_index` is stream-global, so a `Part` binds whatever
+//! its slot holds. The grid draws first; parts follow in two passes,
+//! non-blended then alpha-blended with depth writes off.
 
 use crate::protocol;
 use crate::render::context::RenderError;
@@ -24,8 +19,7 @@ struct Texture {
     repeat: bool,
 }
 
-/// One mesh part, mirroring `Part` in renderer.ts minus the WebGL attribute
-/// plumbing: the pipeline family already encodes stride/alpha/cull state.
+/// One mesh part.
 struct Part {
     alpha_mode: u32,
     /// `true` draws the 24-byte compact pipeline family with the
@@ -100,11 +94,9 @@ impl Scene {
         }
     }
 
-    /// Uploads one wire batch, validating part offsets against the geometry
-    /// buffer before touching the GPU. Texture uploads land first so the
-    /// parts' slot bindings always resolve. On error the renderer drops the
-    /// load's staged state, matching renderer.ts, which released its model on
-    /// any upload failure.
+    /// Uploads one wire batch: its textures into their stream-global slots,
+    /// then one geometry buffer the parts draw slices of. An error makes the
+    /// renderer discard the staged load.
     pub(crate) fn attach_batch(
         &mut self,
         pipelines: &Pipelines,
@@ -116,9 +108,8 @@ impl Scene {
                 "the batch texture bytes do not match its texture records",
             ));
         }
-        // Stream-global texture bookkeeping first: stored descriptors must not
-        // depend on this batch landing cleanly, so capacity only grows and a
-        // partially-staged load is discarded wholesale on error.
+        // Texture slots are stream-global; partial loads are discarded wholesale
+        // on error.
         let needed = batch
             .texture_offset
             .checked_add(metadata.textures.len())
@@ -129,8 +120,7 @@ impl Scene {
         for (slot, texture) in metadata.textures.iter().enumerate() {
             let global = batch.texture_offset + slot;
             if self.textures[global].is_some() {
-                // A stream re-uploads a slot only for an identical id; keep
-                // the first pixels (renderer.ts bound the existing texture).
+                // Keep the first pixels uploaded to this stream-global slot.
                 continue;
             }
             if texture.width == 0
@@ -152,8 +142,7 @@ impl Scene {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                // GL sampled SRGB8_ALPHA8; the sampler decodes so tint, cutout
-                // and lighting math run in linear space.
+                // The sampler decodes sRGB so later math runs in linear space.
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
@@ -283,12 +272,10 @@ impl Scene {
         Ok(())
     }
 
-    /// Builds the ground-grid geometry from the completed model bounds,
-    /// mirroring renderer.ts's `buildGrid`.
+    /// Builds the ground grid from the completed model bounds.
     pub(crate) fn finish(&mut self, metadata: &protocol::Metadata) {
-        // Same numeric steps as `buildGrid`: a 15%-padded extent, a step that
-        // keeps the line count bounded, and a floor half a block below the
-        // model's centre line.
+        // The grid uses a 15%-padded extent, a step that bounds line count,
+        // and a floor half a block below the model's centre line.
         let extent =
             (metadata.max[0] - metadata.min[0]).max(metadata.max[2] - metadata.min[2]) * 1.15;
         let extent = extent.max(16.0);
@@ -320,8 +307,7 @@ impl Scene {
         });
     }
 
-    /// Draws grid plus parts into an open render pass. `grid_visible` comes
-    /// from the camera (renderer.ts toggled `isGrid` before the draw).
+    /// Draws the grid and parts; `grid_visible` comes from the camera.
     pub(crate) fn draw(
         &self,
         pipelines: &Pipelines,

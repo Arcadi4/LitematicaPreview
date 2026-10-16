@@ -85,7 +85,7 @@ mod platform {
     }
 
     fn notify_shell() {
-        // SHCNE_ASSOCCHANGED requires no item list.
+        // SHCNE_ASSOCCHANGED takes no item list.
         unsafe {
             SHChangeNotify(
                 SHCNE_ASSOCCHANGED as i32,
@@ -102,8 +102,7 @@ mod platform {
         let user = RegKey::predef(HKEY_CURRENT_USER);
         let classes = RegKey::predef(HKEY_CLASSES_ROOT);
 
-        // Check per-user and merged class registrations before writing. The merged
-        // view also includes machine-wide owners.
+        // Check per-user and merged classes before writing; the latter includes machine owners.
         for path in COMMAND_KEYS {
             let user_command = value(&user, &format!(r"Software\Classes\{path}"), "")?;
             let effective_command = value(&classes, path, "")?;
@@ -175,8 +174,7 @@ mod platform {
 
         for extension in selected {
             let extension_key = format!(r"Software\Classes\{extension}");
-            // Claim only unclaimed extensions. UserChoice is protected, and an
-            // existing default belongs to its owner.
+            // Claim only unclaimed extensions: UserChoice is protected and defaults belong to their owners.
             if value(&classes, extension, "")?.is_none_or(|default| default.is_empty()) {
                 set(&user, &extension_key, "", PROG_ID)?;
             }
@@ -244,7 +242,7 @@ mod platform {
         }
         optional(user.delete_subkey_all(PROG_KEY))?;
         optional(user.delete_subkey_all(APPLICATION_KEY))?;
-        // Remove registration capabilities without deleting unrelated user preferences.
+        // Remove our registration without deleting unrelated user preferences.
         optional(user.delete_subkey_all(CAPABILITIES_KEY))?;
         remove_value(&user, REGISTERED_APPLICATIONS, APPLICATION_NAME)?;
         notify_shell();
@@ -252,7 +250,7 @@ mod platform {
     }
 
     pub fn open_settings() -> Result<(), String> {
-        // Use the general Default Apps page available on Windows 10 and Windows 11.
+        // This Default Apps page is available on Windows 10 and 11.
         let operation: Vec<u16> = "open\0".encode_utf16().collect();
         let uri: Vec<u16> = "ms-settings:defaultapps\0".encode_utf16().collect();
         let result = unsafe {

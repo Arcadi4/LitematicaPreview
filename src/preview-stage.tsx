@@ -71,8 +71,7 @@ export function PreviewStage({
   stageActive,
   viewportRef,
 }: PreviewStageProps) {
-  // The pointer that owns the current drag, mirroring the native renderer's
-  // single-pointer orbit/pan capture.
+  // Tracks the pointer owning orbit/pan capture.
   const drag = useRef<{ pointerId: number; button: number; x: number; y: number } | null>(null)
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -148,8 +147,7 @@ export function PreviewStage({
     onViewportInput({ kind: "arrow", dx, dy, panning: event.shiftKey })
   }
 
-  // React registers wheel passively at the root, so the zoom gesture needs a
-  // native non-passive listener to keep `preventDefault` working.
+  // A native non-passive listener lets zoom prevent the default wheel action.
   useEffect(() => {
     const element = viewportRef.current
     if (!element) return
@@ -162,10 +160,7 @@ export function PreviewStage({
     return () => element.removeEventListener("wheel", onWheel)
   }, [loaded, onViewportInput, viewportRef])
 
-  // The native viewport clears the whole window behind the DOM chrome, so
-  // framing needs the visible stage rectangle. ResizeObserver catches layout
-  // changes the notice bar and chrome cause that never produce a Tauri
-  // window event.
+  // ResizeObserver catches chrome layout changes without a Tauri window event.
   useEffect(() => {
     const element = viewportRef.current
     if (!element) return
@@ -192,8 +187,6 @@ export function PreviewStage({
       aria-hidden={!stageActive}
       aria-busy={Boolean(loading)}
     >
-      {/* The native viewport renders the schematic behind the transparent WebView;
-          this element only captures the camera input. */}
       <div
         ref={viewportRef}
         role="application"

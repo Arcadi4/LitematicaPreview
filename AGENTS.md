@@ -11,22 +11,22 @@ Windows x64 desktop app for offline Minecraft schematic and structure viewing (T
 
 Package manager is `pnpm` (v12). Vite+ (`vp`) powers the web toolchain; `tsx` runs project scripts.
 
-| Task | Command | Notes |
-|---|---|---|
-| Install dependencies | `pnpm install --frozen-lockfile` | |
-| App dev (hot reload) | `pnpm run tauri:dev` | Windows |
-| Web dev server | `pnpm run dev` | Port 1420 |
-| Web build & preview | `pnpm run build && pnpm run preview` | `tsc --noEmit && vp build` |
-| Full CI check | `pnpm run check` | Runs lint, format, build, frontend and host tests |
-| Lint & format | `pnpm run lint` / `pnpm run format` | Oxlint & Oxfmt (`vp fmt`) |
-| Frontend tests | `pnpm run test` | Vitest via `vp test run` |
-| Rust checks | `pnpm run check:host` | `cargo check --all-targets --locked` |
-| Rust tests | `pnpm run test:host` | `cargo test --locked` |
-| Rust format check | `pnpm run format:rust` | `cargo fmt -- --check` |
-| Test against local core | `LP_CORE_PATH=<path> pnpm run test:host` | Run `pnpm run resolve:host` to revert |
-| Version check / bump | `pnpm run version:check` / `pnpm run version:bump [patch\|minor\|major]` | Syncs package.json, Cargo, and tauri configs |
-| Windows package build | `pnpm run build:win` | Creates portable zip & NSIS setup in `artifacts/` |
-| Release checksums | `pnpm run checksums` | Generates `artifacts/SHA256SUMS.txt` |
+| Task                    | Command                                                                  | Notes                                             |
+| ----------------------- | ------------------------------------------------------------------------ | ------------------------------------------------- |
+| Install dependencies    | `pnpm install --frozen-lockfile`                                         |                                                   |
+| App dev (hot reload)    | `pnpm run tauri:dev`                                                     | Windows                                           |
+| Web dev server          | `pnpm run dev`                                                           | Port 1420                                         |
+| Web build & preview     | `pnpm run build && pnpm run preview`                                     | `tsc --noEmit && vp build`                        |
+| Full CI check           | `pnpm run check`                                                         | Runs lint, format, build, frontend and host tests |
+| Lint & format           | `pnpm run lint` / `pnpm run format`                                      | Oxlint & Oxfmt (`vp fmt`)                         |
+| Frontend tests          | `pnpm run test`                                                          | Vitest via `vp test run`                          |
+| Rust checks             | `pnpm run check:host`                                                    | `cargo check --all-targets --locked`              |
+| Rust tests              | `pnpm run test:host`                                                     | `cargo test --locked`                             |
+| Rust format check       | `pnpm run format:rust`                                                   | `cargo fmt -- --check`                            |
+| Test against local core | `LP_CORE_PATH=<path> pnpm run test:host`                                 | Run `pnpm run resolve:host` to revert             |
+| Version check / bump    | `pnpm run version:check` / `pnpm run version:bump [patch\|minor\|major]` | Syncs package.json, Cargo, and tauri configs      |
+| Windows package build   | `pnpm run build:win`                                                     | Creates portable zip & NSIS setup in `artifacts/` |
+| Release checksums       | `pnpm run checksums`                                                     | Generates `artifacts/SHA256SUMS.txt`              |
 
 ## Architecture & Operational Constraints
 
@@ -35,4 +35,4 @@ Package manager is `pnpm` (v12). Vite+ (`vp`) powers the web toolchain; `tsx` ru
 - **Framing**: Frame actual geometry bounds, not chunk-padded schematic bounds. Render on demand (load/resize/input); no continuous animation frames.
 - **Decoder Worker**: Dedicated isolated worker process caches resource packs and serializes decode/mesh jobs. Enforced 2 GiB memory limit on Windows; kills on host exit. Worker crashes must show an error dialog with home navigation recovery.
 - **Registry & Windows Integration**: Register file associations under `HKCU`. Quote executable and file paths separately. Never overwrite Windows `UserChoice` or unregister another installed app's ProgID.
-- **Host Verification**: Windows hardware required to verify Direct3D 12 composite swapchain, transparent WebView2 layering, pointer mapping, DPI scaling across monitors, streaming cancellations, and device-loss handling. Do not report Windows runtime verification from non-Windows environments.
+- **Host Verification**: Windows hardware required to verify Direct3D 12 composite swapchain, transparent WebView2 layering, pointer mapping, stage-rectangle framing, DPI scaling across monitors, streaming cancellations, and device-loss handling. Do not report Windows runtime verification from non-Windows environments.

@@ -36,3 +36,4 @@ Package manager is `pnpm` (v12). Vite+ (`vp`) powers the web toolchain; `tsx` ru
 - **Decoder Worker**: Dedicated isolated worker process caches resource packs and serializes decode/mesh jobs. Enforced 2 GiB memory limit on Windows; kills on host exit. Worker crashes must show an error dialog with home navigation recovery.
 - **Registry & Windows Integration**: Register file associations under `HKCU`. Quote executable and file paths separately. Never overwrite Windows `UserChoice` or unregister another installed app's ProgID.
 - **Host Verification**: Windows hardware required to verify Direct3D 12 composite swapchain, transparent WebView2 layering, pointer mapping, stage-rectangle framing, DPI scaling across monitors, streaming cancellations, and device-loss handling. Do not report Windows runtime verification from non-Windows environments.
+- Never add JavaScript files (including `.mjs`, `.cjs`). Always use TypeScript.

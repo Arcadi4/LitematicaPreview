@@ -206,17 +206,24 @@ impl Scene {
                     "the batch geometry is shorter than its parts",
                 ));
             }
-            // One 32-byte uniform per part keeps per-part beat state (origin,
-            // extent, alpha mode) without dynamic offsets, mirroring the
-            // per-draw uniform writes the WebGL renderer issued. The struct is
-            // padded to WGSL's 16-byte alignment (two vec3s plus f32).
+            // WGSL's two vec3s start at offsets 0 and 16; alpha occupies
+            // offset 28, not the padding after origin. Wide vertices already
+            // contain absolute positions, while their metadata keeps the real
+            // bounds for framing, so they need an identity transform here.
+            let compact = part.vertex_stride == 24;
+            let (origin, extent) = if compact {
+                (part.origin, part.extent)
+            } else {
+                ([0.0; 3], [1.0; 3])
+            };
             let mut uniforms = [0u8; PART_UNIFORM_BYTES as usize];
-            let mut at = 0usize;
-            for value in part.origin.iter().chain(&part.extent) {
-                uniforms[at..at + 4].copy_from_slice(&value.to_le_bytes());
-                at += 4;
+            for (base, values) in [(0, origin), (16, extent)] {
+                for (axis, value) in values.iter().enumerate() {
+                    let at = base + axis * 4;
+                    uniforms[at..at + 4].copy_from_slice(&value.to_le_bytes());
+                }
             }
-            uniforms[at..at + 4].copy_from_slice(&(part.alpha_mode as f32).to_le_bytes());
+            uniforms[28..32].copy_from_slice(&(part.alpha_mode as f32).to_le_bytes());
             let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("mesh part uniform"),
                 size: PART_UNIFORM_BYTES,
@@ -258,7 +265,7 @@ impl Scene {
             });
             parts.push(Part {
                 alpha_mode: part.alpha_mode,
-                compact: part.vertex_stride == 24,
+                compact,
                 vertex_offset: part.vertex_offset as u64,
                 vertex_length,
                 index_offset: part.index_offset as u64,

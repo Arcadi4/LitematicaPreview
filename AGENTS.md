@@ -2,7 +2,7 @@
 
 Windows x64 desktop app for offline Minecraft schematic and structure viewing. The root is both a pnpm workspace and a Cargo workspace.
 
-- Root: Tauri 2 desktop application with a Rust host (`src-tauri/`) and Fluent UI React v9 frontend (`src/`). Uses an on-demand WebGL 2 renderer with `gl-matrix`.
+- Root: Tauri 2 desktop application with a Rust host (`src-tauri/`) and Fluent UI React v9 frontend (`src/`). Rendering is a native Rust renderer (`src-tauri/src/render/`, wgpu with Direct3D 12) that paints into the main window beneath a transparent WebView2; `src/` handles no canvas pixels.
 - The shared engine lives in https://github.com/Arcadi4/litematica-preview-core and is consumed from crates.io as `litematica-preview-core`. Set `LP_CORE_PATH` to a local checkout to build against unpublished core changes; `scripts/cargo.ts` applies the patch. LitematicaQL uses the same variable via its own `Core/cargo.sh`.
 - `Assets/`: Tracked inputs including default resource pack (`Assets/pack.zip`) and application icons.
 - `Fixtures/`: Seven demo schematics in `Demos/` and minimal format fixtures in `Formats/`.
@@ -137,6 +137,47 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
 
 ## Build and Packaging
 
+### Native renderer verification (Windows hardware required)
+
+The development machine compiles the wgpu renderer for both `aarch64/x86_64`
+host targets and `x86_64-pc-windows-msvc` (`cargo check -p litematica-preview`
+and the same with `--target`); tests cover the camera math, wire protocol and
+stream leasing. Nothing here proves the Windows runtime, because checks do not
+link: before cutting a release, verify on real Windows:
+
+1. Startup composites the swapchain beneath the transparent WebView2 layer and
+   shows the welcome screen with no flash of a blank/black frame.
+2. Both-direct3D-12 path: the adapter error path surfaces when GPUs lack DXGI
+   12 support, with no WARP attempt and no silent fallback.
+3. Layering: Fluent dialogs, menus, drag overlays, control hints and tooltips
+   all stay interactive above the viewport; input does not steal camera focus.
+4. Pointer mapping: left-drag orbits, right/middle drags pan, wheel zooms
+   (deltaMode lines/pages), arrows/shift-pan, +/- zoom, F/Home re-fit.
+5. DPI: move between monitors with different scale factors, snap/restore,
+   maximize, fullscreen, and multi-monitor 4K/5K sizes; the camera stays
+   fitted and the swapchain covers the window.
+6. Streaming: load multi-generation reloads, cancel mid-stream (Esc), demos
+   through `loadDemo`, huge fixtures; generation changes never leave GPU
+   staging behind or swap in a stale model.
+7. Color: the background matches the WebGL renderer's dark `#010102`-class
+   tint; block colours/sRGB blending match the previous screenshots, blending
+   in linear and encoding on store.
+8. Device-loss/OutOfMemory handling: pulling the adapter, `ResetDevice`,
+   OOM on a giant fixture - the app reports per the events and stays usable.
+9. Long-run compositing: rapid window resize + streaming at the same time
+   doesn't leak textures/buffers (Task Manager + GPU memory).
+
+Known open risks (record explicitly with a fix plan before shipping):
+
+- `renderer.resize` reconfiguration happens on Resized only; a
+  `ScaleFactorChanged` with no resize can leave the camera's CSS-px scale
+  stale until the next resize.
+- Blending/clear color parity with the WebGL renderer was recorded from GL
+  semantics; a first visual diff on Windows may require adjusting the sRGB
+  clear-color expansion in `render::context`.
+- Device-loss recovery is minimal (frames fail with `SurfaceLost` and the app
+  survives); a full device-rebuild path is not implemented.
+
 - Build the Windows x64 release packages on Windows: the portable app (`artifacts/win-x64/`, `artifacts/*-portable.zip`) and the NSIS setup (`artifacts/*-setup.exe`):
 
   ```bash
@@ -154,16 +195,19 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
 ## Ownership and Constraints
 
 - The shared core produces validated upload-ready geometry and first-use RGBA
-  textures. The host transports segmented bytes without quantizing attributes,
-  rebasing indices, or caching texture pixels. The WebView uploads typed-array
-  views and releases superseded CPU/GPU resources.
+  textures. The host joins each batch's segmented buffers once and uploads
+  them into the native wgpu renderer without quantizing attributes, rebasing
+  indices, or caching texture pixels in the DOM layer. The renderer owns GPU
+  resource lifetimes and releases superseded CPU/GPU resources.
 - Batches use 24-byte compact vertices or 28-byte absolute float positions for
-  spans above 256 blocks. Bind attributes from each part's `vertexStride` and
-  `indexSize`; use an identity position transform for the float layout while
-  keeping actual bounds for framing. Vertex and index GPU buffers stay separate.
-- Upload reads retain their bounded 1/4/8-page window and generation-drain
-  ordering. Core owns content validation; no browser validation-worker pool is
-  needed.
+  spans above 256 blocks. Draw with the matching pipeline family for each
+  part's `vertexStride`; part uniforms carry origin/extent so the shader
+  applies the identity transform for the float layout while keeping actual
+  bounds for framing. One geometry buffer per batch serves every part; slice
+  buffers per part for vertex and index ranges.
+- Bounded StreamQueue backpressure, generation cancelling and lease drains
+  still govern production, and the host consumer attaches to the renderer
+  within them. Core owns content validation.
 - A persistent isolated decoder process caches the resource pack and serializes
   decode/mesh calls. Windows limits it to 2 GiB and kills it with the host.
   Cancel queued work and dispose stale results; Nucleation itself is not cancellable.
@@ -174,8 +218,9 @@ Seven supported formats: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, 
   `total_triangles()` and `is_empty()` omit them.
 - Frame geometry bounds rather than chunk-padded schematic dimensions.
 - Render on load/resize/input. No perpetual frame timer, decorative animations,
-  compatibility shell, or new general-purpose service layer. Tauri's local WebView
-  and IPC bridge are permitted; Fluent UI is the desktop interface.
+  compatibility shell, or new general-purpose service layer. Tauri's local
+  WebView and IPC bridge supply the Fluent interface; the swapchain paints the
+  schematic under a transparent WebView2 layer.
 - Preserve Nucleation's exact version pin, bounded decoding, Java binary NBT
   fallback, and brace-state SNBT normalization until real fixtures justify changes.
 - Register under HKCU. Quote executable and filename separately. Never overwrite

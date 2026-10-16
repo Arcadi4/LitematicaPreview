@@ -22,7 +22,7 @@ If you are on macOS, check out the sister project [LitematicaQL](https://github.
 
 ## Highlights
 
-- Preview seven Minecraft schematic and structure formats offline in textured 3D with WebGL 2 and Nucleation.
+- Preview seven Minecraft schematic and structure formats offline in textured 3D with native wgpu (Direct3D 12) and Nucleation.
 - Load large `.litematic` files with compact decoding and chunked previews that avoid retaining the full decompressed file.
 - Generate and upload geometry concurrently with configurable chunk size, worker threads, and memory scheduling.
 - Isolate decoding in a separate process, with an optional memory limit and loading progress.
@@ -56,7 +56,7 @@ Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https:
 
 Decoding, mesh packing, and first-use texture preparation live in
 [LitematicaPreview Core](https://github.com/Arcadi4/litematica-preview-core).
-The host transfers prepared bytes; WebGL uploads them without converting attributes.
+The host transfers prepared bytes into the native renderer (wgpu/Direct3D 12) without converting attributes or rebasing indices.
 
 Run the desktop app in development mode:
 

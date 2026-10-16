@@ -21,7 +21,6 @@ export default function App({ initialError }: { initialError?: string }) {
     actionBusy,
     bootstrap,
     busy,
-    canvasRef,
     choosing,
     dialog,
     dialogOpen,
@@ -43,6 +42,8 @@ export default function App({ initialError }: { initialError?: string }) {
     setNotice,
     toggleGrid,
     updatePreviewSettings,
+    viewportInput,
+    viewportRef,
     zoomIn,
     zoomOut,
   } = usePreviewSession({ initialError })
@@ -98,14 +99,14 @@ export default function App({ initialError }: { initialError?: string }) {
       if (event.key === "Escape" && loading) {
         event.preventDefault()
         returnHome()
-      } else if (event.key.toLowerCase() === "f" && loaded && target !== canvasRef.current) {
+      } else if (event.key.toLowerCase() === "f" && loaded && target !== viewportRef.current) {
         event.preventDefault()
         fit()
       }
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [canvasRef, dialogOpen, fit, loaded, loading])
+  }, [dialogOpen, fit, loaded, loading, viewportRef])
 
   const onThemeChange = (value: unknown) => {
     if (isTheme(value)) setTheme(value)
@@ -117,7 +118,10 @@ export default function App({ initialError }: { initialError?: string }) {
       theme={dark ? webDarkTheme : webLightTheme}
       // Portals inherit theme tokens, not the full-window app-shell layout.
       applyStylesToPortals={false}
-      className={`flex flex-col w-full h-full min-w-[320px] text-text bg-surface-secondary ${dark ? "dark theme-dark" : "theme-light"}`}
+      // The native viewport presents behind the transparent WebView, so the page
+      // background stays transparent: the DOM chrome keeps its own surfaces and
+      // the swapchain shows through everywhere the DOM does not paint.
+      className={`flex flex-col w-full h-full min-w-[320px] text-text ${dark ? "dark theme-dark" : "theme-light"}`}
     >
       <AppHeader actionBusy={actionBusy} onNativeAction={nativeAction} onOpenDialog={openDialog} />
 
@@ -149,11 +153,12 @@ export default function App({ initialError }: { initialError?: string }) {
         />
 
         <PreviewStage
-          canvasRef={canvasRef}
           loaded={loaded}
           loading={loading}
           onCancel={home}
+          onViewportInput={viewportInput}
           stageActive={stageActive}
+          viewportRef={viewportRef}
         />
 
         {dragging && <DropOverlay />}

@@ -28,7 +28,6 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  background: #f7f8fa;
 }
 
 .dark,
@@ -60,9 +59,9 @@
     height: 100%;
     margin: 0;
     overflow: hidden;
+    background: transparent;
   }
-  button,
-  canvas {
+  button {
     -webkit-tap-highlight-color: transparent;
   }
   kbd {

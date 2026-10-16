@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { getCurrentWebview } from "@tauri-apps/api/webview"
@@ -11,19 +11,20 @@ import {
   type DialogKind,
   type Loaded,
   type Loading,
-  type MeshProgress,
   type NativeCommand,
   type Notice,
+  type PreviewFailed,
+  type PreviewLoaded,
+  type PreviewProgress,
+  type ViewportCommand,
+  type ViewportFailed,
 } from "./app-model"
 import { savedPreviewSettings, type PreviewSettings } from "./preview-settings"
-import { SchematicRenderer, type PreviewMetadata, type PreviewStreamEvent } from "./renderer"
-import type { PreviewReadRange } from "./upload-layout"
 
 export interface PreviewSession {
   actionBusy: boolean
   bootstrap: Bootstrap | null
   busy: boolean
-  canvasRef: RefObject<HTMLCanvasElement | null>
   choosing: boolean
   dialog: DialogKind
   dialogOpen: boolean
@@ -45,6 +46,8 @@ export interface PreviewSession {
   setNotice: (notice: Notice | null) => void
   toggleGrid: () => void
   updatePreviewSettings: (patch: Partial<PreviewSettings>) => void
+  viewportInput: (command: ViewportCommand) => void
+  viewportRef: RefObject<HTMLDivElement | null>
   zoomIn: () => void
   zoomOut: () => void
 }
@@ -55,10 +58,12 @@ export interface PreviewSessionOptions {
 }
 
 /**
- * Owns the whole preview session: the native startup subscription, the WebGL
- * stage, the load pipeline and the ground grid. `generation` increases whenever a
- * request supersedes or cancels the previous one, so late native replies and
- * stale samples are ignored instead of overwriting the current view.
+ * Owns the whole preview session: the native startup subscription, the load
+ * pipeline and the ground grid. The schematic is rendered by the native
+ * viewport behind the WebView, so this hook only orchestrates: `generation`
+ * increases whenever a request supersedes or cancels the previous one, so late
+ * native replies and stale samples are ignored instead of overwriting the
+ * current view.
  */
 export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const [dialog, setDialog] = useState<DialogKind>(initialError ? "error" : "settings")
@@ -68,14 +73,14 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const [loading, setLoading] = useState<Loading | null>(null)
   const [previewMemory, setPreviewMemory] = useState<number | null>(null)
   const [loaded, setLoaded] = useState<Loaded | null>(null)
-  const [notice, setNotice] = useState<Notice | null>(null)
+  const [rawNotice, setRawNotice] = useState<Notice | null>(null)
+  const [viewportError, setViewportError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const [grid, setGrid] = useState(true)
   const [previewSettings, setPreviewSettings] = useState<PreviewSettings>(savedPreviewSettings)
   const [actionBusy, setActionBusy] = useState(false)
   const [choosing, setChoosing] = useState(false)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const rendererRef = useRef<SchematicRenderer | null>(null)
+  const viewportRef = useRef<HTMLDivElement>(null)
   const bootstrapRef = useRef<Bootstrap | null>(null)
   const gridRef = useRef(true)
   const previewSettingsRef = useRef(previewSettings)
@@ -85,9 +90,19 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const choosingRef = useRef(false)
   const actionBusyRef = useRef(false)
   const titleQueue = useRef<Promise<void> | null>(null)
-  const previewReadQueue = useRef<Promise<void> | null>(null)
   const memoryRequestRef = useRef<number | null>(null)
   const sampleMemoryRef = useRef<(() => void) | null>(null)
+  // The only request the load events may resolve. A superseded or cancelled
+  // load leaves it null (or stale), so its late events are dropped.
+  const pendingRequest = useRef<{ id: number; path: string; started: number } | null>(null)
+
+  // The native viewport failed to initialize: every preview keeps failing, so
+  // the message survives the notice resets later loads perform.
+  const notice = useMemo(
+    () =>
+      viewportError !== null ? ({ intent: "error", message: viewportError } as const) : rawNotice,
+    [viewportError, rawNotice],
+  )
 
   const updatePreviewSettings = useCallback((patch: Partial<PreviewSettings>) => {
     const settings = { ...previewSettingsRef.current, ...patch }
@@ -107,7 +122,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
           await getCurrentWindow().setTitle(path ? `${fileName(path)} — ${appName}` : appName)
         } catch (error) {
           if (isCurrent(id))
-            setNotice({
+            setRawNotice({
               intent: "error",
               message: `Could not update the window title: ${errorMessage(error)}`,
             })
@@ -121,7 +136,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     (id: number) => {
       void invoke("cancel_load", { requestId: id }).catch((error: unknown) => {
         if (isCurrent(id))
-          setNotice({
+          setRawNotice({
             intent: "error",
             message: `Could not cancel the load: ${errorMessage(error)}`,
           })
@@ -130,8 +145,16 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     [isCurrent],
   )
 
+  // Camera and grid input is applied natively; failures surface like any other
+  // command error.
+  const viewportInput = useCallback((command: ViewportCommand) => {
+    void invoke("viewport_input", { command }).catch((error: unknown) => {
+      setRawNotice({ intent: "error", message: errorMessage(error) })
+    })
+  }, [])
+
   const clearView = useCallback(() => {
-    rendererRef.current?.clear()
+    pendingRequest.current = null
     setLoaded(null)
     setLoading(null)
     setPreviewMemory(null)
@@ -142,78 +165,54 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     const id = ++generation.current
     cancelNative(id)
     clearView()
-    setNotice(null)
+    setRawNotice(null)
     updateTitle(null, id)
   }, [cancelNative, clearView, updateTitle])
 
-  const graphicsFailed = useCallback(
-    (message: string) => {
-      if (!mounted.current) return
-      const id = ++generation.current
-      cancelNative(id)
-      const renderer = rendererRef.current
-      rendererRef.current = null
-      renderer?.dispose()
-      setLoaded(null)
-      setLoading(null)
-      setPreviewMemory(null)
-      setNotice({
-        intent: "error",
-        message: `The preview could not be rendered. ${message}`,
-      })
-      updateTitle(null, id)
-    },
-    [cancelNative, updateTitle],
-  )
-
-  const fit = useCallback(() => rendererRef.current?.fit(), [])
-  const zoomIn = useCallback(() => rendererRef.current?.zoom(0.88), [])
-  const zoomOut = useCallback(() => rendererRef.current?.zoom(1.12), [])
+  const fit = useCallback(() => viewportInput({ kind: "fit" }), [viewportInput])
+  const zoomIn = useCallback(() => viewportInput({ kind: "zoom", factor: 0.88 }), [viewportInput])
+  const zoomOut = useCallback(() => viewportInput({ kind: "zoom", factor: 1.12 }), [viewportInput])
 
   const toggleGrid = useCallback(() => {
     const visible = !gridRef.current
     gridRef.current = visible
     setGrid(visible)
-    rendererRef.current?.setGrid(visible)
-  }, [])
+    viewportInput({ kind: "grid", visible })
+  }, [viewportInput])
 
   // A fatal notice tears down the stage and shows the recovery dialog. Failures
   // while recovering are appended to that same dialog, never raised as a second.
+  // The durable viewport failure only shows in the notice bar, so this effect
+  // keys on the raw notice instead of the composed one.
   useEffect(() => {
-    if (notice?.intent !== "error") return
-    setErrorDetails(notice.message)
+    if (rawNotice?.intent !== "error") return
+    setErrorDetails(rawNotice.message)
     setDialog("error")
     setDialogOpen(true)
     const id = ++generation.current
-    const renderer = rendererRef.current
-    rendererRef.current = null
+    pendingRequest.current = null
     setLoaded(null)
     setLoading(null)
     setPreviewMemory(null)
     setDragging(false)
-    setNotice(null)
+    setRawNotice(null)
     const recoveryFailed = (error: unknown) => {
       if (isCurrent(id)) setErrorDetails((text) => `${text}\n\nRecovery: ${errorMessage(error)}`)
     }
-    try {
-      renderer?.dispose()
-    } catch (error) {
-      recoveryFailed(error)
-    }
     void invoke("cancel_load", { requestId: id }).catch(recoveryFailed)
     void getCurrentWindow().setTitle(appName).catch(recoveryFailed)
-  }, [notice, isCurrent])
+  }, [rawNotice, isCurrent])
 
   // Surface uncaught failures in the same place as every other notice instead of
   // losing them to the default browser reporting.
   useEffect(() => {
     const onError = (event: ErrorEvent) => {
       event.preventDefault()
-      setNotice({ intent: "error", message: errorMessage(event.error || event.message) })
+      setRawNotice({ intent: "error", message: errorMessage(event.error || event.message) })
     }
     const onRejection = (event: PromiseRejectionEvent) => {
       event.preventDefault()
-      setNotice({ intent: "error", message: errorMessage(event.reason) })
+      setRawNotice({ intent: "error", message: errorMessage(event.reason) })
     }
     window.addEventListener("error", onError)
     window.addEventListener("unhandledrejection", onRejection)
@@ -222,6 +221,48 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       window.removeEventListener("unhandledrejection", onRejection)
     }
   }, [])
+
+  // Load completion is event-driven for both the serial and the streaming
+  // command. The listeners live for the whole session so a native event can
+  // never race the command promise's cleanup, and they resolve only the request
+  // that is still current.
+  useEffect(() => {
+    let active = true
+    const unlisteners: Array<() => void> = []
+    const track = (dispose: () => void) => {
+      if (active) unlisteners.push(dispose)
+      else dispose()
+    }
+    void listen<PreviewLoaded>("preview-loaded", ({ payload }) => {
+      const request = pendingRequest.current
+      if (!request || request.id !== payload.requestId || !isCurrent(payload.requestId)) return
+      pendingRequest.current = null
+      setLoaded({
+        path: request.path,
+        metadata: payload.metadata,
+        seconds: (performance.now() - request.started) / 1000,
+      })
+      setLoading(null)
+      setPreviewMemory(null)
+      updateTitle(request.path, request.id)
+      viewportRef.current?.focus({ preventScroll: true })
+    }).then(track)
+    void listen<PreviewFailed>("preview-failed", ({ payload }) => {
+      const request = pendingRequest.current
+      if (!request || request.id !== payload.requestId || !isCurrent(payload.requestId)) return
+      pendingRequest.current = null
+      setLoading(null)
+      setPreviewMemory(null)
+      setRawNotice({ intent: "error", message: `${request.path}\n\n${payload.message}` })
+    }).then(track)
+    void listen<ViewportFailed>("viewport-failed", ({ payload }) => {
+      setViewportError(payload.message)
+    }).then(track)
+    return () => {
+      active = false
+      for (const dispose of unlisteners) dispose()
+    }
+  }, [isCurrent, updateTitle])
 
   const loadPath = useCallback(
     async (path: string) => {
@@ -237,32 +278,26 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         speedFirst,
       }
       const id = ++generation.current
+      const started = performance.now()
       clearView()
-      setNotice(null)
+      setRawNotice(null)
       updateTitle(null, id)
       const supported = bootstrapRef.current?.extensions.some((extension) =>
         path.toLowerCase().endsWith(extension.toLowerCase()),
       )
       if (!supported) {
         cancelNative(id)
-        setNotice({
+        setRawNotice({
           intent: "error",
           message: `“${fileName(path)}” is not a supported schematic. Choose one of the formats listed below.`,
         })
         return
       }
-      setLoading({
-        path,
-        requestId: id,
-        phase: "decode",
-        completed: 0,
-        total: 0,
-        uploadedBytes: 0,
-      })
-      const started = performance.now()
+      setLoading({ path, requestId: id, phase: "decode", completed: 0, total: 0 })
+      pendingRequest.current = { id, path, started }
       let unlistenProgress: (() => void) | undefined
       try {
-        unlistenProgress = await listen<MeshProgress>("preview-progress", ({ payload }) => {
+        unlistenProgress = await listen<PreviewProgress>("preview-progress", ({ payload }) => {
           if (!isCurrent(id) || payload.requestId !== id || payload.phase !== "mesh") return
           if (!Number.isSafeInteger(payload.total) || payload.total <= 0) return
           if (
@@ -272,7 +307,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
           )
             return
           setLoading((previous) =>
-            previous?.requestId === id && previous.phase !== "upload"
+            previous?.requestId === id
               ? {
                   ...previous,
                   phase: options.threadCount === null ? "mesh" : "stream",
@@ -283,131 +318,25 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
           )
         })
         if (!isCurrent(id)) return
-        // Serial mode still completes native generation before allocating GPU state.
-        const descriptor =
-          options.threadCount === null
-            ? await invoke<PreviewMetadata>("load_preview", { path, requestId: id, options })
-            : null
-        if (!isCurrent(id)) return
-        let renderer = rendererRef.current
-        if (!renderer) {
-          if (!canvasRef.current) throw new Error("The preview canvas is unavailable.")
-          renderer = new SchematicRenderer(canvasRef.current, graphicsFailed)
-          if (!isCurrent(id)) {
-            renderer.dispose()
-            return
-          }
-          rendererRef.current = renderer
-          renderer.setGrid(gridRef.current)
-        }
-        const readRanges = (batchId: number | null, ranges: readonly PreviewReadRange[]) => {
-          if (!isCurrent(id)) return Promise.reject(new Error("Cancelled"))
-          return invoke<ArrayBuffer>("read_preview", {
-            requestId: id,
-            batchId,
-            ranges: ranges.map(({ bufferId, offset, length }) => ({ bufferId, offset, length })),
-          })
-        }
-        let lastUploadUpdate = 0
-        let metadata: PreviewMetadata
-        if (options.threadCount !== null) {
-          // The producer starts before the first pull and runs ahead only within its bounded queue.
-          await invoke("start_preview", { path, requestId: id, options })
-          if (!isCurrent(id)) return
-          metadata = await renderer.loadStream(
-            async (previousBatchId) => {
-              if (!isCurrent(id)) throw new Error("Cancelled")
-              const event = await invoke<PreviewStreamEvent>("next_preview", {
-                requestId: id,
-                previousBatchId,
-              })
-              if (!isCurrent(id)) throw new Error("Cancelled")
-              return event
-            },
-            readRanges,
-            () => isCurrent(id),
-            (uploadedBytes) => {
-              if (!isCurrent(id)) return
-              const now = performance.now()
-              if (now - lastUploadUpdate < 150) return
-              lastUploadUpdate = now
-              setLoading((previous) =>
-                previous?.requestId === id
-                  ? { ...previous, phase: "stream", uploadedBytes }
-                  : previous,
-              )
-            },
-            options.threadCount,
-            options.speedFirst,
-          )
-        } else {
-          if (!descriptor) throw new Error("The preview metadata is unavailable.")
-          setLoading({
-            path,
-            requestId: id,
-            phase: "upload",
-            completed: 0,
-            total: descriptor.byteLength,
-            uploadedBytes: 0,
-          })
-          metadata = await renderer.load(
-            descriptor,
-            (ranges) => {
-              const previous = previewReadQueue.current ?? Promise.resolve()
-              const read = previous.then(() => readRanges(null, ranges))
-              previewReadQueue.current = read.then(
-                () => {},
-                () => {},
-              )
-              return read
-            },
-            () => isCurrent(id),
-            (completed, total) => {
-              if (!isCurrent(id)) return
-              const now = performance.now()
-              if (completed !== total && now - lastUploadUpdate < 150) return
-              lastUploadUpdate = now
-              setLoading((previous) =>
-                previous?.requestId === id && previous.phase === "upload"
-                  ? { ...previous, completed, total, uploadedBytes: completed }
-                  : previous,
-              )
-            },
-            null,
-            false,
-          )
-        }
-        if (!isCurrent(id)) return
-        setLoaded({
+        // Serial mode decodes and meshes inside the command; streaming mode
+        // starts the native producer. Both hand control to the preview events.
+        await invoke(options.threadCount === null ? "load_preview" : "start_preview", {
           path,
-          metadata,
-          seconds: (performance.now() - started) / 1000,
+          requestId: id,
+          options,
         })
-        setLoading(null)
-        setPreviewMemory(null)
-        updateTitle(path, id)
-        canvasRef.current?.focus({ preventScroll: true })
       } catch (error) {
         if (!isCurrent(id)) return
-        rendererRef.current?.clear()
+        pendingRequest.current = null
         setLoading(null)
         setPreviewMemory(null)
         if (errorMessage(error) !== "Cancelled")
-          setNotice({ intent: "error", message: `${path}\n\n${errorMessage(error)}` })
+          setRawNotice({ intent: "error", message: `${path}\n\n${errorMessage(error)}` })
       } finally {
         unlistenProgress?.()
-        try {
-          await invoke("release_preview", { requestId: id })
-        } catch (error) {
-          if (isCurrent(id))
-            setNotice({
-              intent: "error",
-              message: `Could not finish loading the preview: ${errorMessage(error)}`,
-            })
-        }
       }
     },
-    [cancelNative, clearView, graphicsFailed, isCurrent, updateTitle],
+    [cancelNative, clearView, isCurrent, updateTitle],
   )
 
   const chooseFile = useCallback(async () => {
@@ -420,7 +349,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       const path = await invoke<string | null>("choose_file")
       if (path && isCurrent(id)) void loadPath(path)
     } catch (error) {
-      if (isCurrent(id)) setNotice({ intent: "error", message: errorMessage(error) })
+      if (isCurrent(id)) setRawNotice({ intent: "error", message: errorMessage(error) })
     } finally {
       choosingRef.current = false
       if (mounted.current) setChoosing(false)
@@ -447,7 +376,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       try {
         await invoke(command)
         if (isCurrent(id)) {
-          setNotice({
+          setRawNotice({
             intent: "success",
             message:
               command === "register_associations"
@@ -458,7 +387,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
           })
         }
       } catch (error) {
-        if (isCurrent(id)) setNotice({ intent: "error", message: errorMessage(error) })
+        if (isCurrent(id)) setRawNotice({ intent: "error", message: errorMessage(error) })
       } finally {
         actionBusyRef.current = false
         setActionBusy(false)
@@ -469,11 +398,6 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
 
   useEffect(() => {
     mounted.current = true
-    // Keep restoration opted in even if a lost context makes the renderer
-    // dispose itself before the browser dispatches webglcontextlost.
-    const canvas = canvasRef.current
-    const allowContextRestore = (event: Event) => event.preventDefault()
-    canvas?.addEventListener("webglcontextlost", allowContextRestore)
     let active = true
     let unlisten: (() => void) | undefined
     const initialGeneration = generation.current
@@ -499,7 +423,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       })
       .catch((error: unknown) => {
         if (active)
-          setNotice({
+          setRawNotice({
             intent: "error",
             message: `Could not initialize the application: ${errorMessage(error)}`,
           })
@@ -515,7 +439,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
           setDragging(false)
           const extensions = bootstrapRef.current?.extensions
           if (!extensions) {
-            setNotice({
+            setRawNotice({
               intent: "info",
               message:
                 "The application is still starting. Please drop your file again in a moment.",
@@ -529,7 +453,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
           )
           if (path) void loadPath(path)
           else
-            setNotice({
+            setRawNotice({
               intent: "error",
               message: `No supported schematic was dropped. Supported formats: ${extensions.join(", ")}.`,
             })
@@ -541,7 +465,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       })
       .catch((error: unknown) => {
         if (active)
-          setNotice({
+          setRawNotice({
             intent: "error",
             message: `Drag and drop is unavailable. You can still use Open. ${errorMessage(error)}`,
           })
@@ -552,9 +476,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       const id = ++generation.current
       cancelNative(id)
       unlisten?.()
-      rendererRef.current?.dispose()
-      rendererRef.current = null
-      canvas?.removeEventListener("webglcontextlost", allowContextRestore)
+      pendingRequest.current = null
     }
   }, [cancelNative, isCurrent, loadPath, updatePreviewSettings])
 
@@ -605,7 +527,6 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     actionBusy,
     bootstrap,
     busy: !bootstrap || choosing,
-    canvasRef,
     choosing,
     dialog,
     dialogOpen,
@@ -624,9 +545,11 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     previewMemory,
     previewSettings,
     setDialogOpen,
-    setNotice,
+    setNotice: setRawNotice,
     toggleGrid,
     updatePreviewSettings,
+    viewportInput,
+    viewportRef,
     zoomIn,
     zoomOut,
   } satisfies PreviewSession

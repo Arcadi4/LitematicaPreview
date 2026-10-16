@@ -491,24 +491,29 @@ enum ViewportInput {
     },
 }
 
-/// Applies one DOM input event to the native camera and renders on demand.
+/// Applies ordered input accumulated for one display frame, then presents once.
 #[tauri::command]
-fn viewport_input(command: ViewportInput, state: State<'_, ViewerState>) -> Result<(), String> {
+fn viewport_input(
+    commands: Vec<ViewportInput>,
+    state: State<'_, ViewerState>,
+) -> Result<(), String> {
     let mut locked = lock_renderer(&state.renderer)?;
     let renderer = locked
         .as_mut()
         .ok_or_else(|| VIEWPORT_UNAVAILABLE.to_string())?;
-    match command {
-        ViewportInput::Orbit { dx, dy } => renderer.camera().orbit(dx, dy),
-        ViewportInput::Pan { dx, dy } => renderer.camera().pan(dx, dy),
-        ViewportInput::Wheel {
-            delta_y,
-            delta_mode,
-        } => renderer.camera().zoom_wheel(delta_y, delta_mode),
-        ViewportInput::Zoom { factor } => renderer.camera().zoom(factor),
-        ViewportInput::Arrow { dx, dy, panning } => renderer.camera().arrow(dx, dy, panning),
-        ViewportInput::Fit {} => renderer.camera().fit(),
-        ViewportInput::Grid { visible } => renderer.camera().set_grid(visible),
+    for command in commands {
+        match command {
+            ViewportInput::Orbit { dx, dy } => renderer.camera().orbit(dx, dy),
+            ViewportInput::Pan { dx, dy } => renderer.camera().pan(dx, dy),
+            ViewportInput::Wheel {
+                delta_y,
+                delta_mode,
+            } => renderer.camera().zoom_wheel(delta_y, delta_mode),
+            ViewportInput::Zoom { factor } => renderer.camera().zoom(factor),
+            ViewportInput::Arrow { dx, dy, panning } => renderer.camera().arrow(dx, dy, panning),
+            ViewportInput::Fit {} => renderer.camera().fit(),
+            ViewportInput::Grid { visible } => renderer.camera().set_grid(visible),
+        }
     }
     renderer.render().map_err(|error| error.to_string())
 }

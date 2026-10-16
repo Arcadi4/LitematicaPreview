@@ -20,6 +20,7 @@ import {
   type ViewportFailed,
 } from "./app-model"
 import { savedPreviewSettings, type PreviewSettings } from "./preview-settings"
+import { ViewportInputQueue } from "./viewport-input"
 
 export interface PreviewSession {
   actionBusy: boolean
@@ -145,21 +146,28 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     [isCurrent],
   )
 
-  // Camera and grid input is applied natively; failures surface like any other
-  // command error.
-  const viewportInput = useCallback((command: ViewportCommand) => {
-    void invoke("viewport_input", { command }).catch((error: unknown) => {
-      setRawNotice({ intent: "error", message: errorMessage(error) })
-    })
-  }, [])
+  const viewportQueue = useMemo(
+    () =>
+      new ViewportInputQueue(
+        (commands) => invoke("viewport_input", { commands }),
+        (error) => setRawNotice({ intent: "error", message: errorMessage(error) }),
+      ),
+    [],
+  )
+  useEffect(() => () => viewportQueue.clear(), [viewportQueue])
+  const viewportInput = useCallback(
+    (command: ViewportCommand) => viewportQueue.push(command),
+    [viewportQueue],
+  )
 
   const clearView = useCallback(() => {
+    viewportQueue.clear()
     pendingRequest.current = null
     setLoaded(null)
     setLoading(null)
     setPreviewMemory(null)
     setDragging(false)
-  }, [])
+  }, [viewportQueue])
 
   const home = useCallback(() => {
     const id = ++generation.current

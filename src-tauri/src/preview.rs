@@ -262,6 +262,17 @@ impl PreviewWorker {
         Ok(event)
     }
 
+    /// The payload leased for `batch_id`, so a consumer can join its buffers
+    /// without touching the queue's storage.
+    pub fn batch_payload(
+        &self,
+        request_id: u64,
+        batch_id: u64,
+    ) -> Result<Arc<protocol::Payload>, String> {
+        let stream = self.stream(request_id)?;
+        stream.payload(batch_id)
+    }
+
     pub fn load_stream(
         &self,
         path: &Path,
@@ -370,107 +381,6 @@ impl PreviewWorker {
             .then_some(memory)
     }
 
-    pub fn load(
-        &self,
-        path: &Path,
-        pack_path: &Path,
-        request_id: u64,
-        options: PreviewOptions,
-        on_progress: impl FnMut(u64, u64),
-    ) -> Result<protocol::Metadata, String> {
-        options.validate()?;
-        self.ensure_current(request_id)?;
-        let mut process = self
-            .process
-            .lock()
-            .map_err(|_| "The preview worker is unavailable. Restart the app.".to_string())?;
-        self.ensure_current(request_id)?;
-        if process
-            .as_ref()
-            .is_some_and(|process| process.memory_limit_mb() != options.memory_limit_mb)
-        {
-            self.active_request.store(0, Ordering::Release);
-            self.worker_pid.store(0, Ordering::Release);
-            process.take();
-        }
-        if process.is_none() {
-            *process = Some(DecoderProcess::spawn(options.memory_limit_mb)?);
-        }
-        self.worker_pid
-            .store(process.as_ref().unwrap().pid(), Ordering::Release);
-        self.ensure_current(request_id)?;
-        self.active_request.store(request_id, Ordering::Release);
-        let result = process
-            .as_mut()
-            .ok_or("The preview worker is unavailable.")?
-            .load(
-                path,
-                pack_path,
-                options.chunk_size,
-                options.thread_count,
-                options.speed_first,
-                || self.ensure_current(request_id).is_ok(),
-                on_progress,
-            );
-        let payload = match result {
-            Ok(Err(error)) => {
-                let _ = self.active_request.compare_exchange(
-                    request_id,
-                    0,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                );
-                return Err(error);
-            }
-            Ok(Ok(payload)) => payload,
-            Err(error) => {
-                let _ = self.active_request.compare_exchange(
-                    request_id,
-                    0,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                );
-                self.worker_pid.store(0, Ordering::Release);
-                process.take();
-                return Err(error);
-            }
-        };
-        self.publish(request_id, payload)
-    }
-
-    pub fn read(
-        &self,
-        request_id: u64,
-        batch_id: Option<u64>,
-        ranges: &[protocol::ReadRange],
-    ) -> Result<Vec<u8>, String> {
-        let stream = batch_id.map(|_| self.stream(request_id)).transpose()?;
-        let payload = if let Some(batch_id) = batch_id {
-            stream.as_ref().unwrap().payload(batch_id)?
-        } else {
-            let stored = self
-                .payload
-                .lock()
-                .map_err(|_| "The preview buffers are unavailable.")?;
-            self.ensure_current(request_id)?;
-            let (_, payload) = stored
-                .as_ref()
-                .filter(|(id, _)| *id == request_id)
-                .ok_or("The preview buffers have been released.")?;
-            Arc::clone(payload)
-        };
-        // Release the publication lock before copying the requested packed ranges.
-        let bytes = payload.read_ranges(ranges)?;
-        self.ensure_current(request_id)?;
-        if stream
-            .as_ref()
-            .is_some_and(|stream| stream.cancelled.load(Ordering::Acquire))
-        {
-            return Err("Cancelled".into());
-        }
-        Ok(bytes)
-    }
-
     pub fn release(&self, request_id: u64) {
         if let Ok(mut stored) = self.stream.lock() {
             if stored.as_ref().is_some_and(|(id, _)| *id == request_id) {
@@ -507,34 +417,11 @@ impl PreviewWorker {
             }
         }
     }
-
-    pub(crate) fn publish(
-        &self,
-        request_id: u64,
-        payload: protocol::Payload,
-    ) -> Result<protocol::Metadata, String> {
-        let mut stored = self
-            .payload
-            .lock()
-            .map_err(|_| "The preview buffers are unavailable.")?;
-        self.ensure_current(request_id)?;
-        let metadata = payload.metadata.clone();
-        *stored = Some((request_id, Arc::new(payload)));
-        Ok(metadata)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{read_bytes, LoadOptions, PreviewOptions, PreviewWorker};
-
-    fn range(buffer_id: usize, offset: usize, length: usize) -> crate::protocol::ReadRange {
-        crate::protocol::ReadRange {
-            buffer_id,
-            offset,
-            length,
-        }
-    }
 
     fn batch_id(event: crate::protocol::StreamEvent) -> u64 {
         match event {
@@ -554,7 +441,7 @@ mod tests {
         worker.advance(1);
         worker.begin_stream(1, PreviewOptions::default()).unwrap();
         assert!(worker.begin_stream(1, PreviewOptions::default()).is_err());
-        let queue = worker.stream(1).unwrap();
+        let queue = Arc::clone(&worker.stream(1).unwrap());
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut sender = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (mut receiver, _) = listener.accept().unwrap();
@@ -564,6 +451,7 @@ mod tests {
         let (arriving, arrivals) = mpsc::channel();
         let (published, publications) = mpsc::channel();
         let (done, finished) = mpsc::channel();
+        let producer_queue = Arc::clone(&queue);
         let producer = std::thread::spawn(move || {
             let mut id = 0;
             let result = crate::protocol::receive_stream(
@@ -573,22 +461,24 @@ mod tests {
                 |offset, payload| {
                     id += 1;
                     arriving.send(id).unwrap();
-                    queue.publish(offset, payload)?;
+                    producer_queue.publish(offset, payload)?;
                     published.send(id).unwrap();
                     Ok(())
                 },
             )
             .unwrap()
             .unwrap();
-            queue.finish(result).unwrap();
+            producer_queue.finish(result).unwrap();
             done.send(()).unwrap();
         });
         let timeout = Duration::from_secs(5);
         assert_eq!(arrivals.recv_timeout(timeout).unwrap(), 1);
         assert_eq!(publications.recv_timeout(timeout).unwrap(), 1);
         assert_eq!(batch_id(worker.next(1, None).unwrap()), 1);
+        // Leased-payload reads keep the same texture bytes; page reads are
+        // gone in favour of whole-buffer joins.
         assert_eq!(
-            worker.read(1, Some(1), &[range(1, 0, 4)]).unwrap(),
+            queue.payload(1).unwrap().joined_buffers(&[1]).unwrap()[0][..4],
             [255; 4]
         );
         assert_eq!(arrivals.recv_timeout(timeout).unwrap(), 2);
@@ -602,13 +492,13 @@ mod tests {
             finished.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
-        assert!(worker.read(1, Some(2), &[range(0, 0, 4)]).is_err());
+        assert!(queue.payload(2).is_err());
         assert!(worker.next(1, None).is_err());
         assert!(worker.next(1, Some(99)).is_err());
         let first = Arc::downgrade(&worker.stream(1).unwrap().payload(1).unwrap());
         assert_eq!(batch_id(worker.next(1, Some(1)).unwrap()), 2);
         assert!(first.upgrade().is_none());
-        assert!(worker.read(1, Some(1), &[range(0, 0, 4)]).is_err());
+        assert!(queue.payload(1).is_err());
         assert!(worker.next(1, Some(1)).is_err());
         assert_eq!(publications.recv_timeout(timeout).unwrap(), 3);
         assert_eq!(arrivals.recv_timeout(timeout).unwrap(), 4);
@@ -667,7 +557,7 @@ mod tests {
         );
         assert!(leased.upgrade().is_none());
         assert!(queued.upgrade().is_none());
-        assert!(worker.read(1, Some(1), &[range(0, 0, 4)]).is_err());
+        assert!(matches!(queue.payload(1), Err(error) if error == "Late decoder failure"));
         assert!(matches!(worker.next(1, Some(1)), Err(error) if error == "Late decoder failure"));
         assert_eq!(worker.active_request.load(super::Ordering::Acquire), 1);
         worker.release(1);
@@ -739,7 +629,7 @@ mod tests {
 
         worker.advance(2);
         worker.begin_stream(2, PreviewOptions::default()).unwrap();
-        let queue = worker.stream(2).unwrap();
+        let queue = Arc::clone(&worker.stream(2).unwrap());
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut sender = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (mut receiver, _) = listener.accept().unwrap();
@@ -748,13 +638,14 @@ mod tests {
         sender.write_all(&truncated).unwrap();
         sender.shutdown(Shutdown::Write).unwrap();
         let (resume, wait) = mpsc::channel();
+        let producer_queue = Arc::clone(&queue);
         let producer = std::thread::spawn(move || {
             let result = crate::protocol::receive_stream(
                 &mut receiver,
                 || true,
                 |_, _| {},
                 |offset, payload| {
-                    queue.publish(offset, payload)?;
+                    producer_queue.publish(offset, payload)?;
                     wait.recv_timeout(Duration::from_secs(5)).unwrap();
                     Ok(())
                 },
@@ -763,19 +654,19 @@ mod tests {
                 Err(error) => error.to_string(),
                 _ => panic!("Truncated terminator was accepted"),
             };
-            queue.fail(error);
+            producer_queue.fail(error);
         });
         assert_eq!(batch_id(worker.next(2, None).unwrap()), 1);
         assert_eq!(
-            worker.read(2, Some(1), &[range(1, 0, 4)]).unwrap(),
+            queue.payload(1).unwrap().joined_buffers(&[1]).unwrap()[0][..4],
             [255; 4]
         );
-        let leased = Arc::downgrade(&worker.stream(2).unwrap().payload(1).unwrap());
+        let leased = Arc::downgrade(&queue.payload(1).unwrap());
         resume.send(()).unwrap();
         producer.join().unwrap();
         assert!(leased.upgrade().is_none());
         assert!(worker.next(2, Some(1)).is_err());
-        assert!(worker.read(2, Some(1), &[range(0, 0, 4)]).is_err());
+        assert!(queue.payload(1).is_err());
         worker.release(2);
     }
 

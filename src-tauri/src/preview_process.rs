@@ -133,30 +133,6 @@ impl DecoderProcess {
         self.child.id()
     }
 
-    /// Loads one preview request from the isolated decoder.
-    ///
-    /// An outer error invalidates the decoder process. An inner error preserves
-    /// the connection and resource-pack cache for the next request.
-    pub fn load(
-        &mut self,
-        path: &Path,
-        pack_path: &Path,
-        chunk_size: Option<u16>,
-        thread_count: Option<u8>,
-        speed_first: bool,
-        current: impl Fn() -> bool,
-        on_progress: impl FnMut(u64, u64),
-    ) -> Result<Result<crate::protocol::Payload, String>, String> {
-        self.request(
-            path,
-            pack_path,
-            chunk_size,
-            thread_count,
-            speed_first,
-            |stream| crate::protocol::receive(stream, current, on_progress),
-        )
-    }
-
     pub fn load_stream(
         &mut self,
         path: &Path,

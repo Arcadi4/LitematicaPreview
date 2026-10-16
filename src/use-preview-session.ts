@@ -94,8 +94,15 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const memoryRequestRef = useRef<number | null>(null)
   const sampleMemoryRef = useRef<(() => void) | null>(null)
   // The only request the load events may resolve. A superseded or cancelled
-  // load leaves it null (or stale), so its late events are dropped.
-  const pendingRequest = useRef<{ id: number; path: string; started: number } | null>(null)
+  // load leaves it null (or stale), so its late events are dropped. `stream`
+  // marks the event-driven producer: that command resolves while the native
+  // stream is still running, unlike the serial one that awaits it.
+  const pendingRequest = useRef<{
+    id: number
+    path: string
+    started: number
+    stream: boolean
+  } | null>(null)
 
   // The native viewport failed to initialize: every preview keeps failing, so
   // the message survives the notice resets later loads perform.
@@ -233,7 +240,8 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   // Load completion is event-driven for both the serial and the streaming
   // command. The listeners live for the whole session so a native event can
   // never race the command promise's cleanup, and they resolve only the request
-  // that is still current.
+  // that is still current. Progress needs the same session lifetime because the
+  // streaming command resolves while the native stream is still running.
   useEffect(() => {
     let active = true
     const unlisteners: Array<() => void> = []
@@ -241,6 +249,27 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       if (active) unlisteners.push(dispose)
       else dispose()
     }
+    void listen<PreviewProgress>("preview-progress", ({ payload }) => {
+      const request = pendingRequest.current
+      if (!request || request.id !== payload.requestId || payload.phase !== "mesh") return
+      if (!Number.isSafeInteger(payload.total) || payload.total <= 0) return
+      if (
+        !Number.isSafeInteger(payload.completed) ||
+        payload.completed < 0 ||
+        payload.completed > payload.total
+      )
+        return
+      setLoading((previous) =>
+        previous?.requestId === payload.requestId
+          ? {
+              ...previous,
+              phase: request.stream ? "stream" : "mesh",
+              completed: payload.completed,
+              total: payload.total,
+            }
+          : previous,
+      )
+    }).then(track)
     void listen<PreviewLoaded>("preview-loaded", ({ payload }) => {
       const request = pendingRequest.current
       if (!request || request.id !== payload.requestId || !isCurrent(payload.requestId)) return
@@ -302,32 +331,16 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         return
       }
       setLoading({ path, requestId: id, phase: "decode", completed: 0, total: 0 })
-      pendingRequest.current = { id, path, started }
-      let unlistenProgress: (() => void) | undefined
+      pendingRequest.current = {
+        id,
+        path,
+        started,
+        stream: options.threadCount !== null,
+      }
       try {
-        unlistenProgress = await listen<PreviewProgress>("preview-progress", ({ payload }) => {
-          if (!isCurrent(id) || payload.requestId !== id || payload.phase !== "mesh") return
-          if (!Number.isSafeInteger(payload.total) || payload.total <= 0) return
-          if (
-            !Number.isSafeInteger(payload.completed) ||
-            payload.completed < 0 ||
-            payload.completed > payload.total
-          )
-            return
-          setLoading((previous) =>
-            previous?.requestId === id
-              ? {
-                  ...previous,
-                  phase: options.threadCount === null ? "mesh" : "stream",
-                  completed: payload.completed,
-                  total: payload.total,
-                }
-              : previous,
-          )
-        })
-        if (!isCurrent(id)) return
         // Serial mode decodes and meshes inside the command; streaming mode
-        // starts the native producer. Both hand control to the preview events.
+        // starts the native producer and resolves early. Both hand control to
+        // the preview events, whose progress listener lives for the session.
         await invoke(options.threadCount === null ? "load_preview" : "start_preview", {
           path,
           requestId: id,
@@ -340,8 +353,6 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         setPreviewMemory(null)
         if (errorMessage(error) !== "Cancelled")
           setRawNotice({ intent: "error", message: `${path}\n\n${errorMessage(error)}` })
-      } finally {
-        unlistenProgress?.()
       }
     },
     [cancelNative, clearView, isCurrent, updateTitle],

@@ -118,10 +118,9 @@ export default function App({ initialError }: { initialError?: string }) {
       theme={dark ? webDarkTheme : webLightTheme}
       // Portals inherit theme tokens, not the full-window app-shell layout.
       applyStylesToPortals={false}
-      // The native viewport presents behind the transparent WebView, so the page
-      // background stays transparent: the DOM chrome keeps its own surfaces and
-      // the swapchain shows through everywhere the DOM does not paint.
-      className={`flex flex-col w-full h-full min-w-[320px] text-text ${dark ? "dark theme-dark" : "theme-light"}`}
+      // FluentProvider paints an opaque theme background by default. Override it
+      // so the native swapchain shows through; chrome keeps its own surfaces.
+      className={`flex flex-col w-full h-full min-w-[320px] bg-transparent! text-text ${dark ? "dark theme-dark" : "theme-light"}`}
     >
       <AppHeader actionBusy={actionBusy} onNativeAction={nativeAction} onOpenDialog={openDialog} />
 

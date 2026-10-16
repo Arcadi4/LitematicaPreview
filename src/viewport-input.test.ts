@@ -21,12 +21,12 @@ function frame() {
   frames.clear()
   for (const callback of callbacks) callback(0)
 }
-/** Lets the queue's `catch`/`finally` chain run without a real timer. */
+/** Flushes the queue's promise handlers without waiting on a timer. */
 function settle() {
   return new Promise<void>((resolve) => queueMicrotask(resolve))
 }
 
-/** The frame the queue is currently awaiting; asserted so a missing send fails loudly. */
+/** Takes the awaited completion; missing sends fail the test. */
 function nextCompletion(completions: (() => void)[]) {
   const complete = completions.shift()
   assert.ok(complete, "Expected a pending frame completion")

@@ -54,18 +54,14 @@ export interface PreviewSession {
 }
 
 export interface PreviewSessionOptions {
-  /** The shell already recovered from a failure, so no path opens on its own. */
   initialError: string | undefined
 }
 
 /**
- * Owns the whole preview session: the native startup subscription, the load
- * pipeline and the ground grid. The schematic is rendered by the native
- * viewport behind the WebView, so this hook only orchestrates: `generation`
- * increases whenever a request supersedes or cancels the previous one, so late
- * native replies and stale samples are ignored instead of overwriting the
- * current view.
+ * Owns native startup subscriptions, loading and memory sampling.
+ * `generation` rejects late native replies after a request is superseded.
  */
+
 export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const [dialog, setDialog] = useState<DialogKind>(initialError ? "error" : "settings")
   const [dialogOpen, setDialogOpen] = useState(Boolean(initialError))
@@ -101,8 +97,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     started: number
   } | null>(null)
 
-  // The native viewport failed to initialize: every preview keeps failing, so
-  // the message survives the notice resets later loads perform.
+  // Persistent viewport failures remain visible across per-load notice resets.
   const notice = useMemo(
     () =>
       viewportError !== null ? ({ intent: "error", message: viewportError } as const) : rawNotice,
@@ -117,7 +112,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
 
   const isCurrent = useCallback((id: number) => mounted.current && generation.current === id, [])
 
-  // Serialize title changes so a delayed native call cannot restore an old filename.
+  // Serialize title updates to prevent delayed calls restoring stale names.
   const updateTitle = useCallback(
     (path: string | null, id: number) => {
       const previous = titleQueue.current ?? Promise.resolve()
@@ -192,10 +187,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     viewportInput({ kind: "grid", visible })
   }, [viewportInput])
 
-  // A fatal notice tears down the stage and shows the recovery dialog. Failures
-  // while recovering are appended to that same dialog, never raised as a second.
-  // The durable viewport failure only shows in the notice bar, so this effect
-  // keys on the raw notice instead of the composed one.
+  // Raw errors open recovery; durable viewport failures stay in the notice bar.
   useEffect(() => {
     if (rawNotice?.intent !== "error") return
     setErrorDetails(rawNotice.message)
@@ -215,8 +207,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     void getCurrentWindow().setTitle(appName).catch(recoveryFailed)
   }, [rawNotice, isCurrent])
 
-  // Surface uncaught failures in the same place as every other notice instead of
-  // losing them to the default browser reporting.
+  // Route uncaught failures through the notice bar.
   useEffect(() => {
     const onError = (event: ErrorEvent) => {
       event.preventDefault()
@@ -328,8 +319,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const loadPath = useCallback(
     async (path: string) => {
       if (!mounted.current) return
-      // Read current settings without rebuilding startup and drag-and-drop subscriptions.
-      // This request keeps its own snapshot even if settings change during decoding.
+      // Each request snapshots settings, even if they change during decoding.
       const settings = previewSettingsRef.current
       const options = {
         chunkSize: settings.chunkingEnabled ? settings.chunkSize : null,
@@ -383,7 +373,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     choosingRef.current = true
     setChoosing(true)
     const id = generation.current
-    // Dismissing the picker must leave the current preview or load intact.
+    // Canceling the picker preserves the active preview or load.
     try {
       const path = await invoke<string | null>("choose_file")
       if (path && isCurrent(id)) void loadPath(path)
@@ -451,8 +441,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         generation.current = Math.max(generation.current, result.requestId)
         bootstrapRef.current = result
         setBootstrap(result)
-        // Failures from the setup hook ran before any listener existed, so
-        // `bootstrap` replays them; anything later arrives as a live event.
+        // Bootstrap replays viewport failures that occurred before listeners were installed.
         if (result.viewportError) setViewportError(result.viewportError)
         const settings = previewSettingsRef.current
         updatePreviewSettings({
@@ -526,9 +515,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     }
   }, [cancelNative, isCurrent, loadPath, updatePreviewSettings])
 
-  // The sampler subscribes once for the lifetime of the app: the active request
-  // id is mirrored into a ref, so starting or cancelling a load never
-  // re-subscribes the interval and a late sample can never write stale memory.
+  // One session-long subscription reads the active request id from a ref.
   useEffect(() => {
     let inFlight = false
     const sample = async () => {

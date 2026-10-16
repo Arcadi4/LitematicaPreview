@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url"
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const MIB = 1024 * 1024
 const WINDOW_SECONDS = 5
-// statm counts pages; every mainstream Linux build uses 4 KiB pages.
+// statm reports page counts; this parser assumes 4 KiB pages.
 const PAGE_SIZE = 4096
 
 interface Options {
@@ -193,7 +193,7 @@ class PosixSampler implements Sampler {
         sample.privateBytes += privateBytes
         sample.workingBytes += workingBytes
       } catch {
-        // A process can exit between enumeration and counter reads.
+        // The process can exit between enumeration and the counter read.
       }
     }
     return sample
@@ -212,7 +212,7 @@ function run(tool: string, args: string[]): string {
 
 function posixMemory(pid: number): { privateBytes: number; workingBytes: number } {
   if (process.platform === "linux") {
-    // statm reports pages: size resident shared text lib data dt.
+    // statm fields: size, resident, shared, text, lib, data, dt (pages).
     const statm = fs.readFileSync(`/proc/${pid}/statm`, "utf8").split(" ")
     const resident = Number(statm[1]) * PAGE_SIZE
     return { privateBytes: resident - Number(statm[2]) * PAGE_SIZE, workingBytes: resident }

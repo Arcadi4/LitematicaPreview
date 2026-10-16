@@ -27,11 +27,7 @@ struct HostState {
     initial_path: Option<String>,
 }
 
-/// The native viewport. The renderer exists once the wgpu surface was created
-/// for the main window and stays `None` after a creation failure, so the DOM
-/// can show the actionable `viewport-failed` error without the app exiting.
-/// `init_error` retains that failure for `bootstrap`, which the setup hook
-/// completed before the frontend could subscribe to the event.
+/// A failed viewport remains unavailable; its error is retained for bootstrap.
 struct ViewerState {
     renderer: Arc<Mutex<Option<NativeRenderer>>>,
     init_error: Arc<Mutex<Option<String>>>,
@@ -46,8 +42,8 @@ impl ViewerState {
     }
 }
 
-/// Locks the renderer, treating a poisoned lock as an unavailable viewport
-/// instead of unwinding. Callers never hold the lock across blocking waits.
+/// A poisoned lock makes the viewport unavailable; callers must not hold it
+/// across blocking waits.
 fn lock_renderer(
     renderer: &Mutex<Option<NativeRenderer>>,
 ) -> Result<MutexGuard<'_, Option<NativeRenderer>>, String> {
@@ -56,7 +52,7 @@ fn lock_renderer(
         .map_err(|_| VIEWPORT_UNAVAILABLE.to_string())
 }
 
-/// Runs one renderer action while holding the lock.
+/// Renderer actions hold the viewport lock only for their duration.
 fn with_renderer<T>(
     renderer: &Arc<Mutex<Option<NativeRenderer>>>,
     action: impl FnOnce(&mut NativeRenderer) -> T,
@@ -369,10 +365,8 @@ enum ViewportInput {
     Grid {
         visible: bool,
     },
-    /// The visible preview rectangle in CSS pixels, re-reported by the
-    /// frontend whenever the DOM chrome around it changes. It is not camera
-    /// input, but it rides the same ordered per-frame stream so a layout
-    /// change and its re-fit land in one presented frame.
+    /// The visible preview rectangle in CSS pixels, re-reported when DOM chrome changes.
+    /// It rides the ordered per-frame stream; see [`NativeRenderer::set_stage`].
     Stage {
         left: f32,
         top: f32,
@@ -455,8 +449,7 @@ fn open_folder(path: &std::path::Path) -> Result<(), String> {
 
     let folder: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let open: Vec<u16> = "open\0".encode_utf16().collect();
-    // Pass the directory as a separate UTF-16 argument. ShellExecute does not
-    // execute an interpolated command, and resource paths may contain spaces.
+    // Separate UTF-16 arguments avoid command interpolation and preserve paths with spaces.
     let result = unsafe {
         ShellExecuteW(
             std::ptr::null_mut(),
@@ -500,11 +493,9 @@ fn initial_path() -> Result<Option<String>, String> {
     resources::path_string(&absolute).map(Some)
 }
 
-/// Composes the native viewport under the transparent DOM layer and creates
-/// the renderer for the main window's surface. A failure leaves the renderer
-/// absent, emits `viewport-failed` and retains the message in `ViewerState`,
-/// where `bootstrap` replays it for listeners the setup hook preceded, while
-/// the app keeps running.
+/// Composes the native viewport and builds the renderer for the main window's
+/// surface. A failure emits `viewport-failed` and leaves the renderer absent,
+/// so the app keeps running without a viewport.
 #[cfg(target_os = "windows")]
 fn create_viewer(handle: &AppHandle) -> ViewerState {
     let surface = match render::viewport::install(handle) {
@@ -561,8 +552,6 @@ fn run() -> Result<(), String> {
                 resources,
                 initial_path,
             });
-            // Synchronous init, matching the WebGL renderer it replaces: the
-            // surface and renderer exist before the first frame.
             app.manage(create_viewer(app.handle()));
             Ok(())
         })
@@ -586,9 +575,8 @@ fn run() -> Result<(), String> {
                             if let Ok(scale) = window.scale_factor() {
                                 renderer.set_scale(scale);
                             }
-                            // A failed frame here is retried by the next
-                            // input; only load failures reach the DOM as
-                            // `preview-failed`.
+                            // A failed frame here is retried by the next input; only load
+                            // failures reach the DOM as `preview-failed`.
                             let _ = renderer.render();
                         }
                     }
@@ -613,6 +601,7 @@ fn run() -> Result<(), String> {
 fn main() {
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
+
     let remaining: Vec<_> = args.collect();
     let registration = match first.as_deref().and_then(|arg| arg.to_str()) {
         Some("--register") if remaining.is_empty() => Some(associations::register()),
@@ -630,8 +619,7 @@ fn main() {
         }
         _ => None,
     };
-    // Installer hooks must exit before Tauri, WebView2, or the Settings dialog
-    // starts; NSIS reports the nonzero process status.
+    // Installer hooks exit before Tauri, WebView2, or Settings starts; NSIS reads the status.
     if let Some(result) = registration {
         if let Err(error) = result {
             eprintln!("{error}");

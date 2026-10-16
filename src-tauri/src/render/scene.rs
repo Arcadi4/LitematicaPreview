@@ -13,8 +13,7 @@ struct Texture {
     repeat: bool,
 }
 
-/// One mesh part, mirroring `Part` in renderer.ts minus the WebGL attribute
-/// plumbing: the pipeline family already encodes stride/alpha/cull state.
+/// One mesh part.
 struct Part {
     alpha_mode: u32,
     /// `true` draws the 24-byte compact pipeline family with the
@@ -91,6 +90,7 @@ impl Scene {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
+
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
@@ -290,8 +290,7 @@ impl Scene {
         });
     }
 
-    /// Draws grid plus parts into an open render pass. `grid_visible` comes
-    /// from the camera (renderer.ts toggled `isGrid` before the draw).
+    /// Draws the grid and parts; `grid_visible` comes from the camera.
     pub(crate) fn draw(
         &self,
         pipelines: &Pipelines,

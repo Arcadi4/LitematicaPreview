@@ -1,44 +1,15 @@
 //! Device, surface and frame orchestration for the native renderer.
 //!
-//! The renderer presents directly to the main window's swapchain: there is no
-//! offscreen target and no output pass, because wgpu resolves the MSAA
-//! attachment into the swapchain view and an `*Srgb` surface format applies
-//! the sRGB encoding on store, reproducing what the WebGL renderer's
-//! resolve-then-encode output pass did. Decisions worth recording:
+//! Presentation goes directly to the main window's swapchain, with no
+//! offscreen target or output pass. An `*Srgb` surface format encodes on store.
+//! Windows uses DX12 only; there is no software fallback.
+//! The sRGB-encoded clear colour is expanded to linear for the `*Srgb` target.
+//! The camera uses CSS pixels; the swapchain uses physical pixels.
+//! Drawn geometry clips to the DOM-reported stage rectangle, while the clear
+//! spans the window.
 //!
-//! * DX12 only on Windows (`Backends::DIRECTX`): the architecture decision
-//!   was native wgpu with Direct3D 12 first; no Vulkan and no WARP fallback
-//!   are attempted, and an unavailable adapter is an explicit
-//!   `Initialization` error the session can surface.
-//! * Fifo present mode: the WebGL renderer drew on damage only, and
-//!   present-on-demand with triple buffering avoids tearing without a frame
-//!   timer.
-//! * The clear colour comes from renderer.ts as sRGB-encoded constants
-//!   (`gl.clearColor((1,1,2)/255)`); wgpu expects clear colours in linear for
-//!   `*Srgb` targets, so they are expanded here.
-//! * MSAA negotiates 4x like the WebGL renderer (it probed supported sample
-//!   counts and capped itself at 4; anything unsupported degrades to 1x).
-//! * Limits start from the WebGL2 downlevel set for parity, except the 2D
-//!   texture dimension is raised to 8192: the WebGL renderer stretched a
-//!   pixel-capped offscreen buffer, while a native swapchain must cover
-//!   monitors up to 8K wide.
-//! * The camera's pan/zoom math works in CSS pixels (renderer.ts divided the
-//!   pan scale by the CSS viewport height), so `resize` resizes the swapchain
-//!   with physical pixels and feeds the camera a CSS-converted size using the
-//!   current DPI scale (`set_scale`), keeping pointer deltas meaningful.
-//! * Drawn geometry is clipped to the stage rectangle the DOM reports
-//!   (`set_stage`): the clear still spans the whole window beneath the DOM
-//!   chrome, while the camera's aspect and the NDC centre refer to the visible
-//!   preview area so framing and pointer math match it exactly.
-//! * A `Surface::get_current_texture` failure reconfigures once and retries;
-//!   if the retry still fails the frame is dropped with `SurfaceLost`, and
-//!   exposed commands return the typed message. wgpu v30 removed
-//!   `SurfaceError` in favour of the `CurrentSurfaceTexture` enum this
-//!   handles.
-//!
-//! The scene state lives in [`scene::Scene`]; camera math lives in
-//! [`camera::Camera`]. This module and `scene.rs` are the only owners of
-//! render-state transitions; the Tauri layer drives them via the public API.
+//! Scene state lives in [`crate::render::scene::Scene`]; camera math lives in
+//! [`crate::render::camera::Camera`].
 
 use crate::render::camera::Camera;
 use crate::render::pipelines::{Pipelines, CAMERA_UNIFORM_BYTES};
@@ -48,19 +19,15 @@ use litematica_preview_core::{MeshBatch, PreviewInfo};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// The sRGB byte values renderer.ts cleared with, kept in the same encoding so
-/// a drift against the WebGL renderer is a one-line diff.
+/// sRGB-encoded clear colour, expanded to linear by [`clear_color_linear`].
 const CLEAR_SRGB: [f64; 3] = [0.00335, 0.00518, 0.00802];
 
 /// Errors the renderer can hand to the Tauri layer.
 #[derive(Debug)]
 pub enum RenderError {
-    /// A frame could not be acquired or presented (window changes can make an
-    /// acquisition fail); the session asks the user to reopen only if it
-    /// persists.
+    /// A frame could not be acquired or presented.
     SurfaceLost,
-    /// Adapter or device creation failed: the message is user-facing (the
-    /// "update your graphics driver" class of error).
+    /// Adapter or device creation failed.
     Initialization(String),
     /// A Core batch did not match the supported geometry layout.
     MalformedBatch(String),
@@ -99,10 +66,9 @@ pub struct NativeRenderer {
     pipelines: Pipelines,
     camera: Camera,
     config: wgpu::SurfaceConfiguration,
-    /// Physical-logical scale for the camera's CSS-pixel math.
+    /// Physical-pixel to CSS-pixel scale.
     scale: f64,
-    /// The visible stage rectangle in CSS pixels, from the DOM; the drawn
-    /// viewport and the camera size refer to it.
+    /// DOM-reported stage rectangle in CSS pixels.
     stage_css: Option<(f32, f32, f32, f32)>,
     /// MSAA attachment view (`samples` > 1 only).
     color_view: Option<wgpu::TextureView>,
@@ -117,23 +83,15 @@ pub struct NativeRenderer {
 }
 
 impl NativeRenderer {
-    /// Creates a renderer from a raw window handle, an optional raw display
-    /// handle and a physical pixel size. Fails with `Initialization` when no
-    /// Direct3D 12 adapter is available on Windows — no software fallback is
-    /// attempted.
-    ///
-    /// The dedicated path the Tauri layer uses is [`Self::new_from_hwnd`],
-    /// which is the only integrator-relevant entry point.
+    /// Creates a renderer from raw window handles and a physical pixel size.
+    /// On Windows, initialization requires a Direct3D 12 adapter; there is no
+    /// software fallback.
     #[allow(dead_code)]
     pub fn new_from_raw(
         handle: wgpu::rwh::RawWindowHandle,
         display: Option<wgpu::rwh::RawDisplayHandle>,
         (width, height): (u32, u32),
     ) -> Result<Self, RenderError> {
-        // Direct3D 12 only on Windows (`Backends::DX12` in wgpu 30); other
-        // hosts compile-check only and would fail adapter request with a
-        // DX12-flavoured message. Recorded explicitly per the architecture
-        // decision.
         #[cfg(windows)]
         let backends = wgpu::Backends::DX12;
         #[cfg(not(windows))]
@@ -154,7 +112,6 @@ impl NativeRenderer {
                     ))
                 })?
         };
-        // Default power preference, matching the WebGL renderer's context.
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::default(),
             force_fallback_adapter: false,
@@ -193,8 +150,6 @@ impl NativeRenderer {
         let mut config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
-            // wgpu's Auto space keeps historical SDR behaviour and accepts
-            // every format in the capabilities list.
             color_space: wgpu::SurfaceColorSpace::Auto,
             width,
             height,
@@ -244,8 +199,6 @@ impl NativeRenderer {
                 "The application window has no native handle.",
             ))
         })?;
-        // raw-window-handle 0.6 types; the display handle is optional and DX12
-        // does not need it.
         let mut window = wgpu::rwh::Win32WindowHandle::new(pointer);
         window.hinstance = None;
         let handle = wgpu::rwh::RawWindowHandle::Win32(window);
@@ -253,8 +206,8 @@ impl NativeRenderer {
         Self::new_from_raw(handle, Some(display), size)
     }
 
-    /// Downlevel WebGL2-class limits for parity, with the texture dimension
-    /// raised for large monitors (recorded in the module docs).
+    /// Downlevel limits; the 2D texture dimension is raised to 8192 so the
+    /// swapchain covers monitors up to 8K wide.
     fn limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
         let mut limits =
             wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
@@ -262,8 +215,7 @@ impl NativeRenderer {
         limits
     }
 
-    /// Prefers an sRGB presentation format: without it the swapchain blends
-    /// and encodes in a different space than the WebGL renderer's sRGB target.
+    /// Prefers an sRGB format so blending occurs in linear space.
     fn surface_format(
         surface: &wgpu::Surface,
         adapter: &wgpu::Adapter,
@@ -284,8 +236,7 @@ impl NativeRenderer {
             })
     }
 
-    /// MSAA 4x when the surface format supports it, else 1x. The WebGL
-    /// renderer probed sample counts and capped itself at 4.
+    /// Uses 4x MSAA when supported by the surface format; otherwise 1x.
     fn samples(adapter: &wgpu::Adapter, format: wgpu::TextureFormat) -> u32 {
         let features = adapter.get_texture_format_features(format);
         if features.flags.sample_count_supported(4) {
@@ -342,8 +293,7 @@ impl NativeRenderer {
         self.color_view = color;
     }
 
-    /// Reconfigures for a new physical size. Zero extents are ignored until
-    /// the window reports a real size, matching renderer.ts's `syncSize`.
+    /// Reconfigures for a new physical size. Zero extents are ignored.
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
             return;
@@ -357,15 +307,14 @@ impl NativeRenderer {
         self.refresh_camera();
     }
 
-    /// Update the DPI scale for the camera's CSS-pixel math. Called after
-    /// `resize` (and alone when only the monitor's scale changes).
+    /// Updates the DPI scale used to convert physical dimensions to CSS pixels.
     pub fn set_scale(&mut self, scale: f64) {
         self.scale = scale.max(0.25);
         self.refresh_camera();
     }
 
     /// Records the visible stage rectangle in CSS pixels and re-fits the
-    /// camera when its size changed. Invalid or unchanged values are ignored.
+    /// camera when its size changes. Invalid or unchanged values are ignored.
     pub fn set_stage(&mut self, left: f32, top: f32, width: f32, height: f32) {
         let next = Some((left, top, width, height));
         if !left.is_finite()
@@ -382,9 +331,8 @@ impl NativeRenderer {
         self.refresh_camera();
     }
 
-    /// Feeds the camera the CSS size that matches the drawn geometry: the
-    /// reported stage rectangle once the DOM sent one, or the whole window
-    /// until then.
+    /// Sizes the camera to the reported stage rectangle, or the whole window
+    /// until a stage rectangle is available.
     fn refresh_camera(&mut self) {
         let (css_width, css_height) = self.stage_css.map_or_else(
             || {
@@ -480,9 +428,7 @@ impl NativeRenderer {
         &mut self.camera
     }
 
-    /// Acquires, draws and presents one frame. The pass mirrors
-    /// renderer.ts's `drawFrame`: clear, grid, opaque/cutout parts, then
-    /// transparent parts with depth writes off.
+    /// Presents one frame; a clean camera makes this a no-op.
     pub fn render(&mut self) -> Result<(), RenderError> {
         self.device_status.check().map_err(RenderError::Device)?;
         if !self.camera.dirty() {
@@ -513,7 +459,6 @@ impl NativeRenderer {
                 label: Some("schematic render"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: self.color_view.as_ref().unwrap_or(&view),
-                    // Present is always a 2D table.
                     depth_slice: None,
                     resolve_target: self.color_view.as_ref().map(|_| &view),
                     ops: wgpu::Operations {
@@ -538,9 +483,6 @@ impl NativeRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            // The clear fills the whole window beneath the DOM chrome; the
-            // schematic is clipped to the stage rectangle the DOM reported,
-            // scaled from CSS pixels back to physical ones.
             if let Some((left, top, width, height)) = self.stage_css {
                 let scale = self.scale as f32;
                 pass.set_viewport(
@@ -558,8 +500,6 @@ impl NativeRenderer {
             }
         }
         self.queue.submit(Some(encoder.finish()));
-        // wgpu v30 moved present onto the queue so the frame can be dropped
-        // gracefully when a download clone owns a device instance.
         self.queue.present(frame);
         self.camera.clear_dirty();
         self.last_render = Some(Instant::now());
@@ -586,8 +526,6 @@ impl NativeRenderer {
     }
 }
 
-/// The renderer's clear colour, expanded from the sRGB constants to linear for
-/// the `*Srgb` swapchain (wgpu preserves sRGB with `SurfaceColorSpace::Auto`).
 fn clear_color_linear() -> [f64; 3] {
     CLEAR_SRGB.map(|channel| {
         // The inverse sRGB transfer function with the standard cutoff.
@@ -599,8 +537,7 @@ fn clear_color_linear() -> [f64; 3] {
     })
 }
 
-/// The camera uniform length `FrameCamera::encode` produces; asserted so the
-/// shader layout and the buffer size cannot silently drift apart.
+/// Matches the camera buffer size to `FrameCamera::encode`.
 const _: () = {
     assert!(CAMERA_UNIFORM_BYTES == 80, "camera uniform layout drifted");
 };

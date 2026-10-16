@@ -4,7 +4,6 @@ use litematica_preview_core::{MeshBatch, PreviewInfo};
 use serde::{Deserialize, Serialize};
 
 pub const FRAME_BYTES: usize = 1024 * 1024;
-pub const MAX_READ_RANGES: usize = 256;
 const END: u8 = 0;
 const ERROR: u8 = 1;
 const TEXTURE: u8 = 2;
@@ -107,84 +106,28 @@ struct Buffer {
     length: usize,
 }
 
-impl Buffer {
-    fn append(&mut self, other: Self) -> Result<(), String> {
-        let base = self.length;
-        self.length = base.checked_add(other.length).ok_or(TOO_LARGE)?;
-        self.ends
-            .extend(other.ends.into_iter().map(|end| base + end));
-        self.segments.extend(other.segments);
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReadRange {
-    pub buffer_id: usize,
-    pub offset: usize,
-    pub length: usize,
-}
-
 fn align4(value: usize) -> Option<usize> {
     value.checked_add(3).map(|value| value & !3)
 }
 
 impl Payload {
-    pub fn read_ranges(&self, ranges: &[ReadRange]) -> Result<Vec<u8>, String> {
-        if ranges.is_empty() || ranges.len() > MAX_READ_RANGES {
-            return Err("Invalid preview range.".into());
-        }
-        let mut total = 0usize;
-        for range in ranges {
-            let buffer = self
-                .buffers
-                .get(range.buffer_id)
-                .ok_or("Invalid preview range.")?;
-            let end = range
-                .offset
-                .checked_add(range.length)
-                .ok_or("Invalid preview range.")?;
-            if range.length == 0 || end > buffer.length {
-                return Err("Invalid preview range.".into());
+    /// Joins the requested buffers' segments into contiguous bytes. The preview
+    /// reads copy at most one buffer per call; ids must be valid (`Err` otherwise).
+    pub fn joined_buffers(&self, ids: &[usize]) -> Result<Vec<Vec<u8>>, String> {
+        let mut joined = Vec::with_capacity(ids.len());
+        for &id in ids {
+            let buffer = self.buffers.get(id).ok_or("Invalid preview buffer.")?;
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(buffer.length)
+                .map_err(|_| "There is not enough memory to upload this preview.")?;
+            // Segments arrive in receipt order; `ends` only marks their totals.
+            for segment in &buffer.segments {
+                bytes.extend_from_slice(segment);
             }
-            total = align4(total)
-                .and_then(|total| total.checked_add(range.length))
-                .filter(|total| *total <= FRAME_BYTES)
-                .ok_or("Invalid preview range.")?;
+            joined.push(bytes);
         }
-
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(total)
-            .map_err(|_| "There is not enough memory to upload this preview.")?;
-        bytes.resize(total, 0);
-        let mut destination = 0usize;
-        for range in ranges {
-            destination = align4(destination).expect("Validated page offset");
-            let buffer = &self.buffers[range.buffer_id];
-            let end = range.offset + range.length;
-            let mut cursor = range.offset;
-            let mut index = buffer
-                .ends
-                .partition_point(|segment_end| *segment_end <= cursor);
-            while cursor < end {
-                let base = if index == 0 {
-                    0
-                } else {
-                    buffer.ends[index - 1]
-                };
-                let segment = &buffer.segments[index];
-                let start = cursor - base;
-                let count = (segment.len() - start).min(end - cursor);
-                bytes[destination..destination + count]
-                    .copy_from_slice(&segment[start..start + count]);
-                cursor += count;
-                destination += count;
-                index += 1;
-            }
-        }
-        Ok(bytes)
+        Ok(joined)
     }
 }
 
@@ -335,26 +278,13 @@ pub fn finish(stream: &mut impl Write, result: Result<PreviewInfo, String>) -> i
     }
 }
 
-/// Receives and assembles one logical renderer payload.
+/// Assembles one logical renderer payload and hands every chunk to the
+/// consumer as it completes.
 ///
-/// Every non-terminal packet requires an acknowledgement. Cancellation is observed
-/// before the next packet, after which the decoder emits an `ERROR` terminator before
-/// accepting another request. A malformed stream invalidates the connection.
-pub fn receive(
-    stream: &mut (impl Read + Write),
-    current: impl Fn() -> bool,
-    on_progress: impl FnMut(u64, u64),
-) -> io::Result<Result<Payload, String>> {
-    let mut buffers = vec![Buffer::default()];
-    let result = receive_stream(stream, &current, on_progress, |_, payload| {
-        let mut source = payload.buffers.into_iter();
-        buffers[0].append(source.next().expect("A chunk has geometry"))?;
-        buffers.extend(source);
-        Ok(())
-    })?;
-    Ok(result.map(|metadata| Payload { metadata, buffers }))
-}
-
+/// Every non-terminal packet requires an acknowledgement. Cancellation is
+/// observed before the next packet, after which the decoder emits an `ERROR`
+/// terminator before accepting another request. A malformed stream invalidates
+/// the connection.
 pub fn receive_stream(
     stream: &mut (impl Read + Write),
     current: impl Fn() -> bool,
@@ -699,12 +629,38 @@ fn add_buffer(buffers: &mut Vec<Buffer>, total: &mut usize, length: usize) -> io
 pub(crate) mod tests {
     use super::*;
 
-    fn range(buffer_id: usize, offset: usize, length: usize) -> ReadRange {
-        ReadRange {
-            buffer_id,
-            offset,
-            length,
-        }
+    /// One-shot framing kept for byte-level fixture tests. Production always
+    /// streams, so this merges every chunk's buffers back into a single
+    /// payload the way the removed `receive` helper did: chunk 0's geometry
+    /// first, then each chunk's texture buffers in receipt order.
+    fn receive(
+        stream: &mut (impl Read + Write),
+        current: impl Fn() -> bool,
+        on_progress: impl FnMut(u64, u64),
+    ) -> io::Result<Result<Payload, String>> {
+        let mut chunks: Vec<Payload> = Vec::new();
+        let result = receive_stream(stream, current, on_progress, |_, payload| {
+            chunks.push(payload);
+            Ok(())
+        })?;
+        Ok(result.map(|metadata| {
+            let mut buffers: Vec<Buffer> = vec![Buffer::default()];
+            for chunk in chunks {
+                let mut sources = chunk.buffers.into_iter();
+                let geometry = sources.next().expect("A chunk has geometry");
+                let base = buffers[0].length;
+                let offset = base
+                    .checked_add(geometry.length)
+                    .expect("Merged fixture buffers stay within usize.");
+                buffers[0].length = offset;
+                buffers[0]
+                    .ends
+                    .extend(geometry.ends.into_iter().map(|end| base + end));
+                buffers[0].segments.extend(geometry.segments);
+                buffers.extend(sources);
+            }
+            Payload { metadata, buffers }
+        }))
     }
 
     #[test]
@@ -787,13 +743,10 @@ pub(crate) mod tests {
                     for part in &payload.metadata.parts {
                         assert!((part.texture_index as usize) < textures);
                         alpha.insert(part.alpha_mode);
-                        let indices = payload
-                            .read_ranges(&[range(
-                                0,
-                                part.index_offset,
-                                part.index_count as usize * part.index_size as usize,
-                            )])
-                            .unwrap();
+                        let geometry = payload.joined_buffers(&[0]).unwrap()[0].clone();
+                        let indices = &geometry[part.index_offset
+                            ..part.index_offset
+                                + part.index_count as usize * part.index_size as usize];
                         assert!(indices.chunks_exact(part.index_size as usize).all(|bytes| {
                             let index = if part.index_size == 2 {
                                 u32::from(u16::from_le_bytes(bytes.try_into().unwrap()))
@@ -887,15 +840,11 @@ pub(crate) mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(payload.metadata.parts.len(), 2);
+        let geometry = payload.joined_buffers(&[0]).unwrap()[0].clone();
         for part in &payload.metadata.parts {
             assert_eq!((part.vertex_count, part.index_count), (1, 3));
-            let indices = payload
-                .read_ranges(&[range(
-                    0,
-                    part.index_offset,
-                    part.index_count as usize * part.index_size as usize,
-                )])
-                .unwrap();
+            let indices = &geometry[part.index_offset
+                ..part.index_offset + part.index_count as usize * part.index_size as usize];
             assert_eq!(indices, [0; 6]);
         }
         assert_eq!(payload.metadata.parts[1].vertex_offset, 32);
@@ -928,7 +877,8 @@ pub(crate) mod tests {
         let next = receive(&mut connection, || true, |_, _| {})
             .unwrap()
             .unwrap();
-        assert_eq!(next.read_ranges(&[range(1, 0, 4)]).unwrap(), [255; 4]);
+        let texture = next.joined_buffers(&[1]).unwrap()[0].clone();
+        assert_eq!(&texture[..4], &[255; 4]);
     }
 
     #[test]
@@ -996,150 +946,9 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(payload.metadata.textures.len(), 100_001);
         let last = payload.metadata.textures.last().unwrap();
-        assert_eq!(
-            payload.read_ranges(&[range(last.buffer_id, 0, 4)]).unwrap(),
-            [255; 4]
-        );
+        let pixels = payload.joined_buffers(&[last.buffer_id]).unwrap()[0].clone();
+        assert_eq!(&pixels[..4], &[255; 4]);
         assert_eq!(payload.metadata.triangle_count, 1);
-    }
-
-    #[test]
-    fn range_reads_cross_segments_without_flattening_and_reject_overflow() {
-        let payload = Payload {
-            metadata: Metadata {
-                block_count: 1,
-                block_entity_count: 0,
-                triangle_count: 1,
-                min: [0.0; 3],
-                max: [1.0; 3],
-                geometry_byte_length: FRAME_BYTES + 3,
-                byte_length: FRAME_BYTES + 3,
-                textures: vec![],
-                parts: vec![],
-            },
-            buffers: vec![Buffer {
-                segments: vec![vec![7; FRAME_BYTES], vec![8, 9, 10]],
-                ends: vec![FRAME_BYTES, FRAME_BYTES + 3],
-                length: FRAME_BYTES + 3,
-            }],
-        };
-        assert_eq!(
-            payload
-                .read_ranges(&[range(0, FRAME_BYTES - 2, 5)])
-                .unwrap(),
-            [7, 7, 8, 9, 10]
-        );
-        assert!(payload.read_ranges(&[range(0, usize::MAX, 1)]).is_err());
-        assert!(payload
-            .read_ranges(&[range(0, 0, FRAME_BYTES + 1)])
-            .is_err());
-        assert!(payload.read_ranges(&[range(1, 0, 1)]).is_err());
-    }
-
-    #[test]
-    fn packed_reads_align_ranges_cross_segments_and_preserve_sources() {
-        let payload = Payload {
-            metadata: Metadata {
-                block_count: 0,
-                block_entity_count: 0,
-                triangle_count: 0,
-                min: [0.0; 3],
-                max: [0.0; 3],
-                geometry_byte_length: 5,
-                byte_length: 11,
-                textures: vec![],
-                parts: vec![],
-            },
-            buffers: vec![
-                Buffer {
-                    segments: vec![vec![1, 2], vec![3, 4, 5]],
-                    ends: vec![2, 5],
-                    length: 5,
-                },
-                Buffer {
-                    segments: vec![vec![6, 7, 8, 9]],
-                    ends: vec![4],
-                    length: 4,
-                },
-            ],
-        };
-        assert_eq!(
-            payload
-                .read_ranges(&[range(0, 0, 3), range(1, 0, 4)])
-                .unwrap(),
-            [1, 2, 3, 0, 6, 7, 8, 9]
-        );
-        assert_eq!(
-            payload
-                .read_ranges(&[range(0, 1, 3), range(0, 1, 3), range(1, 2, 2)])
-                .unwrap(),
-            [2, 3, 4, 0, 2, 3, 4, 0, 8, 9]
-        );
-        assert_eq!(
-            payload.read_ranges(&[range(0, 0, 5)]).unwrap(),
-            [1, 2, 3, 4, 5]
-        );
-    }
-
-    #[test]
-    fn packed_reads_validate_every_range_before_returning_a_page() {
-        let payload = Payload {
-            metadata: Metadata {
-                block_count: 0,
-                block_entity_count: 0,
-                triangle_count: 0,
-                min: [0.0; 3],
-                max: [0.0; 3],
-                geometry_byte_length: FRAME_BYTES,
-                byte_length: FRAME_BYTES,
-                textures: vec![],
-                parts: vec![],
-            },
-            buffers: vec![Buffer {
-                segments: vec![vec![42; FRAME_BYTES]],
-                ends: vec![FRAME_BYTES],
-                length: FRAME_BYTES,
-            }],
-        };
-        assert_eq!(
-            payload.read_ranges(&[range(0, 0, FRAME_BYTES)]).unwrap(),
-            vec![42; FRAME_BYTES]
-        );
-        assert!(payload
-            .read_ranges(&[range(0, 0, FRAME_BYTES - 3), range(0, 0, 1)])
-            .is_err());
-        assert!(payload.read_ranges(&[]).is_err());
-        assert!(payload
-            .read_ranges(&vec![range(0, 0, 1); MAX_READ_RANGES + 1])
-            .is_err());
-        for bad in [
-            range(0, 0, 0),
-            range(1, 0, 1),
-            range(0, FRAME_BYTES, 1),
-            range(0, usize::MAX, 2),
-        ] {
-            assert!(payload.read_ranges(&[range(0, 0, 1), bad]).is_err());
-        }
-        let page = payload
-            .read_ranges(&[range(0, 0, 1); MAX_READ_RANGES])
-            .unwrap();
-        for (index, &value) in page.iter().enumerate() {
-            assert_eq!(value, if index % 4 == 0 { 42 } else { 0 });
-        }
-    }
-
-    #[test]
-    fn read_ranges_rejects_invalid_json_fields_and_numeric_types() {
-        assert!(serde_json::from_str::<ReadRange>(
-            r#"{"bufferId":0,"offset":0,"length":1,"target":0}"#
-        )
-        .is_err());
-        assert!(
-            serde_json::from_str::<ReadRange>(r#"{"bufferId":-1,"offset":0,"length":1}"#).is_err()
-        );
-        assert!(
-            serde_json::from_str::<ReadRange>(r#"{"bufferId":0,"offset":0.5,"length":1}"#).is_err()
-        );
     }
 
     struct Wire {
@@ -1251,12 +1060,10 @@ pub(crate) mod tests {
         let payload = receive(&mut connection, || true, |_, _| {})
             .unwrap()
             .unwrap();
-        assert_eq!(
-            payload
-                .read_ranges(&[range(0, payload.metadata.parts[0].index_offset, 6)])
-                .unwrap(),
-            [0; 6]
-        );
+        let geometry = payload.joined_buffers(&[0]).unwrap()[0].clone();
+        let indices = &geometry
+            [payload.metadata.parts[0].index_offset..payload.metadata.parts[0].index_offset + 6];
+        assert_eq!(indices, [0; 6]);
     }
 
     #[test]
@@ -1307,66 +1114,5 @@ pub(crate) mod tests {
         write_packet(&mut bytes, PROGRESS, &first).unwrap();
         write_packet(&mut bytes, PROGRESS, &first).unwrap();
         assert!(receive(&mut wire(bytes), || true, |_, _| {}).is_err());
-    }
-
-    #[test]
-    fn old_upload_release_cannot_free_a_new_request() {
-        let worker = crate::preview::PreviewWorker::default();
-        worker.advance(10);
-        let payload = receive(&mut wire(part_packets(0)), || true, |_, _| {})
-            .unwrap()
-            .unwrap();
-        worker.publish(10, payload).unwrap();
-        worker.release(9);
-        assert_eq!(worker.read(10, None, &[range(1, 0, 4)]).unwrap(), [255; 4]);
-        worker.advance(11);
-        assert!(worker.read(10, None, &[range(0, 0, 4)]).is_err());
-        let payload = receive(&mut wire(part_packets(0)), || true, |_, _| {})
-            .unwrap()
-            .unwrap();
-        worker.publish(11, payload).unwrap();
-        worker.release(10);
-        assert_eq!(worker.read(11, None, &[range(1, 0, 4)]).unwrap(), [255; 4]);
-        worker.release(11);
-        assert!(worker.read(11, None, &[range(0, 0, 4)]).is_err());
-    }
-
-    #[test]
-    fn concurrent_upload_ranges_preserve_bytes_and_release_invalidates_reads() {
-        let worker = crate::preview::PreviewWorker::default();
-        worker.advance(10);
-        let payload = receive(&mut wire(part_packets(0)), || true, |_, _| {})
-            .unwrap()
-            .unwrap();
-        let texture = payload.metadata.textures[0].buffer_id;
-        let positions = 0;
-        worker.publish(10, payload).unwrap();
-        let start = std::sync::Barrier::new(4);
-        std::thread::scope(|scope| {
-            let readers: Vec<_> = (0..4)
-                .map(|offset| {
-                    let worker = &worker;
-                    let start = &start;
-                    scope.spawn(move || {
-                        start.wait();
-                        assert_eq!(
-                            worker
-                                .read(
-                                    10,
-                                    None,
-                                    &[range(texture, offset, 1), range(positions, offset * 3, 3)]
-                                )
-                                .unwrap(),
-                            [255, 0, 0, 0, 0, 0, 0]
-                        );
-                    })
-                })
-                .collect();
-            for reader in readers {
-                reader.join().unwrap();
-            }
-        });
-        worker.release(10);
-        assert!(worker.read(10, None, &[range(texture, 0, 4)]).is_err());
     }
 }

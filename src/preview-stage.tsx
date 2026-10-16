@@ -1,14 +1,15 @@
-import type { RefObject } from "react"
+import { useEffect, useRef, type KeyboardEvent, type PointerEvent, type RefObject } from "react"
 import { Button, ProgressBar } from "@fluentui/react-components"
 import { Cube24Regular } from "@fluentui/react-icons"
-import { fileName, formatMB, numbers, type Loaded, type Loading } from "./app-model"
+import { fileName, numbers, type Loaded, type Loading, type ViewportCommand } from "./app-model"
 
 export interface PreviewStageProps {
-  canvasRef: RefObject<HTMLCanvasElement | null>
   loaded: Loaded | null
   loading: Loading | null
   onCancel: () => void
+  onViewportInput: (command: ViewportCommand) => void
   stageActive: boolean
+  viewportRef: RefObject<HTMLDivElement | null>
 }
 
 function percent(completed: number, total: number) {
@@ -17,17 +18,12 @@ function percent(completed: number, total: number) {
 
 function progressSummary(loading: Loading) {
   if (loading.phase === "decode") return "Reading blocks locally."
-  if (loading.phase === "mesh" || loading.phase === "stream") {
-    if (loading.total <= 0) return "Generating geometry and uploading ready batches."
-    return `Generating geometry: ${numbers.format(loading.completed)} / ${numbers.format(loading.total)} chunks (${percent(loading.completed, loading.total)}%).`
-  }
-  return `Uploading geometry and textures: ${formatMB(loading.completed)} / ${formatMB(loading.total)} (${percent(loading.completed, loading.total)}%).`
+  if (loading.total <= 0) return "Generating geometry."
+  return `Generating geometry: ${numbers.format(loading.completed)} / ${numbers.format(loading.total)} chunks (${percent(loading.completed, loading.total)}%).`
 }
 
 function progressLabel(loading: Loading) {
-  if (loading.phase === "decode") return "Reading blocks"
-  if (loading.phase === "mesh" || loading.phase === "stream") return "Generating geometry"
-  return "Uploading model data"
+  return loading.phase === "decode" ? "Reading blocks" : "Generating geometry"
 }
 
 function LoadingOverlay({ loading, onCancel }: { loading: Loading; onCancel: () => void }) {
@@ -52,12 +48,6 @@ function LoadingOverlay({ loading, onCancel }: { loading: Loading; onCancel: () 
           {fileName(loading.path)}
         </p>
         <p className="mt-0 mb-3 text-sm leading-relaxed text-muted">{progressSummary(loading)}</p>
-        {loading.phase === "stream" && (
-          <p className="mt-0 mb-3 text-sm leading-relaxed text-muted">
-            Uploaded {formatMB(loading.uploadedBytes)} model data. Generation and upload overlap;
-            the preview appears only when both finish.
-          </p>
-        )}
         <ProgressBar
           value={indeterminate ? undefined : loading.completed}
           max={indeterminate ? undefined : loading.total}
@@ -74,25 +64,150 @@ function LoadingOverlay({ loading, onCancel }: { loading: Loading; onCancel: () 
 }
 
 export function PreviewStage({
-  canvasRef,
   loaded,
   loading,
   onCancel,
+  onViewportInput,
   stageActive,
+  viewportRef,
 }: PreviewStageProps) {
+  // The pointer that owns the current drag, mirroring the native renderer's
+  // single-pointer orbit/pan capture.
+  const drag = useRef<{ pointerId: number; button: number; x: number; y: number } | null>(null)
+
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (drag.current !== null || event.button < 0 || event.button > 2) return
+    event.currentTarget.focus({ preventScroll: true })
+    drag.current = {
+      pointerId: event.pointerId,
+      button: event.button,
+      x: event.clientX,
+      y: event.clientY,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    event.preventDefault()
+  }
+
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const active = drag.current
+    if (active === null || event.pointerId !== active.pointerId) return
+    const dx = event.clientX - active.x
+    const dy = event.clientY - active.y
+    active.x = event.clientX
+    active.y = event.clientY
+    if (!loaded || (dx === 0 && dy === 0)) return
+    if (active.button === 0) onViewportInput({ kind: "orbit", dx, dy })
+    else onViewportInput({ kind: "pan", dx, dy })
+  }
+
+  const endPointer = (event: PointerEvent<HTMLDivElement>) => {
+    const active = drag.current
+    if (active === null || event.pointerId !== active.pointerId) return
+    drag.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!loaded || event.ctrlKey || event.altKey || event.metaKey) return
+    let dx = 0
+    let dy = 0
+    switch (event.key) {
+      case "ArrowLeft":
+        dx = -18
+        break
+      case "ArrowRight":
+        dx = 18
+        break
+      case "ArrowUp":
+        dy = -18
+        break
+      case "ArrowDown":
+        dy = 18
+        break
+      case "+":
+      case "=":
+        event.preventDefault()
+        onViewportInput({ kind: "zoom", factor: 0.88 })
+        return
+      case "-":
+      case "_":
+        event.preventDefault()
+        onViewportInput({ kind: "zoom", factor: 1.12 })
+        return
+      case "f":
+      case "F":
+      case "Home":
+        event.preventDefault()
+        onViewportInput({ kind: "fit" })
+        return
+      default:
+        return
+    }
+    event.preventDefault()
+    onViewportInput({ kind: "arrow", dx, dy, panning: event.shiftKey })
+  }
+
+  // React registers wheel passively at the root, so the zoom gesture needs a
+  // native non-passive listener to keep `preventDefault` working.
+  useEffect(() => {
+    const element = viewportRef.current
+    if (!element) return
+    const onWheel = (event: WheelEvent) => {
+      if (!loaded) return
+      event.preventDefault()
+      onViewportInput({ kind: "wheel", deltaY: event.deltaY, deltaMode: event.deltaMode })
+    }
+    element.addEventListener("wheel", onWheel, { passive: false })
+    return () => element.removeEventListener("wheel", onWheel)
+  }, [loaded, onViewportInput, viewportRef])
+
+  // The native viewport clears the whole window behind the DOM chrome, so
+  // framing needs the visible stage rectangle. ResizeObserver catches layout
+  // changes the notice bar and chrome cause that never produce a Tauri
+  // window event.
+  useEffect(() => {
+    const element = viewportRef.current
+    if (!element) return
+    const report = () => {
+      const rect = element.getBoundingClientRect()
+      onViewportInput({
+        kind: "stage",
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      })
+    }
+    report()
+    const observer = new ResizeObserver(report)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [onViewportInput, viewportRef])
+
   return (
     <section
-      className={`absolute inset-0 bg-surface-secondary ${stageActive ? "visible pointer-events-auto" : "invisible pointer-events-none"}`}
+      className={`absolute inset-0 ${stageActive ? "visible pointer-events-auto" : "invisible pointer-events-none"}`}
       aria-label="Interactive 3D model"
       aria-hidden={!stageActive}
       aria-busy={Boolean(loading)}
     >
-      <canvas
-        ref={canvasRef}
-        className="block w-full h-full [touch-action:none] outline-none focus-visible:outline-2 focus-visible:outline-accent focus-visible:-outline-offset-2"
+      {/* The native viewport renders the schematic behind the transparent WebView;
+          this element only captures the camera input. */}
+      <div
+        ref={viewportRef}
+        role="application"
+        className="block w-full h-full bg-transparent [touch-action:none] outline-none focus-visible:outline-2 focus-visible:outline-accent focus-visible:-outline-offset-2"
         tabIndex={loaded ? 0 : -1}
         aria-label={loaded ? `3D preview of ${fileName(loaded.path)}` : "3D preview"}
         aria-describedby="canvas-controls"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endPointer}
+        onPointerCancel={endPointer}
+        onLostPointerCapture={endPointer}
+        onKeyDown={onKeyDown}
+        onContextMenu={(event) => event.preventDefault()}
       />
       <p id="canvas-controls" className="sr-only">
         Drag to orbit. Right or middle drag to pan. Scroll to zoom. Arrow keys orbit; Shift and

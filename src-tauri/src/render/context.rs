@@ -106,7 +106,7 @@ pub struct NativeRenderer {
 impl NativeRenderer {
     /// Creates a renderer from a raw window handle, an optional raw display
     /// handle and a physical pixel size. Fails with `Initialization` when no
-    /// Direct3D 12 adapter is available on Windows ¡ª no software fallback is
+    /// Direct3D 12 adapter is available on Windows â€” no software fallback is
     /// attempted.
     ///
     /// The dedicated path the Tauri layer uses is [`Self::new_from_hwnd`],
@@ -505,3 +505,63 @@ fn clear_color_linear() -> [f64; 3] {
 const _: () = {
     assert!(CAMERA_UNIFORM_BYTES == 80, "camera uniform layout drifted");
 };
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::NativeRenderer;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow};
+
+    #[test]
+    #[ignore = "Requires a Windows Direct3D 12 hardware adapter"]
+    fn renderer_preserves_pixel_aspect_from_initialization_through_resize() {
+        let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0,
+                0,
+                0,
+                800,
+                400,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        assert!(!hwnd.is_null());
+        struct Window(windows_sys::Win32::Foundation::HWND);
+        impl Drop for Window {
+            fn drop(&mut self) {
+                unsafe {
+                    DestroyWindow(self.0);
+                }
+            }
+        }
+        let _window = Window(hwnd);
+        let mut renderer = NativeRenderer::new_from_hwnd(hwnd as isize, (800, 400)).unwrap();
+        renderer.camera().set_model_bounds([-1.0; 3], [1.0; 3]);
+        let check =
+            |renderer: &NativeRenderer| {
+                let matrix = renderer.camera.frame_camera(false).view_projection;
+                let row_length = |row: usize| {
+                    (0..3)
+                        .map(|column| matrix[column * 4 + row].powi(2))
+                        .sum::<f32>()
+                        .sqrt()
+                };
+                let horizontal = row_length(0) * renderer.config.width as f32;
+                let vertical = row_length(1) * renderer.config.height as f32;
+                assert!((horizontal / vertical - 1.0).abs() < 0.002,
+                "World-unit pixel scales must match: horizontal={horizontal}, vertical={vertical}");
+            };
+        check(&renderer);
+        for (width, height, scale) in [(400, 800, 1.25), (1200, 400, 1.5), (800, 800, 2.0)] {
+            renderer.resize(width, height);
+            renderer.set_scale(scale);
+            check(&renderer);
+        }
+    }
+}

@@ -3,8 +3,6 @@
 mod associations;
 mod formats;
 mod preview;
-mod preview_process;
-mod protocol;
 mod render;
 mod resources;
 
@@ -13,7 +11,6 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use preview::PreviewWorker;
 use render::context::NativeRenderer;
-use render::scene::{BatchSource, TextureBytes};
 use resources::{Demo, Resources};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
@@ -64,10 +61,18 @@ fn with_renderer<T>(
     renderer: &Arc<Mutex<Option<NativeRenderer>>>,
     action: impl FnOnce(&mut NativeRenderer) -> T,
 ) -> Result<T, String> {
-    lock_renderer(renderer)?
+    let mut locked = lock_renderer(renderer)?;
+    let renderer = locked
         .as_mut()
-        .map(action)
-        .ok_or_else(|| VIEWPORT_UNAVAILABLE.to_string())
+        .ok_or_else(|| VIEWPORT_UNAVAILABLE.to_string())?;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(renderer))).map_err(|panic| {
+        let detail = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("Unknown graphics panic");
+        format!("The graphics operation failed: {detail}")
+    })
 }
 
 #[derive(Serialize)]
@@ -153,7 +158,7 @@ struct PreviewFailed {
 #[serde(rename_all = "camelCase")]
 struct PreviewLoaded {
     request_id: u64,
-    metadata: protocol::Metadata,
+    metadata: preview::Metadata,
 }
 
 #[cfg(target_os = "windows")]
@@ -186,231 +191,22 @@ fn report_progress(
     app: &AppHandle,
     worker: &PreviewWorker,
     request_id: u64,
+    phase: &'static str,
     completed: u64,
     total: u64,
 ) {
-    if worker.ensure_current(request_id).is_ok() {
-        let _ = app.emit(
+    let _ = worker.with_current(request_id, || {
+        app.emit(
             "preview-progress",
             PreviewProgress {
                 request_id,
-                phase: "mesh",
+                phase,
                 completed,
                 total,
             },
-        );
-    }
-}
-
-/// Uploads one decoded batch's joined buffers to the staged renderer scene.
-fn attach_batch(
-    renderer: &Arc<Mutex<Option<NativeRenderer>>>,
-    batch: &protocol::Batch,
-    payload: &protocol::Payload,
-) -> Result<(), String> {
-    let geometry = payload.joined_buffers(&[0])?;
-    let texture_ids: Vec<usize> = batch
-        .metadata
-        .textures
-        .iter()
-        .map(|texture| texture.buffer_id)
-        .collect();
-    let textures = payload.joined_buffers(&texture_ids)?;
-    let texture_pixels: Vec<TextureBytes> = textures
-        .iter()
-        .map(|bytes| TextureBytes { pixels: bytes })
-        .collect();
-    let source = BatchSource {
-        texture_offset: batch.texture_offset,
-        geometry: geometry
-            .first()
-            .map(Vec::as_slice)
-            .ok_or("Invalid preview buffer.")?,
-        texture_pixels: &texture_pixels,
-        metadata: &batch.metadata,
-    };
-    lock_renderer(renderer)?
-        .as_mut()
-        .ok_or_else(|| VIEWPORT_UNAVAILABLE.to_string())?
-        .attach_batch(&source)
+        )
         .map_err(|error| error.to_string())
-}
-
-/// Drops a staged load, keeping the model already on screen.
-fn cancel_staged(renderer: &Arc<Mutex<Option<NativeRenderer>>>) {
-    if let Ok(mut renderer) = renderer.lock() {
-        if let Some(renderer) = renderer.as_mut() {
-            renderer.cancel_load();
-        }
-    }
-}
-
-/// Ends a failed load: the staged model is dropped, the producer is unblocked,
-/// the request's bookkeeping is released and the DOM sees the actionable
-/// `preview-failed` message.
-fn fail_load(
-    app: &AppHandle,
-    worker: &PreviewWorker,
-    renderer: &Arc<Mutex<Option<NativeRenderer>>>,
-    request_id: u64,
-    message: String,
-) -> String {
-    let _ = app.emit(
-        "preview-failed",
-        PreviewFailed {
-            request_id,
-            message: message.clone(),
-        },
-    );
-    cancel_staged(renderer);
-    worker.release(request_id);
-    message
-}
-
-/// Drains one request's preview batches into the native renderer, attaching
-/// each leased payload and reporting the outcome as `preview-loaded` or
-/// `preview-failed`. The lock is only held around renderer calls, so window
-/// events keep flowing while the decoder produces. A superseded request stops
-/// silently, matching the session's generation rules.
-fn consume_batches(
-    app: &AppHandle,
-    worker: &PreviewWorker,
-    renderer: &Arc<Mutex<Option<NativeRenderer>>>,
-    request_id: u64,
-) -> Result<protocol::Metadata, String> {
-    // Every load starts from a clean staged scene: an interrupted earlier
-    // request may have left one behind.
-    if let Err(error) = with_renderer(renderer, |renderer| renderer.begin_load()) {
-        return Err(fail_load(app, worker, renderer, request_id, error));
-    }
-    let mut previous: Option<u64> = None;
-    loop {
-        match worker.next(request_id, previous) {
-            Ok(protocol::StreamEvent::Batch { batch }) => {
-                let payload = match worker.batch_payload(request_id, batch.batch_id) {
-                    Ok(payload) => payload,
-                    Err(error) => {
-                        return Err(fail_load(app, worker, renderer, request_id, error));
-                    }
-                };
-                if let Err(error) = attach_batch(renderer, &batch, &payload) {
-                    return Err(fail_load(app, worker, renderer, request_id, error));
-                }
-                if worker.ensure_current(request_id).is_err() {
-                    cancel_staged(renderer);
-                    worker.release(request_id);
-                    return Err("Cancelled".into());
-                }
-                previous = Some(batch.batch_id);
-            }
-            Ok(protocol::StreamEvent::Complete { metadata }) => {
-                let frame = with_renderer(renderer, |renderer| {
-                    renderer.finish_load(&metadata);
-                    renderer.render()
-                });
-                match frame {
-                    Ok(Ok(())) => {
-                        worker.release(request_id);
-                        let _ = app.emit(
-                            "preview-loaded",
-                            PreviewLoaded {
-                                request_id,
-                                metadata: metadata.clone(),
-                            },
-                        );
-                        return Ok(metadata);
-                    }
-                    // The staged model is already displayed; only the frame
-                    // failure is reported.
-                    Ok(Err(error)) => {
-                        return Err(fail_load(
-                            app,
-                            worker,
-                            renderer,
-                            request_id,
-                            error.to_string(),
-                        ));
-                    }
-                    Err(error) => return Err(fail_load(app, worker, renderer, request_id, error)),
-                }
-            }
-            Err(error) => {
-                if worker.ensure_current(request_id).is_err() {
-                    cancel_staged(renderer);
-                    worker.release(request_id);
-                    return Err("Cancelled".into());
-                }
-                return Err(fail_load(app, worker, renderer, request_id, error));
-            }
-        }
-    }
-}
-
-#[tauri::command]
-async fn load_preview(
-    path: String,
-    request_id: u64,
-    app: AppHandle,
-    options: preview::LoadOptions,
-    state: State<'_, HostState>,
-    viewer: State<'_, ViewerState>,
-) -> Result<protocol::Metadata, String> {
-    let options = options.validate()?;
-    let worker = Arc::clone(&state.worker);
-    let renderer = Arc::clone(&viewer.renderer);
-    worker.advance(request_id);
-    worker.ensure_current(request_id)?;
-    let path = preview_path(path)?;
-    let resources = state.resources.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        worker.ensure_current(request_id)?;
-        let pack_path = resources.pack()?;
-        // The blocking preview keeps its command synchronous: the producer
-        // runs on its own thread inside the bounded queue while this task
-        // drains it, so the answer still means the whole model is attached.
-        worker.begin_stream(request_id, options)?;
-        let producer = Arc::clone(&worker);
-        let producer_app = app.clone();
-        let producing = std::thread::spawn(move || {
-            // A panicking producer must still end the stream, or this task's
-            // consumer would wait for batches that never arrive.
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                producer.load_stream(
-                    &path,
-                    &pack_path,
-                    request_id,
-                    options,
-                    |completed, total| {
-                        report_progress(&producer_app, &producer, request_id, completed, total)
-                    },
-                )
-            }))
-            .unwrap_or_else(|panic| {
-                let detail = panic
-                    .downcast_ref::<String>()
-                    .map(String::as_str)
-                    .or_else(|| panic.downcast_ref::<&str>().copied())
-                    .unwrap_or("Unknown native panic");
-                let error = format!("The preview worker stopped unexpectedly: {detail}");
-                producer.fail_stream(request_id, error.clone());
-                Err(error)
-            })
-        });
-        let consumed = consume_batches(&app, &worker, &renderer, request_id);
-        // The producer stops once the consumer ends the stream; its own error
-        // was already surfaced through the consumer.
-        let produced = producing.join();
-        match consumed {
-            Err(error) => Err(error),
-            Ok(metadata) => {
-                produced.map_err(|_| "The preview worker stopped unexpectedly.".to_string())??;
-                worker.ensure_current(request_id)?;
-                Ok(metadata)
-            }
-        }
-    })
-    .await
-    .map_err(|e| format!("The preview worker stopped unexpectedly: {e}"))?
+    });
 }
 
 #[tauri::command]
@@ -423,46 +219,107 @@ fn start_preview(
     viewer: State<'_, ViewerState>,
 ) -> Result<(), String> {
     let options = options.validate()?;
-    if options.thread_count.is_none() {
-        return Err("Streaming preview requires multithreading.".into());
-    }
     let path = preview_path(path)?;
+    let pack_path = state.resources.pack()?;
     let worker = Arc::clone(&state.worker);
     let renderer = Arc::clone(&viewer.renderer);
-    worker.advance(request_id);
-    worker.begin_stream(request_id, options)?;
-    let resources = state.resources.clone();
-    tauri::async_runtime::spawn(async move {
-        let producer = Arc::clone(&worker);
-        let producer_app = app.clone();
-        let producing = tauri::async_runtime::spawn_blocking(move || {
-            let pack = resources.pack()?;
-            producer.load_stream(&path, &pack, request_id, options, |completed, total| {
-                report_progress(&producer_app, &producer, request_id, completed, total)
-            })
-        });
-        // The consumer drains the same bounded queue, so it runs beside the
-        // producer instead of waiting for it: the producer stops at the
-        // queue's window until uploads release leases.
-        let consumer_worker = Arc::clone(&worker);
-        let consumer_app = app.clone();
-        let consuming = tauri::async_runtime::spawn_blocking(move || {
-            consume_batches(&consumer_app, &consumer_worker, &renderer, request_id)
-        });
-        match producing.await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => worker.fail_stream(request_id, error),
-            Err(error) => worker.fail_stream(
-                request_id,
-                format!("The preview worker stopped unexpectedly: {error}"),
-            ),
-        }
-        // Every outcome already reached the DOM as `preview-progress`,
-        // `preview-loaded` or `preview-failed`, and the consumer released the
-        // request's CPU bookkeeping.
-        let _ = consuming.await;
-    });
-    Ok(())
+    let job_worker = Arc::clone(&worker);
+    let prepare_renderer = Arc::clone(&renderer);
+    worker.submit(
+        request_id,
+        move || {
+            with_renderer(&prepare_renderer, |renderer| {
+                renderer.begin_load();
+                renderer.render().map_err(|error| error.to_string())
+            })?
+        },
+        Box::new(move |pack| {
+            let current = || job_worker.ensure_current(request_id);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                current()?;
+                let uploads = job_worker.with_current(request_id, || {
+                    with_renderer(&renderer, |renderer| {
+                        renderer.upload_window(usize::from(options.thread_count.unwrap_or(1)))
+                    })
+                })?;
+                let metadata = preview::load(
+                    &path,
+                    &pack_path,
+                    pack,
+                    options,
+                    &current,
+                    |min, max| {
+                        job_worker.with_current(request_id, || {
+                            with_renderer(&renderer, |renderer| renderer.prepare_load(min, max))
+                        })
+                    },
+                    |batch| {
+                        let permit = uploads.acquire(&current)?;
+                        job_worker.with_current(request_id, || {
+                            with_renderer(&renderer, |renderer| {
+                                renderer
+                                    .attach_batch(&batch, permit)
+                                    .map_err(|error| error.to_string())
+                            })?
+                        })
+                    },
+                    |phase, completed, total| {
+                        report_progress(&app, &job_worker, request_id, phase, completed, total)
+                    },
+                );
+                let drained = uploads.drain(&|| Ok(()));
+                let metadata = metadata?;
+                drained?;
+                current()?;
+                job_worker.with_current(request_id, || {
+                    with_renderer(&renderer, |renderer| {
+                        renderer.finish_load(&metadata.info());
+                        renderer.render().map_err(|error| error.to_string())
+                    })??;
+                    job_worker.release(request_id);
+                    app.emit(
+                        "preview-loaded",
+                        PreviewLoaded {
+                            request_id,
+                            metadata,
+                        },
+                    )
+                    .map_err(|error| error.to_string())
+                })
+            }))
+            .unwrap_or_else(|panic| {
+                *pack = None;
+                let detail = panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("Unknown native panic");
+                Err(format!("The preview worker stopped unexpectedly: {detail}"))
+            });
+            if let Err(message) = result {
+                let _ = job_worker.with_current(request_id, || {
+                    let cleanup = with_renderer(&renderer, |renderer| {
+                        renderer.cancel_load();
+                        renderer.render().map_err(|error| error.to_string())
+                    })
+                    .and_then(|result| result);
+                    let message = match cleanup {
+                        Ok(()) => message,
+                        Err(error) => format!("{message}\n\nRecovery: {error}"),
+                    };
+                    job_worker.release(request_id);
+                    app.emit(
+                        "preview-failed",
+                        PreviewFailed {
+                            request_id,
+                            message,
+                        },
+                    )
+                    .map_err(|error| error.to_string())
+                });
+            }
+        }),
+    )
 }
 
 #[tauri::command]
@@ -471,8 +328,17 @@ fn preview_memory(request_id: u64, state: State<'_, HostState>) -> Option<u64> {
 }
 
 #[tauri::command]
-fn cancel_load(request_id: u64, state: State<'_, HostState>) {
-    state.worker.advance(request_id);
+fn cancel_load(
+    request_id: u64,
+    state: State<'_, HostState>,
+    viewer: State<'_, ViewerState>,
+) -> Result<(), String> {
+    state.worker.cancel(request_id, || {
+        with_renderer(&viewer.renderer, |renderer| {
+            renderer.cancel_load();
+            renderer.render().map_err(|error| error.to_string())
+        })?
+    })
 }
 
 #[derive(Deserialize)]
@@ -526,6 +392,12 @@ fn viewport_input(
         .as_mut()
         .ok_or_else(|| VIEWPORT_UNAVAILABLE.to_string())?;
     for command in commands {
+        if !matches!(
+            command,
+            ViewportInput::Grid { .. } | ViewportInput::Stage { .. }
+        ) {
+            renderer.mark_user_interaction();
+        }
         match command {
             ViewportInput::Orbit { dx, dy } => renderer.camera().orbit(dx, dy),
             ViewportInput::Pan { dx, dy } => renderer.camera().pan(dx, dy),
@@ -696,7 +568,10 @@ fn run() -> Result<(), String> {
         })
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
-                window.state::<HostState>().worker.advance(u64::MAX);
+                let _ = window
+                    .state::<HostState>()
+                    .worker
+                    .cancel(u64::MAX, || Ok(()));
             }
             if matches!(
                 event,
@@ -723,7 +598,6 @@ fn run() -> Result<(), String> {
         .invoke_handler(tauri::generate_handler![
             bootstrap,
             choose_file,
-            load_preview,
             start_preview,
             preview_memory,
             cancel_load,
@@ -739,22 +613,6 @@ fn run() -> Result<(), String> {
 fn main() {
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
-    // Decoder mode bypasses Tauri and WebView2. It receives authentication
-    // through the inherited stdin pipe, not process arguments or a Tauri command.
-    if first
-        .as_deref()
-        .is_some_and(|argument| argument == "--preview-worker")
-    {
-        let result = match (args.next(), args.next()) {
-            (Some(port), None) => preview_process::run(&port),
-            _ => Err("Invalid decoder process arguments.".into()),
-        };
-        if let Err(error) = result {
-            eprintln!("{error}");
-            std::process::exit(1);
-        }
-        return;
-    }
     let remaining: Vec<_> = args.collect();
     let registration = match first.as_deref().and_then(|arg| arg.to_str()) {
         Some("--register") if remaining.is_empty() => Some(associations::register()),

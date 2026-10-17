@@ -40,10 +40,13 @@
 //! [`camera::Camera`]. This module and `scene.rs` are the only owners of
 //! render-state transitions; the Tauri layer drives them via the public API.
 
-use crate::protocol;
 use crate::render::camera::Camera;
 use crate::render::pipelines::{Pipelines, CAMERA_UNIFORM_BYTES};
-use crate::render::scene::{BatchSource, Scene};
+use crate::render::scene::Scene;
+use crate::render::upload::{DeviceStatus, UploadPermit, UploadWindow};
+use litematica_preview_core::{MeshBatch, PreviewInfo};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// The sRGB byte values renderer.ts cleared with, kept in the same encoding so
 /// a drift against the WebGL renderer is a one-line diff.
@@ -59,8 +62,10 @@ pub enum RenderError {
     /// Adapter or device creation failed: the message is user-facing (the
     /// "update your graphics driver" class of error).
     Initialization(String),
-    /// A published batch did not match the wire layout; nothing uploaded.
+    /// A Core batch did not match the supported geometry layout.
     MalformedBatch(String),
+    /// A device error or loss interrupted GPU work.
+    Device(String),
 }
 
 impl RenderError {
@@ -76,7 +81,7 @@ impl std::fmt::Display for RenderError {
                 formatter,
                 "The graphics surface is unavailable. Reopen the schematic after the window recovers."
             ),
-            Self::Initialization(message) | Self::MalformedBatch(message) => {
+            Self::Initialization(message) | Self::MalformedBatch(message) | Self::Device(message) => {
                 write!(formatter, "{message}")
             }
         }
@@ -85,9 +90,8 @@ impl std::fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
-/// The native renderer: one device, one surface, one displayed scene plus one
-/// staged scene under construction. Input, resize and load commands arrive
-/// through the session.
+/// One device, surface and progressively displayed scene. Only upload-window
+/// waits may block for GPU completion, and those run outside this renderer.
 pub struct NativeRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -104,10 +108,12 @@ pub struct NativeRenderer {
     color_view: Option<wgpu::TextureView>,
     depth_view: Option<wgpu::TextureView>,
     samples: u32,
-    /// The model currently displayed; `None` until a load finishes.
     scene: Option<Scene>,
-    /// The model a stream is still building; dropped on cancel or error.
-    staged: Option<Scene>,
+    device_status: Arc<DeviceStatus>,
+    load_prepared: bool,
+    user_interacted: bool,
+    has_visible_batch: bool,
+    last_render: Option<Instant>,
 }
 
 impl NativeRenderer {
@@ -202,6 +208,7 @@ impl NativeRenderer {
         let scale = 1.0;
         let camera = Camera::new();
         let (depth_view, color_view) = (None, None);
+        let device_status = DeviceStatus::new(device.clone());
         let mut renderer = Self {
             device,
             queue,
@@ -215,7 +222,11 @@ impl NativeRenderer {
             depth_view,
             samples,
             scene: None,
-            staged: None,
+            device_status,
+            load_prepared: false,
+            user_interacted: false,
+            has_visible_batch: false,
+            last_render: None,
         };
         renderer.rebuild_targets();
         renderer.refresh_camera();
@@ -387,45 +398,82 @@ impl NativeRenderer {
         self.camera.resize(css_width, css_height);
     }
 
-    /// Starts a load: staged accumulation from an earlier unfinished
-    /// generation is discarded.
+    pub fn upload_window(&self, capacity: usize) -> Arc<UploadWindow> {
+        Arc::new(UploadWindow::with_device(
+            Arc::clone(&self.device_status),
+            capacity,
+        ))
+    }
+
+    /// Drops the previous model and resets framing before a new stream starts.
     pub fn begin_load(&mut self) {
-        self.staged = None;
+        self.cancel_load();
+        self.scene = Some(Scene::new(self.device.clone(), self.queue.clone()));
     }
 
-    /// Attaches one decoded batch to the staged scene. A malformed batch
-    /// discards the staged model, mirroring the WebGL renderer's behavior of
-    /// releasing its model after an upload failure and reporting the error.
-    pub fn attach_batch(&mut self, batch: &BatchSource) -> Result<(), RenderError> {
-        if self.staged.is_none() {
-            self.staged = Some(Scene::new(self.device.clone(), self.queue.clone()));
+    /// Frames occupied source bounds once, before the first batch arrives.
+    pub fn prepare_load(&mut self, min: [f32; 3], max: [f32; 3]) {
+        if self.load_prepared {
+            return;
         }
-        let outcome = self
-            .staged
+        self.camera.set_model_bounds(min, max);
+        self.load_prepared = true;
+    }
+
+    /// Appends a live batch and flushes staging even when no frame is due.
+    pub fn attach_batch(
+        &mut self,
+        batch: &MeshBatch,
+        permit: UploadPermit,
+    ) -> Result<(), RenderError> {
+        let scene = self
+            .scene
             .as_mut()
-            .unwrap()
-            .attach_batch(&self.pipelines, batch);
-        if outcome.is_err() {
-            self.staged = None;
+            .ok_or_else(|| RenderError::malformed_batch("the preview load has not started"))?;
+        if let Err(error) = scene.attach_batch(&self.pipelines, batch, permit) {
+            self.cancel_load();
+            return Err(error);
         }
-        outcome
+        if !batch.parts.is_empty() {
+            self.camera.mark_dirty();
+            let render_now = !self.has_visible_batch
+                || self
+                    .last_render
+                    .is_none_or(|time| time.elapsed() >= Duration::from_millis(50));
+            self.has_visible_batch = true;
+            if render_now {
+                self.render()?;
+            }
+        }
+        Ok(())
     }
 
-    /// Publishes the staged scene: the staged model becomes the displayed
-    /// model and the camera re-fits like the WebGL renderer's `loadModel`
-    /// epilogue.
-    pub fn finish_load(&mut self, metadata: &protocol::Metadata) {
-        let Some(mut staged) = self.staged.take() else {
+    /// Replaces source bounds with exact geometry bounds; input always wins over auto-fit.
+    pub fn finish_load(&mut self, metadata: &PreviewInfo) {
+        let Some(scene) = self.scene.as_mut() else {
             return;
         };
-        staged.finish(metadata);
-        self.scene = Some(staged);
-        self.camera.set_model_bounds(metadata.min, metadata.max);
+        scene.finish(metadata);
+        if self.user_interacted && self.load_prepared {
+            self.camera.update_model_bounds(metadata.min, metadata.max);
+        } else {
+            self.camera.set_model_bounds(metadata.min, metadata.max);
+        }
+        self.load_prepared = true;
     }
 
-    /// Cancels the staged load, keeping the displayed model.
+    /// Clears all displayed geometry; the caller renders the empty surface immediately.
     pub fn cancel_load(&mut self) {
-        self.staged = None;
+        self.scene = None;
+        self.load_prepared = false;
+        self.user_interacted = false;
+        self.has_visible_batch = false;
+        self.last_render = None;
+        self.camera.clear_model();
+    }
+
+    pub fn mark_user_interaction(&mut self) {
+        self.user_interacted = true;
     }
 
     pub fn camera(&mut self) -> &mut Camera {
@@ -436,6 +484,7 @@ impl NativeRenderer {
     /// renderer.ts's `drawFrame`: clear, grid, opaque/cutout parts, then
     /// transparent parts with depth writes off.
     pub fn render(&mut self) -> Result<(), RenderError> {
+        self.device_status.check().map_err(RenderError::Device)?;
         if !self.camera.dirty() {
             return Ok(());
         }
@@ -513,6 +562,7 @@ impl NativeRenderer {
         // gracefully when a download clone owns a device instance.
         self.queue.present(frame);
         self.camera.clear_dirty();
+        self.last_render = Some(Instant::now());
         Ok(())
     }
 

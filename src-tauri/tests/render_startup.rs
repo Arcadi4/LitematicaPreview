@@ -1,7 +1,4 @@
 #[allow(dead_code)]
-#[path = "../src/protocol.rs"]
-mod protocol;
-#[allow(dead_code)]
 #[path = "../src/render/mod.rs"]
 mod render;
 

@@ -15,8 +15,7 @@ use crate::render::math::{
 const FOV_DEGREES: f32 = 28.0;
 /// `tan(FOV / 2)`, the fitting scale from renderer.ts.
 const HALF_FOV_TAN: f32 = 0.249_328_0;
-/// 0.10.14 renders keep `is_empty()` blind to greedy parts; nothing here
-/// depends on it because the camera only consumes the metadata bounds.
+/// Orbit sensitivity in radians per CSS pixel.
 const ORBIT_SPEED: f32 = 0.008;
 /// Pitch clamp in radians, matching `Math.max(-1.5, Math.min(1.5, ...))`.
 const PITCH_LIMIT: f32 = 1.5;
@@ -106,6 +105,31 @@ impl Camera {
         self.maximum = sub3(max, self.centre);
         self.fit();
         self.has_model = true;
+        self.dirty = true;
+    }
+
+    /// Updates final geometry bounds without moving the world-space eye or target.
+    pub(crate) fn update_model_bounds(&mut self, min: Vec3, max: Vec3) {
+        let centre = std::array::from_fn(|axis| (min[axis] + max[axis]) * 0.5);
+        self.target = add3(self.target, sub3(self.centre, centre));
+        self.centre = centre;
+        self.minimum = sub3(min, centre);
+        self.maximum = sub3(max, centre);
+        self.fitted_distance = self.fitting_distance();
+        self.has_model = true;
+        self.dirty = true;
+    }
+
+    pub(crate) fn clear_model(&mut self) {
+        *self = Self {
+            aspect: self.aspect,
+            viewport_height: self.viewport_height,
+            grid_visible: self.grid_visible,
+            ..Self::new()
+        };
+    }
+
+    pub(crate) fn mark_dirty(&mut self) {
         self.dirty = true;
     }
 

@@ -55,7 +55,7 @@ export function PreviewToolbar({
       <Button
         appearance="subtle"
         icon={<ArrowExpand20Regular />}
-        disabled={!loaded}
+        disabled={!loaded && !loading}
         onClick={onFit}
         title="Fit schematic (F)"
       >
@@ -65,7 +65,7 @@ export function PreviewToolbar({
         <Button
           appearance="subtle"
           icon={<Subtract20Regular />}
-          disabled={!loaded}
+          disabled={!loaded && !loading}
           onClick={onZoomOut}
           aria-label="Zoom out"
         />
@@ -74,7 +74,7 @@ export function PreviewToolbar({
         <Button
           appearance="subtle"
           icon={<Add20Regular />}
-          disabled={!loaded}
+          disabled={!loaded && !loading}
           onClick={onZoomIn}
           aria-label="Zoom in"
         />

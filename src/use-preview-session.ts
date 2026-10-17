@@ -93,15 +93,12 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const titleQueue = useRef<Promise<void> | null>(null)
   const memoryRequestRef = useRef<number | null>(null)
   const sampleMemoryRef = useRef<(() => void) | null>(null)
-  // The only request the load events may resolve. A superseded or cancelled
-  // load leaves it null (or stale), so its late events are dropped. `stream`
-  // marks the event-driven producer: that command resolves while the native
-  // stream is still running, unlike the serial one that awaits it.
+  const listenersReady = useRef<Promise<void> | null>(null)
+  // Only the current request may consume native progress and completion events.
   const pendingRequest = useRef<{
     id: number
     path: string
     started: number
-    stream: boolean
   } | null>(null)
 
   // The native viewport failed to initialize: every preview keeps failing, so
@@ -237,11 +234,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     }
   }, [])
 
-  // Load completion is event-driven for both the serial and the streaming
-  // command. The listeners live for the whole session so a native event can
-  // never race the command promise's cleanup, and they resolve only the request
-  // that is still current. Progress needs the same session lifetime because the
-  // streaming command resolves while the native stream is still running.
+  // Register every lifecycle listener before allowing the first native load.
   useEffect(() => {
     let active = true
     const unlisteners: Array<() => void> = []
@@ -249,54 +242,85 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       if (active) unlisteners.push(dispose)
       else dispose()
     }
-    void listen<PreviewProgress>("preview-progress", ({ payload }) => {
-      const request = pendingRequest.current
-      if (!request || request.id !== payload.requestId || payload.phase !== "mesh") return
-      if (!Number.isSafeInteger(payload.total) || payload.total <= 0) return
-      if (
-        !Number.isSafeInteger(payload.completed) ||
-        payload.completed < 0 ||
-        payload.completed > payload.total
-      )
-        return
-      setLoading((previous) =>
-        previous?.requestId === payload.requestId
-          ? {
-              ...previous,
-              phase: request.stream ? "stream" : "mesh",
-              completed: payload.completed,
-              total: payload.total,
-            }
-          : previous,
-      )
-    }).then(track)
-    void listen<PreviewLoaded>("preview-loaded", ({ payload }) => {
-      const request = pendingRequest.current
-      if (!request || request.id !== payload.requestId || !isCurrent(payload.requestId)) return
-      pendingRequest.current = null
-      setLoaded({
-        path: request.path,
-        metadata: payload.metadata,
-        seconds: (performance.now() - request.started) / 1000,
-      })
-      setLoading(null)
-      setPreviewMemory(null)
-      updateTitle(request.path, request.id)
-      viewportRef.current?.focus({ preventScroll: true })
-    }).then(track)
-    void listen<PreviewFailed>("preview-failed", ({ payload }) => {
-      const request = pendingRequest.current
-      if (!request || request.id !== payload.requestId || !isCurrent(payload.requestId)) return
-      pendingRequest.current = null
-      setLoading(null)
-      setPreviewMemory(null)
-      setRawNotice({ intent: "error", message: `${request.path}\n\n${payload.message}` })
-    }).then(track)
-    void listen<ViewportFailed>("viewport-failed", ({ payload }) => {
-      setViewportError(payload.message)
-    }).then(track)
+    const ready = Promise.all([
+      listen<PreviewProgress>("preview-progress", ({ payload }) => {
+        const request = pendingRequest.current
+        if (
+          !active ||
+          !request ||
+          request.id !== payload.requestId ||
+          !isCurrent(payload.requestId)
+        )
+          return
+        if (payload.phase !== "decode" && payload.phase !== "mesh" && payload.phase !== "upload")
+          return
+        if (!Number.isSafeInteger(payload.total) || payload.total < 0) return
+        if (
+          !Number.isSafeInteger(payload.completed) ||
+          payload.completed < 0 ||
+          payload.completed > payload.total
+        )
+          return
+        setLoading((previous) =>
+          previous?.requestId === payload.requestId
+            ? {
+                ...previous,
+                phase: payload.phase,
+                completed: payload.completed,
+                total: payload.total,
+              }
+            : previous,
+        )
+      }).then(track),
+      listen<PreviewLoaded>("preview-loaded", ({ payload }) => {
+        const request = pendingRequest.current
+        if (
+          !active ||
+          !request ||
+          request.id !== payload.requestId ||
+          !isCurrent(payload.requestId)
+        )
+          return
+        pendingRequest.current = null
+        setLoaded({
+          path: request.path,
+          metadata: payload.metadata,
+          seconds: (performance.now() - request.started) / 1000,
+        })
+        setLoading(null)
+        setPreviewMemory(null)
+        updateTitle(request.path, request.id)
+        viewportRef.current?.focus({ preventScroll: true })
+      }).then(track),
+      listen<PreviewFailed>("preview-failed", ({ payload }) => {
+        const request = pendingRequest.current
+        if (
+          !active ||
+          !request ||
+          request.id !== payload.requestId ||
+          !isCurrent(payload.requestId)
+        )
+          return
+        pendingRequest.current = null
+        setLoading(null)
+        setPreviewMemory(null)
+        setRawNotice({ intent: "error", message: `${request.path}\n\n${payload.message}` })
+      }).then(track),
+      listen<ViewportFailed>("viewport-failed", ({ payload }) => {
+        if (active) setViewportError(payload.message)
+      }).then(track),
+    ]).then(() => {})
+    listenersReady.current = ready
+    void ready.catch((error: unknown) => {
+      if (active)
+        setRawNotice({
+          intent: "error",
+          message: `Could not subscribe to preview events: ${errorMessage(error)}`,
+        })
+    })
     return () => {
       active = false
+      if (listenersReady.current === ready) listenersReady.current = null
       for (const dispose of unlisteners) dispose()
     }
   }, [isCurrent, updateTitle])
@@ -307,12 +331,10 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       // Read current settings without rebuilding startup and drag-and-drop subscriptions.
       // This request keeps its own snapshot even if settings change during decoding.
       const settings = previewSettingsRef.current
-      const speedFirst = settings.multithreadingEnabled && !settings.conservativeMemoryScheduling
       const options = {
-        memoryLimitMB: settings.memoryLimitEnabled ? settings.memoryLimitMB : null,
         chunkSize: settings.chunkingEnabled ? settings.chunkSize : null,
-        threadCount: settings.multithreadingEnabled ? settings.threadCount : null,
-        speedFirst,
+        threadCount:
+          settings.chunkingEnabled && settings.multithreadingEnabled ? settings.threadCount : null,
       }
       const id = ++generation.current
       const started = performance.now()
@@ -335,19 +357,17 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         id,
         path,
         started,
-        stream: options.threadCount !== null,
       }
       try {
-        // Serial mode decodes and meshes inside the command; streaming mode
-        // starts the native producer and resolves early. Both hand control to
-        // the preview events, whose progress listener lives for the session.
-        await invoke(options.threadCount === null ? "load_preview" : "start_preview", {
+        await listenersReady.current
+        if (!isCurrent(id)) return
+        await invoke("start_preview", {
           path,
           requestId: id,
           options,
         })
       } catch (error) {
-        if (!isCurrent(id)) return
+        if (!isCurrent(id) || pendingRequest.current?.id !== id) return
         pendingRequest.current = null
         setLoading(null)
         setPreviewMemory(null)
@@ -420,9 +440,13 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     let active = true
     let unlisten: (() => void) | undefined
     const initialGeneration = generation.current
-    void invoke<Bootstrap>("bootstrap")
+    void (listenersReady.current ?? Promise.resolve())
+      .then(() => {
+        if (!active) return null
+        return invoke<Bootstrap>("bootstrap")
+      })
       .then((result) => {
-        if (!active) return
+        if (!active || !result) return
         const openInitialPath = isCurrent(initialGeneration)
         generation.current = Math.max(generation.current, result.requestId)
         bootstrapRef.current = result
@@ -513,9 +537,9 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       inFlight = true
       try {
         const memory = await invoke<number | null>("preview_memory", { requestId: id })
-        if (memoryRequestRef.current === id) setPreviewMemory(memory)
+        if (memoryRequestRef.current === id && isCurrent(id)) setPreviewMemory(memory)
       } catch {
-        if (memoryRequestRef.current === id) setPreviewMemory(null)
+        if (memoryRequestRef.current === id && isCurrent(id)) setPreviewMemory(null)
       } finally {
         inFlight = false
       }
@@ -526,7 +550,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       sampleMemoryRef.current = null
       window.clearInterval(timer)
     }
-  }, [])
+  }, [isCurrent])
 
   useEffect(() => {
     memoryRequestRef.current = loading?.requestId ?? null

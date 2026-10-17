@@ -99,7 +99,11 @@ export default function App({ initialError }: { initialError?: string }) {
       if (event.key === "Escape" && loading) {
         event.preventDefault()
         returnHome()
-      } else if (event.key.toLowerCase() === "f" && loaded && target !== viewportRef.current) {
+      } else if (
+        event.key.toLowerCase() === "f" &&
+        (loaded || loading) &&
+        target !== viewportRef.current
+      ) {
         event.preventDefault()
         fit()
       }

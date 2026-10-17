@@ -18,6 +18,7 @@ export interface PreviewFooterProps {
 
 function phaseStatus(loading: Loading) {
   if (loading.phase === "decode") return "Decoding…"
+  if (loading.phase === "upload") return "Finishing GPU uploads…"
   return "Generating geometry…"
 }
 
@@ -60,8 +61,8 @@ function IdleSummary({
           {previewMemory === null ? (
             <span>Sampling memory…</span>
           ) : (
-            <span title="Host and decoder private working sets (resident private pages only). WebView2 and GPU memory are excluded.">
-              Process memory {formatMB(previewMemory)}
+            <span title="Host process private working set (resident private pages only). WebView2 and GPU memory are excluded.">
+              Host memory {formatMB(previewMemory)}
             </span>
           )}
         </div>

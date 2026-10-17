@@ -24,7 +24,6 @@ fn main() {
             .app_manifest(tauri_build::AppManifest::new().commands(&[
                 "bootstrap",
                 "choose_file",
-                "load_preview",
                 "start_preview",
                 "preview_memory",
                 "cancel_load",

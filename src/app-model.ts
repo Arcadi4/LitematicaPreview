@@ -9,10 +9,7 @@ export type Bootstrap = {
   viewportError: string | null
 }
 export type ThemePreference = "system" | "light" | "dark"
-/**
- * The completed preview descriptors, exactly as the native `preview-loaded`
- * event serializes the protocol metadata (camelCase field names).
- */
+/** Completed preview statistics serialized by the native `preview-loaded` event. */
 export type Metadata = {
   blockCount: number
   blockEntityCount: number
@@ -21,36 +18,19 @@ export type Metadata = {
   max: [number, number, number]
   geometryByteLength: number
   byteLength: number
-  textures: {
-    width: number
-    height: number
-    byteLength: number
-    bufferId: number
-    repeat: boolean
-  }[]
-  parts: {
-    vertexCount: number
-    indexCount: number
-    textureIndex: number
-    alphaMode: 0 | 1 | 2
-    vertexOffset: number
-    indexOffset: number
-    vertexStride: 24 | 28
-    indexSize: 2 | 4
-    origin: [number, number, number]
-    extent: [number, number, number]
-  }[]
+  textureCount: number
+  partCount: number
 }
 export type Loading = {
   path: string
   requestId: number
-  phase: "decode" | "mesh" | "stream"
+  phase: "decode" | "mesh" | "upload"
   completed: number
   total: number
 }
 export type PreviewProgress = {
   requestId: number
-  phase: "decode" | "mesh" | "stream"
+  phase: "decode" | "mesh" | "upload"
   completed: number
   total: number
 }

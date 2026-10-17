@@ -58,41 +58,11 @@ export function SettingsPanel({ bootstrap, onChange, settings }: SettingsPanelPr
         Changes are saved automatically and apply the next time you open a schematic. The current
         preview or load is not changed.
       </p>
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <div className="flex items-center gap-1">
-            <Switch
-              label="Limit decoder memory"
-              checked={settings.memoryLimitEnabled}
-              aria-describedby="memory-limit-description"
-              onChange={(_, data) => onChange({ memoryLimitEnabled: data.checked })}
-            />
-            <SettingsNotice id="memory-limit-description" label="About decoder memory limits">
-              Limits the isolated decoder process, not graphics or total application memory. If the
-              decoder stops while this limit is enabled, loading returns to Home and shows an error;
-              the limit may be involved, but a crash cannot confirm it was reached. Disabling the
-              limit may exhaust system memory.
-            </SettingsNotice>
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            <SpinButton
-              value={settings.memoryLimitMB}
-              min={2048}
-              max={8192}
-              step={1}
-              disabled={!settings.memoryLimitEnabled}
-              aria-label="Decoder memory limit (MB)"
-              aria-describedby="memory-limit-description"
-              className="w-32"
-              onChange={(_, data) => {
-                const value = spinValue(data.value ?? null, data.displayValue)
-                if (value !== null && Number.isInteger(value) && value >= 2048 && value <= 8192)
-                  onChange({ memoryLimitMB: value })
-              }}
-            />
-            <span className="text-sm">MB</span>
-          </div>
-        </div>
+      <div className="rounded-md border border-border bg-surface-secondary px-3 py-2 text-sm">
+        <p className="mt-0 mb-1 font-semibold">Memory limit — unavailable</p>
+        <p className="m-0 text-muted">
+          Loading runs in the application process. Memory limiting is suspended for this pipeline.
+        </p>
       </div>
       <div className="flex flex-col gap-3">
         <div className="flex items-center gap-1">
@@ -105,7 +75,8 @@ export function SettingsPanel({ bootstrap, onChange, settings }: SettingsPanelPr
           />
           <SettingsNotice id="chunk-size-description" label="About chunk separation">
             Smaller chunks reduce peak meshing memory and allow cancellation between chunks.
-            Disabling chunk separation increases peak memory use and cancellation latency.
+            Disabling chunk separation increases memory use and cancellation latency; large spans
+            also reduce compact-position precision in Core 0.1.4.
           </SettingsNotice>
         </div>
         <Field label={`Chunk size (blocks per side): ${settings.chunkSize}`}>
@@ -148,9 +119,8 @@ export function SettingsPanel({ bootstrap, onChange, settings }: SettingsPanelPr
             />
             <SettingsNotice id="thread-count-description" label="About multithreading">
               Requires chunk separation and at least two available logical processors. Uses up to{" "}
-              {bootstrap?.maxWorkerThreads ?? 1} workers for parallel decoding, meshing and upload
-              preparation. Memory-first scheduling may use fewer workers; additional working buffers
-              can still increase peak memory. GPU submission remains on the main thread.
+              {bootstrap?.maxWorkerThreads ?? 1} workers for parallel meshing. Both the mesh window
+              and GPU upload window use this worker count. Additional buffers increase peak memory.
             </SettingsNotice>
           </div>
           <div className="ml-auto flex items-center gap-2">
@@ -177,23 +147,11 @@ export function SettingsPanel({ bootstrap, onChange, settings }: SettingsPanelPr
             <span className="text-sm">threads</span>
           </div>
         </div>
-        <div className="flex items-center gap-1">
-          <Switch
-            label="Conservative memory scheduling"
-            checked={settings.conservativeMemoryScheduling}
-            disabled={!settings.multithreadingEnabled}
-            aria-describedby="conservative-memory-description"
-            onChange={(_, data) => onChange({ conservativeMemoryScheduling: data.checked })}
-          />
-          <SettingsNotice
-            id="conservative-memory-description"
-            label="About conservative memory scheduling"
-          >
-            Disabled by default. Enable it to reduce concurrent mesh work and the number of queued
-            batches and upload pages; this may reduce decoding speed. Leaving it disabled uses the
-            selected worker count more aggressively and may use more memory. A separate decoder
-            memory limit remains effective in either mode.
-          </SettingsNotice>
+        <div className="rounded-md border border-border bg-surface-secondary px-3 py-2 text-sm">
+          <p className="mt-0 mb-1 font-semibold">Conservative memory scheduling — unavailable</p>
+          <p className="m-0 text-muted">
+            This option is suspended for the current loading pipeline.
+          </p>
         </div>
       </div>
     </div>

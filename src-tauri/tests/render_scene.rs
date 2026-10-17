@@ -1,18 +1,18 @@
 #[allow(dead_code)]
-#[path = "../src/protocol.rs"]
-mod protocol;
-#[allow(dead_code)]
 #[path = "../src/render/mod.rs"]
 mod render;
 
+use litematica_preview_core::{MeshBatch, MeshPart, PreviewInfo, Texture};
 use render::camera::FrameCamera;
 use render::pipelines::Pipelines;
-use render::scene::{BatchSource, Scene, TextureBytes};
+use render::scene::Scene;
+use render::upload::{DeviceStatus, UploadWindow};
+use std::sync::Arc;
 
 const SIZE: u32 = 64;
 const ROW_BYTES: u32 = SIZE * 4;
 
-fn quad(compact: bool, alpha_mode: u32) -> (Vec<u8>, protocol::Metadata, FrameCamera) {
+fn quad(compact: bool, alpha_mode: u32, alpha: u8) -> (MeshBatch, FrameCamera) {
     let (origin, extent, scale) = if compact {
         ([32.0, 41.0, 53.0], [150.0, 120.0, 0.0], 0.01)
     } else {
@@ -49,35 +49,46 @@ fn quad(compact: bool, alpha_mode: u32) -> (Vec<u8>, protocol::Metadata, FrameCa
     for index in [0u16, 1, 2, 0, 2, 3] {
         geometry.extend_from_slice(&index.to_le_bytes());
     }
-    let metadata = protocol::Metadata {
+    let info = PreviewInfo {
         block_count: 1,
-        block_entity_count: 0,
         triangle_count: 2,
+        part_count: 1,
+        texture_count: 1,
         min: origin,
         max: std::array::from_fn(|axis| origin[axis] + extent[axis]),
-        geometry_byte_length: geometry.len(),
-        byte_length: geometry.len() + 4,
-        textures: vec![protocol::TextureMetadata {
-            width: 1,
-            height: 1,
-            byte_length: 4,
-            buffer_id: 1,
-            repeat: false,
-        }],
-        parts: vec![protocol::PartMetadata {
+        ..PreviewInfo::default()
+    };
+    let batch = MeshBatch {
+        geometry,
+        vertex_stride: stride,
+        parts: vec![MeshPart {
             vertex_count: 4,
             index_count: 6,
-            texture_index: 0,
+            texture_index: 7,
             alpha_mode,
             vertex_offset: 0,
             index_offset,
-            vertex_stride: stride,
             index_size: 2,
-            origin,
-            extent,
+            min: info.min,
+            max: info.max,
         }],
+        textures: vec![Texture {
+            index: 7,
+            width: 1,
+            height: 1,
+            pixels: vec![255, 0, 0, alpha],
+            repeat: false,
+        }],
+        origin,
+        extent,
+        source_min: info.min,
+        source_max: info.max,
+        chunk_coord: None,
+        vertex_count: 4,
+        index_count: 6,
+        info,
     };
-    // Both wire layouts describe the same screen-space quad after centering.
+    // Both Core layouts describe the same screen-space quad after centering.
     // A real nonzero mesh origin catches accidentally transforming wide
     // absolute positions a second time; a planar extent catches vec3 padding.
     let camera = FrameCamera {
@@ -86,7 +97,7 @@ fn quad(compact: bool, alpha_mode: u32) -> (Vec<u8>, protocol::Metadata, FrameCa
         ],
         offset: origin.map(|value| -value),
     };
-    (geometry, metadata, camera)
+    (batch, camera)
 }
 
 fn render_pixels(
@@ -207,27 +218,23 @@ fn dx12_uploaded_meshes_render_with_wgsl_part_layout() {
         wgpu::TextureFormat::Rgba8UnormSrgb,
         wgpu::TextureFormat::Depth24Plus,
     );
+    let uploads = Arc::new(UploadWindow::with_device(
+        DeviceStatus::new(device.clone()),
+        1,
+    ));
     for (compact, alpha_mode, alpha) in [
         (true, 0, 255),
         (false, 0, 255),
         (true, 1, 0),
         (true, 2, 128),
     ] {
-        let (geometry, metadata, camera) = quad(compact, alpha_mode);
-        let pixels = [255, 0, 0, alpha];
-        let textures = [TextureBytes { pixels: &pixels }];
+        let (batch, camera) = quad(compact, alpha_mode, alpha);
+        let permit = uploads.acquire(&|| Ok(())).unwrap();
         let mut scene = Scene::new(device.clone(), queue.clone());
-        scene
-            .attach_batch(
-                &pipelines,
-                &BatchSource {
-                    texture_offset: 0,
-                    geometry: &geometry,
-                    texture_pixels: &textures,
-                    metadata: &metadata,
-                },
-            )
-            .unwrap();
+        scene.attach_batch(&pipelines, &batch, permit).unwrap();
+        drop(batch);
+        // Upload-only progress must complete without relying on a rendered frame.
+        uploads.drain(&|| Ok(())).unwrap();
         let image = render_pixels(&device, &queue, &pipelines, &scene, camera);
         for (x, y) in [(16, 16), (32, 32), (47, 47)] {
             let at = (y * ROW_BYTES + x * 4) as usize;
@@ -254,7 +261,7 @@ fn dx12_uploaded_meshes_render_with_wgsl_part_layout() {
                 "Quad should not cover ({x}, {y}), compact={compact}"
             );
         }
-        println!("Rendered wire layout: compact={compact}, alpha_mode={alpha_mode}");
+        println!("Rendered Core layout: compact={compact}, alpha_mode={alpha_mode}");
     }
     let error = pollster::block_on(errors.pop());
     assert!(error.is_none(), "Scene rendering validation: {error:?}");

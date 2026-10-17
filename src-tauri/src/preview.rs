@@ -402,3 +402,104 @@ fn host_memory() -> Option<u64> {
 fn host_memory() -> Option<u64> {
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn queued_reload_keeps_only_latest_and_never_overlaps_native_calls() {
+        let worker = Arc::new(PreviewWorker::default());
+        let (started_tx, started) = mpsc::channel();
+        let (resume_tx, resume) = mpsc::channel();
+        let (done_tx, done) = mpsc::channel();
+        let first_worker = Arc::clone(&worker);
+        worker
+            .submit(
+                1,
+                || Ok(()),
+                Box::new(move |_| {
+                    started_tx.send(()).unwrap();
+                    resume.recv_timeout(Duration::from_secs(5)).unwrap();
+                    assert_eq!(first_worker.ensure_current(1).unwrap_err(), "Cancelled");
+                }),
+            )
+            .unwrap();
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        let obsolete = done_tx.clone();
+        worker
+            .submit(
+                2,
+                || Ok(()),
+                Box::new(move |_| {
+                    obsolete.send(2).unwrap();
+                }),
+            )
+            .unwrap();
+        worker
+            .submit(
+                3,
+                || Ok(()),
+                Box::new(move |_| {
+                    done_tx.send(3).unwrap();
+                }),
+            )
+            .unwrap();
+        assert!(done.try_recv().is_err());
+        resume_tx.send(()).unwrap();
+        assert_eq!(done.recv_timeout(Duration::from_secs(5)).unwrap(), 3);
+        assert!(done.recv_timeout(Duration::from_millis(20)).is_err());
+    }
+
+    #[test]
+    fn cancelled_and_delayed_requests_cannot_modify_the_current_scene() {
+        let worker = Arc::new(PreviewWorker::default());
+        worker.cancel(4, || Ok(())).unwrap();
+        assert_eq!(
+            worker
+                .with_current::<()>(3, || panic!("stale scene mutation"))
+                .unwrap_err(),
+            "Cancelled"
+        );
+        worker.cancel(2, || panic!("stale cancel")).unwrap();
+        assert_eq!(
+            worker
+                .submit(
+                    3,
+                    || panic!("stale prepare"),
+                    Box::new(|_| panic!("stale job"))
+                )
+                .unwrap_err(),
+            "Cancelled"
+        );
+        assert!(worker.ensure_current(4).is_ok());
+    }
+
+    #[test]
+    fn caught_native_panic_does_not_poison_generation_recovery() {
+        let worker = PreviewWorker::default();
+        worker.cancel(1, || Ok(())).unwrap();
+        assert!(worker
+            .with_current::<()>(1, || panic!("native failure"))
+            .unwrap_err()
+            .contains("native failure"));
+        worker.cancel(2, || Ok(())).unwrap();
+        assert_eq!(worker.with_current(2, || Ok(42)).unwrap(), 42);
+    }
+
+    #[test]
+    fn invalid_worker_and_chunk_combinations_are_rejected() {
+        for value in [
+            serde_json::json!({"chunkSize": null, "threadCount": 2}),
+            serde_json::json!({"chunkSize": 48, "threadCount": null}),
+            serde_json::json!({"chunkSize": 64, "threadCount": 1}),
+        ] {
+            assert!(serde_json::from_value::<LoadOptions>(value)
+                .unwrap()
+                .validate()
+                .is_err());
+        }
+    }
+}

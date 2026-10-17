@@ -1,5 +1,3 @@
-import type { PreviewMetadata } from "./renderer"
-
 export type Bootstrap = {
   extensions: string[]
   demos: { name: string; path: string; extension: string }[]
@@ -7,21 +5,53 @@ export type Bootstrap = {
   version: string
   requestId: number
   maxWorkerThreads: number
+  /** Replay of a native viewport failure that predates event listeners. */
+  viewportError: string | null
 }
 export type ThemePreference = "system" | "light" | "dark"
+/** Completed preview statistics serialized by the native `preview-loaded` event. */
+export type Metadata = {
+  blockCount: number
+  blockEntityCount: number
+  triangleCount: number
+  min: [number, number, number]
+  max: [number, number, number]
+  geometryByteLength: number
+  byteLength: number
+  textureCount: number
+  partCount: number
+}
 export type Loading = {
   path: string
   requestId: number
-  phase: "decode" | "mesh" | "upload" | "stream"
+  phase: "decode" | "mesh" | "upload"
   completed: number
   total: number
-  uploadedBytes: number
 }
-export type MeshProgress = { requestId: number; phase: "mesh"; completed: number; total: number }
-export type Loaded = { path: string; metadata: PreviewMetadata; seconds: number }
+export type PreviewProgress = {
+  requestId: number
+  phase: "decode" | "mesh" | "upload"
+  completed: number
+  total: number
+}
+export type Loaded = { path: string; metadata: Metadata; seconds: number }
 export type Notice = { intent: "error" | "success" | "info"; message: string }
 export type DialogKind = "about" | "settings" | "error"
 export type NativeCommand = "register_associations" | "unregister_associations" | "show_licenses"
+/** Camera, grid and stage-layout commands the native viewport applies on the next frame. */
+export type ViewportCommand =
+  | { kind: "orbit"; dx: number; dy: number }
+  | { kind: "pan"; dx: number; dy: number }
+  | { kind: "wheel"; deltaY: number; deltaMode: number }
+  | { kind: "zoom"; factor: number }
+  | { kind: "arrow"; dx: number; dy: number; panning: boolean }
+  | { kind: "fit" }
+  | { kind: "grid"; visible: boolean }
+  /** The visible preview rectangle in CSS pixels; geometry is clipped to it. */
+  | { kind: "stage"; left: number; top: number; width: number; height: number }
+export type PreviewLoaded = { requestId: number; metadata: Metadata }
+export type PreviewFailed = { requestId: number; message: string }
+export type ViewportFailed = { message: string }
 
 export const appName = "Litematica Preview"
 export const numbers = new Intl.NumberFormat()

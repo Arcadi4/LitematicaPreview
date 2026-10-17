@@ -18,9 +18,8 @@ export interface PreviewFooterProps {
 
 function phaseStatus(loading: Loading) {
   if (loading.phase === "decode") return "Decoding…"
-  if (loading.phase === "mesh") return "Generating geometry…"
-  if (loading.phase === "stream") return "Generating and uploading…"
-  return "Uploading to graphics device…"
+  if (loading.phase === "upload") return "Finishing GPU uploads…"
+  return "Generating geometry…"
 }
 
 function LoadedSummary({ loaded }: { loaded: Loaded }) {
@@ -62,12 +61,9 @@ function IdleSummary({
           {previewMemory === null ? (
             <span>Sampling memory…</span>
           ) : (
-            <span title="Host and decoder private working sets (resident private pages only). WebView2 and GPU memory are excluded.">
-              Process memory {formatMB(previewMemory)}
+            <span title="Host process private working set (resident private pages only). WebView2 and GPU memory are excluded.">
+              Host memory {formatMB(previewMemory)}
             </span>
-          )}
-          {(loading.phase === "upload" || loading.phase === "stream") && (
-            <span>{formatMB(loading.uploadedBytes)} model data uploaded</span>
           )}
         </div>
       )}

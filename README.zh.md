@@ -20,7 +20,7 @@ Litematica Preview 是一款适用于 Windows 桌面的 Minecraft 投影与结�
 
 ## 亮点
 
-- 使用 WebGL 2 和 Nucleation，在本地以带纹理的 3D 视图预览七种 Minecraft 投影与结构格式。
+- 使用原生 wgpu（Direct3D 12）和 Nucleation，在本地以带纹理的 3D 视图预览七种 Minecraft 投影与结构格式。
 - 通过紧凑解码和分块预览加载大型 `.litematic` 文件，避免常驻完整解压后的文件内容。
 - 并行生成与上传几何数据，可调整分块大小、工作线程数和内存调度方式。
 - 在独立进程中解码，可选内存限制，并显示加载进度。
@@ -54,7 +54,7 @@ Litematica Preview 是一款适用于 Windows 桌面的 Minecraft 投影与结�
 
 解码、网格打包和纹理首次使用时的准备工作由
 [LitematicaPreview Core](https://github.com/Arcadi4/litematica-preview-core) 完成。
-宿主直接传输准备好的字节，WebGL 无需再次转换顶点属性。
+宿主将准备好的字节直接传输进原生渲染器（wgpu/Direct3D 12），不会转换顶点属性或重排索引。
 
 在开发模式下运行桌面应用：
 

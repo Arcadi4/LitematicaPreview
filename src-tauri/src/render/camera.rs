@@ -372,6 +372,26 @@ mod tests {
     }
 
     #[test]
+    fn final_bounds_preserve_the_manipulated_world_space_view() {
+        let mut camera = model_camera();
+        camera.resize(800.0, 600.0);
+        camera.orbit(31.0, -17.0);
+        camera.pan(42.0, -23.0);
+        camera.zoom(1.4);
+        let points = [[1.0, 0.0, -1.0], [2.0, 1.0, 0.0], [-1.0, 2.0, 1.0]];
+        let before = points.map(|point| project(&camera, point));
+        camera.clear_dirty();
+        camera.update_model_bounds([-0.5, -1.0, -2.0], [2.0, 1.5, 0.5]);
+        assert!(camera.dirty());
+        for (point, before) in points.into_iter().zip(before) {
+            let after = project(&camera, point);
+            for axis in 0..2 {
+                assert!((after[axis] - before[axis]).abs() < 1e-5);
+            }
+        }
+    }
+
+    #[test]
     fn zoom_clamps_to_fitted_ratio() {
         let mut camera = model_camera();
         camera.zoom(1e6);

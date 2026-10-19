@@ -3,13 +3,14 @@ use std::io::Read;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use litematica_preview_core::{MeshBatch, MeshStream, PreviewInfo, PreviewOptions};
 use nucleation::formats::limits::DecodeLimits;
 use nucleation::meshing::ResourcePackSource;
-use serde::Serialize;
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -41,7 +42,7 @@ impl LoadOptions {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Metadata {
     pub block_count: i64,
@@ -69,13 +70,14 @@ impl Metadata {
     }
 }
 
-type Job = Box<dyn FnOnce(&mut Option<ResourcePackSource>) + Send>;
+type Job = Box<dyn FnOnce(&mut Option<crate::preview_process::DecoderProcess>) + Send>;
 
 #[derive(Default)]
 struct Schedule {
     pending: Option<Job>,
     running: bool,
-    pack: Option<ResourcePackSource>,
+    decoder: Option<crate::preview_process::DecoderProcess>,
+    control: Option<Arc<crate::preview_process::DecoderControl>>,
 }
 
 #[derive(Default)]
@@ -87,24 +89,31 @@ pub struct PreviewWorker {
 
 impl PreviewWorker {
     pub fn begin_session(&self) -> u64 {
-        let mut schedule = self.schedule.lock().unwrap_or_else(|e| e.into_inner());
-        let id = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
-        schedule.pending = None;
-        self.active_request.store(0, Ordering::Release);
+        let (id, control, decoder) = {
+            let mut schedule = self.schedule.lock();
+            let id = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+            schedule.pending = None;
+            self.active_request.store(0, Ordering::Release);
+            let control = schedule.control.take();
+            if let Some(control) = &control {
+                control.invalidate();
+            }
+            (id, control, schedule.decoder.take())
+        };
+        if let Some(control) = control {
+            control.stop();
+        }
+        drop(decoder);
         id
     }
 
-    /// Generation changes and scene mutations share this lock. An old worker can
-    /// finish its native call, but cannot mutate a newer scene or emit its result.
+    /// Serializes generation changes with scene mutations and result emission.
     pub fn with_current<T>(
         &self,
         id: u64,
         action: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
-        let _schedule = self
-            .schedule
-            .lock()
-            .map_err(|_| "The preview scheduler is unavailable.")?;
+        let _schedule = self.schedule.lock();
         self.ensure_current(id)?;
         catch_unwind(AssertUnwindSafe(action)).unwrap_or_else(|panic| Err(panic_message(panic)))
     }
@@ -115,60 +124,80 @@ impl PreviewWorker {
         prepare: impl FnOnce() -> Result<(), String>,
         job: Job,
     ) -> Result<(), String> {
-        let mut schedule = self
-            .schedule
-            .lock()
-            .map_err(|_| "The preview scheduler is unavailable.")?;
-        if id <= self.generation.load(Ordering::Acquire) {
-            return Err("Cancelled".into());
-        }
-        self.generation.store(id, Ordering::Release);
-        schedule.pending = None;
-        self.active_request.store(id, Ordering::Release);
-        if let Err(error) = catch_unwind(AssertUnwindSafe(prepare))
-            .unwrap_or_else(|panic| Err(panic_message(panic)))
-        {
-            self.active_request.store(0, Ordering::Release);
-            return Err(error);
-        }
-        schedule.pending = Some(job);
-        if !schedule.running {
-            schedule.running = true;
-            let worker = Arc::clone(self);
-            if let Err(error) = std::thread::Builder::new()
-                .name("preview-session".into())
-                .spawn(move || worker.run())
-            {
-                schedule.pending = None;
-                schedule.running = false;
-                self.active_request.store(0, Ordering::Release);
-                return Err(format!("Unable to start the preview worker: {error}"));
+        let mut interrupted = None;
+        let result = (|| {
+            let mut schedule = self.schedule.lock();
+            if id <= self.generation.load(Ordering::Acquire) {
+                return Err("Cancelled".into());
             }
+            self.generation.store(id, Ordering::Release);
+            schedule.pending = None;
+            if self.active_request.swap(id, Ordering::AcqRel) != 0 {
+                interrupted = schedule.control.take();
+                if let Some(control) = &interrupted {
+                    control.invalidate();
+                }
+            }
+            if let Err(error) = catch_unwind(AssertUnwindSafe(prepare))
+                .unwrap_or_else(|panic| Err(panic_message(panic)))
+            {
+                self.active_request.store(0, Ordering::Release);
+                return Err(error);
+            }
+            schedule.pending = Some(job);
+            if !schedule.running {
+                schedule.running = true;
+                let worker = Arc::clone(self);
+                if let Err(error) = std::thread::Builder::new()
+                    .name("preview-session".into())
+                    .spawn(move || worker.run())
+                {
+                    schedule.pending = None;
+                    schedule.running = false;
+                    self.active_request.store(0, Ordering::Release);
+                    return Err(format!("Unable to start the preview worker: {error}"));
+                }
+            }
+            Ok(())
+        })();
+        if let Some(control) = interrupted {
+            control.stop();
         }
-        Ok(())
+        result
     }
 
     fn run(&self) {
-        let mut pack = self
-            .schedule
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .pack
-            .take();
+        let mut decoder = self.schedule.lock().decoder.take();
         loop {
             let job = {
-                let mut schedule = self.schedule.lock().unwrap_or_else(|e| e.into_inner());
+                let mut schedule = self.schedule.lock();
                 match schedule.pending.take() {
-                    Some(job) => job,
+                    Some(job) => Some(job),
                     None => {
-                        schedule.pack = pack;
+                        if schedule.control.is_some() {
+                            schedule.decoder = decoder.take();
+                        }
                         schedule.running = false;
-                        return;
+                        None
                     }
                 }
             };
-            job(&mut pack);
+            let Some(job) = job else {
+                return;
+            };
+            job(&mut decoder);
         }
+    }
+
+    pub(crate) fn register_decoder(
+        &self,
+        id: u64,
+        control: Arc<crate::preview_process::DecoderControl>,
+    ) -> Result<(), String> {
+        let mut schedule = self.schedule.lock();
+        self.ensure_current(id)?;
+        schedule.control = Some(control);
+        Ok(())
     }
 
     pub fn cancel(
@@ -176,17 +205,27 @@ impl PreviewWorker {
         id: u64,
         clear: impl FnOnce() -> Result<(), String>,
     ) -> Result<(), String> {
-        let mut schedule = self
-            .schedule
-            .lock()
-            .map_err(|_| "The preview scheduler is unavailable.")?;
-        if id < self.generation.load(Ordering::Acquire) {
-            return Ok(());
+        let (result, control, decoder) = {
+            let mut schedule = self.schedule.lock();
+            if id < self.generation.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            self.generation.store(id, Ordering::Release);
+            self.active_request.store(0, Ordering::Release);
+            schedule.pending = None;
+            let result = catch_unwind(AssertUnwindSafe(clear))
+                .unwrap_or_else(|panic| Err(panic_message(panic)));
+            let control = schedule.control.take();
+            if let Some(control) = &control {
+                control.invalidate();
+            }
+            (result, control, schedule.decoder.take())
+        };
+        if let Some(control) = control {
+            control.stop();
         }
-        self.generation.store(id, Ordering::Release);
-        self.active_request.store(0, Ordering::Release);
-        schedule.pending = None;
-        catch_unwind(AssertUnwindSafe(clear)).unwrap_or_else(|panic| Err(panic_message(panic)))
+        drop(decoder);
+        result
     }
 
     pub fn ensure_current(&self, id: u64) -> Result<(), String> {
@@ -207,7 +246,8 @@ impl PreviewWorker {
         if self.active_request.load(Ordering::Acquire) != id || self.ensure_current(id).is_err() {
             return None;
         }
-        let memory = host_memory();
+        let control = self.schedule.lock().control.clone();
+        let memory = crate::preview_process::preview_memory(control.as_deref());
         (self.active_request.load(Ordering::Acquire) == id && self.ensure_current(id).is_ok())
             .then_some(memory)
             .flatten()
@@ -223,9 +263,8 @@ fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
     format!("The preview worker encountered an internal error: {detail}")
 }
 
-/// The decoded source and cached pack outlive the borrowing stream on this
-/// stack. Only the batch crosses into the renderer; no self-reference is stored.
-pub fn load(
+/// The decoded source and cached pack outlive the borrowing mesh stream.
+pub fn decode(
     path: &Path,
     pack_path: &Path,
     pack: &mut Option<ResourcePackSource>,
@@ -246,8 +285,7 @@ pub fn load(
                     .map_err(|e| format!("The bundled block resources are invalid: {e}"))?,
             );
         }
-        // Match Core's representation limits and independent NBT stack bound;
-        // memory enforcement is deliberately suspended for this in-process path.
+        // Representation bounds are independent of the Windows job's hard cap.
         let limits = DecodeLimits {
             max_input_bytes: isize::MAX as usize,
             max_decompressed_bytes: isize::MAX as usize,
@@ -376,31 +414,6 @@ fn read_file(path: &Path, current: impl Fn() -> Result<(), String>) -> Result<Ve
         return Err("Choose a nonempty schematic.".into());
     }
     Ok(bytes)
-}
-
-#[cfg(windows)]
-fn host_memory() -> Option<u64> {
-    use windows_sys::Win32::System::ProcessStatus::{
-        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX2,
-    };
-    use windows_sys::Win32::System::Threading::GetCurrentProcess;
-    let mut counters = PROCESS_MEMORY_COUNTERS_EX2 {
-        cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX2>() as u32,
-        ..Default::default()
-    };
-    let ok = unsafe {
-        GetProcessMemoryInfo(
-            GetCurrentProcess(),
-            (&mut counters as *mut PROCESS_MEMORY_COUNTERS_EX2).cast(),
-            std::mem::size_of_val(&counters) as u32,
-        )
-    };
-    (ok != 0).then_some(counters.PrivateWorkingSetSize as u64)
-}
-
-#[cfg(not(windows))]
-fn host_memory() -> Option<u64> {
-    None
 }
 
 #[cfg(test)]

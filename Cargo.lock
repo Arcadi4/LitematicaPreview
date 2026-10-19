@@ -2216,6 +2216,7 @@ version = "0.3.1"
 dependencies = [
  "litematica-preview-core",
  "nucleation",
+ "parking_lot",
  "pollster",
  "serde",
  "serde_json",

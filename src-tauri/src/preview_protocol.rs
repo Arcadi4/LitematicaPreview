@@ -368,3 +368,107 @@ trait WriteWire: Write {
     }
 }
 impl<T: Write + ?Sized> WriteWire for T {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn triangle() -> MeshBatch {
+        let mut geometry = vec![0; 80];
+        geometry[72..78].copy_from_slice(&[0, 0, 1, 0, 2, 0]);
+        MeshBatch {
+            geometry,
+            vertex_stride: 24,
+            parts: vec![MeshPart {
+                vertex_offset: 0,
+                index_offset: 72,
+                vertex_count: 3,
+                index_count: 3,
+                index_size: 2,
+                alpha_mode: 2,
+                texture_index: 7,
+                min: [-1.0, 0.0, 2.0],
+                max: [1.0, 3.0, 2.0],
+            }],
+            textures: vec![Texture {
+                index: 7,
+                pixels: vec![12, 34, 56, 78],
+                width: 1,
+                height: 1,
+                repeat: true,
+            }],
+            origin: [-1.0, 0.0, 2.0],
+            extent: [2.0, 3.0, 0.0],
+            source_min: [-16.0; 3],
+            source_max: [16.0; 3],
+            chunk_coord: Some((-1, 0, 1)),
+            vertex_count: 3,
+            index_count: 3,
+            info: PreviewInfo {
+                triangle_count: 1,
+                part_count: 1,
+                texture_count: 8,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn raw_transfer_preserves_draw_ranges_materials_and_texture_pixels() {
+        for stride in [24, 28] {
+            let mut expected = triangle();
+            let index_offset = stride as usize * 3;
+            expected.vertex_stride = stride;
+            expected.geometry = vec![0; (index_offset + 6).next_multiple_of(4)];
+            expected.geometry[index_offset..index_offset + 6].copy_from_slice(&[0, 0, 1, 0, 2, 0]);
+            expected.parts[0].index_offset = index_offset;
+            let mut bytes = Vec::new();
+            batch(&mut bytes, &expected).unwrap();
+            let Event::Batch(actual) = receive(bytes.as_slice()).unwrap() else {
+                panic!("expected geometry");
+            };
+            assert_eq!(actual.geometry, expected.geometry);
+            assert_eq!(actual.vertex_stride, expected.vertex_stride);
+            assert_eq!(actual.parts[0].index_offset, expected.parts[0].index_offset);
+            assert_eq!(actual.parts[0].index_size, 2);
+            assert_eq!(actual.parts[0].alpha_mode, 2);
+            assert_eq!(actual.parts[0].texture_index, actual.textures[0].index);
+            assert_eq!(actual.parts[0].min, expected.parts[0].min);
+            assert_eq!(actual.parts[0].max, expected.parts[0].max);
+            assert_eq!(actual.textures[0].pixels, [12, 34, 56, 78]);
+            assert!(actual.textures[0].repeat);
+            assert_eq!(actual.chunk_coord, Some((-1, 0, 1)));
+            assert_eq!(actual.origin, expected.origin);
+            assert_eq!(actual.extent, expected.extent);
+            assert_eq!(actual.info.triangle_count, 1);
+        }
+    }
+
+    #[test]
+    fn oversized_batch_is_rejected_before_reading_or_allocating_geometry() {
+        let mut bytes = vec![3];
+        bytes.extend_from_slice(&((MAX_BATCH_BYTES as u64) + 4).to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        assert!(
+            matches!(receive(bytes.as_slice()), Err(error) if error.kind() == io::ErrorKind::InvalidData)
+        );
+    }
+
+    #[test]
+    fn out_of_bounds_draw_and_truncated_pixels_fail_the_transfer() {
+        let mut malformed = triangle();
+        malformed.parts[0].index_offset = 80;
+        let mut bytes = Vec::new();
+        batch(&mut bytes, &malformed).unwrap();
+        assert!(
+            matches!(receive(bytes.as_slice()), Err(error) if error.kind() == io::ErrorKind::InvalidData)
+        );
+        bytes.clear();
+        batch(&mut bytes, &triangle()).unwrap();
+        bytes.pop();
+        assert!(
+            matches!(receive(bytes.as_slice()), Err(error) if error.kind() == io::ErrorKind::UnexpectedEof)
+        );
+    }
+}

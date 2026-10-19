@@ -423,7 +423,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn queued_reload_keeps_only_latest_and_never_overlaps_native_calls() {
+    fn queued_reload_keeps_only_latest_and_never_overlaps_jobs() {
         let worker = Arc::new(PreviewWorker::default());
         let (started_tx, started) = mpsc::channel();
         let (resume_tx, resume) = mpsc::channel();
@@ -500,6 +500,85 @@ mod tests {
             .contains("native failure"));
         worker.cancel(2, || Ok(())).unwrap();
         assert_eq!(worker.with_current(2, || Ok(42)).unwrap(), 42);
+    }
+
+    #[test]
+    fn cancel_discards_queued_work_and_allows_a_new_session_to_recover() {
+        let worker = Arc::new(PreviewWorker::default());
+        let (started_tx, started) = mpsc::channel();
+        let (resume_tx, resume) = mpsc::channel();
+        let (done_tx, done) = mpsc::channel();
+        let active_worker = Arc::clone(&worker);
+        worker
+            .submit(
+                1,
+                || Ok(()),
+                Box::new(move |_| {
+                    started_tx.send(()).unwrap();
+                    resume.recv_timeout(Duration::from_secs(5)).unwrap();
+                    assert_eq!(active_worker.ensure_current(1).unwrap_err(), "Cancelled");
+                }),
+            )
+            .unwrap();
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        let obsolete_tx = done_tx.clone();
+        worker
+            .submit(
+                2,
+                || Ok(()),
+                Box::new(move |_| {
+                    obsolete_tx.send(2).unwrap();
+                }),
+            )
+            .unwrap();
+        let mut cleared = false;
+        worker
+            .cancel(3, || {
+                cleared = true;
+                Ok(())
+            })
+            .unwrap();
+        assert!(cleared);
+        worker
+            .submit(
+                4,
+                || Ok(()),
+                Box::new(move |_| {
+                    done_tx.send(4).unwrap();
+                }),
+            )
+            .unwrap();
+        resume_tx.send(()).unwrap();
+        assert_eq!(done.recv_timeout(Duration::from_secs(5)).unwrap(), 4);
+        assert!(done.recv_timeout(Duration::from_millis(20)).is_err());
+    }
+
+    #[test]
+    fn failed_prepare_does_not_start_its_job_or_block_the_next_request() {
+        let worker = Arc::new(PreviewWorker::default());
+        assert_eq!(
+            worker
+                .submit(
+                    1,
+                    || Err("viewport failure".into()),
+                    Box::new(|_| {
+                        panic!("failed preparation must not start a decoder");
+                    })
+                )
+                .unwrap_err(),
+            "viewport failure"
+        );
+        let (done_tx, done) = mpsc::channel();
+        worker
+            .submit(
+                2,
+                || Ok(()),
+                Box::new(move |_| {
+                    done_tx.send(()).unwrap();
+                }),
+            )
+            .unwrap();
+        done.recv_timeout(Duration::from_secs(5)).unwrap();
     }
 
     #[test]

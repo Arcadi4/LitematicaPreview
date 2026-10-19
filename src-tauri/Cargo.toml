@@ -24,11 +24,15 @@ litematica-preview-core = "0.1.4"
 nucleation = { version = "=0.10.14", default-features = false, features = ["meshing"] }
 wgpu = "30.0.1"
 pollster = "1.0.1"
+parking_lot = "0.12"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Cryptography",
+  "Win32_System_JobObjects",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
   "Win32_System_ProcessStatus",

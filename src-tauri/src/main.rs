@@ -3,6 +3,8 @@
 mod associations;
 mod formats;
 mod preview;
+mod preview_process;
+mod preview_protocol;
 mod render;
 mod resources;
 
@@ -229,7 +231,7 @@ fn start_preview(
                 renderer.render().map_err(|error| error.to_string())
             })?
         },
-        Box::new(move |pack| {
+        Box::new(move |decoder| {
             let current = || job_worker.ensure_current(request_id);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 current()?;
@@ -238,12 +240,13 @@ fn start_preview(
                         renderer.upload_window(usize::from(options.thread_count.unwrap_or(1)))
                     })
                 })?;
-                let metadata = preview::load(
+                let metadata = preview_process::load(
+                    decoder,
+                    &job_worker,
+                    request_id,
                     &path,
                     &pack_path,
-                    pack,
                     options,
-                    &current,
                     |min, max| {
                         job_worker.with_current(request_id, || {
                             with_renderer(&renderer, |renderer| renderer.prepare_load(min, max))
@@ -295,7 +298,7 @@ fn start_preview(
                 })
             }))
             .unwrap_or_else(|panic| {
-                *pack = None;
+                *decoder = None;
                 let detail = panic
                     .downcast_ref::<String>()
                     .map(String::as_str)
@@ -612,6 +615,17 @@ fn run() -> Result<(), String> {
 fn main() {
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
+    if first.as_deref() == Some(std::ffi::OsStr::new("--preview-worker")) {
+        let result = match (args.next(), args.next()) {
+            (Some(port), None) => preview_process::run(&port),
+            _ => Err("Pass exactly one decoder connection port.".into()),
+        };
+        if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     let remaining: Vec<_> = args.collect();
     let registration = match first.as_deref().and_then(|arg| arg.to_str()) {

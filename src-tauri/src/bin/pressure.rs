@@ -6,6 +6,10 @@
 //! scene for timed frames) and reports full-render latency; the `warm` phase
 //! reuses one decoder child across four Atrium loads to detect growth.
 //!
+//! A software adapter still uploads and drains every batch, but frame timings
+//! are skipped: CPU rasterization makes them noise and dominates wall time.
+//! `--no-render` does the same on a hardware adapter.
+//!
 //! `--preview-worker <port>` plays the decoder child role. The cold pass
 //! spawns this binary through `DecoderProcess`, so the branch must match
 //! `main.rs`.
@@ -279,6 +283,7 @@ struct Settings {
     threads: u8,
     chunk: u16,
     frames: u32,
+    render: bool,
     out: PathBuf,
     compare: Option<PathBuf>,
     write_baselines: bool,
@@ -302,6 +307,7 @@ fn parse_args(arguments: &[String]) -> Result<Settings, String> {
         threads: 4,
         chunk: 32,
         frames: 90,
+        render: true,
         out: repo_root().join("target/pressure"),
         compare: None,
         write_baselines: false,
@@ -359,6 +365,10 @@ fn parse_args(arguments: &[String]) -> Result<Settings, String> {
                     .filter(|name| !name.is_empty())
                     .collect();
                 index += 2;
+            }
+            "--no-render" => {
+                settings.render = false;
+                index += 1;
             }
             "--write-baselines" => {
                 settings.write_baselines = true;
@@ -470,6 +480,10 @@ struct Rig {
     samples: u32,
     format: wgpu::TextureFormat,
     adapter: String,
+    /// Software adapters rasterize whole frames on the CPU, so their frame
+    /// latencies are noise and dominate wall time. Those loads keep the
+    /// upload and memory path but skip every draw.
+    hardware: bool,
     target: Offscreen,
 }
 
@@ -534,7 +548,7 @@ impl Offscreen {
     }
 }
 
-fn request_rig() -> Result<Rig, String> {
+fn request_rig() -> Result<(Rig, Option<String>), String> {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = RIG_BACKENDS;
     let instance = wgpu::Instance::new(descriptor);
@@ -544,6 +558,8 @@ fn request_rig() -> Result<Rig, String> {
         ..Default::default()
     }))
     .map_err(|error| format!("The platform adapter is unavailable: {error}"))?;
+    let info = adapter.get_info();
+    let hardware = info.device_type != wgpu::DeviceType::Cpu;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("pressure renderer"),
         required_limits: wgpu::Limits::default(),
@@ -566,17 +582,26 @@ fn request_rig() -> Result<Rig, String> {
         format,
         wgpu::TextureFormat::Depth24Plus,
     );
-    let adapter_text = format!("{:?}", adapter.get_info());
     let target = Offscreen::create(&device, format, samples);
-    Ok(Rig {
-        adapter: adapter_text,
-        device,
-        queue,
-        pipelines,
-        samples,
-        format,
-        target,
-    })
+    let notice = (!hardware).then(|| {
+        format!(
+            "{} is a software adapter; frame timings are skipped and only load and memory metrics are reported",
+            info.name
+        )
+    });
+    Ok((
+        Rig {
+            adapter: format!("{info:?}"),
+            device,
+            queue,
+            pipelines,
+            samples,
+            format,
+            hardware,
+            target,
+        },
+        notice,
+    ))
 }
 
 fn encode_frame(
@@ -783,6 +808,9 @@ struct OutcomeRow {
     frames_p95_ms: f64,
     frames_max_ms: f64,
     frames_growth_bytes: i64,
+    /// Absent from older reports, which always rendered frames.
+    #[serde(default)]
+    frames_measured: u32,
     samples: u32,
     host_peak: Option<u64>,
     child_peak: Option<u64>,
@@ -806,6 +834,7 @@ struct LoadState {
     rig: Option<Arc<Rig>>,
     upload: Option<Arc<render::upload::UploadWindow>>,
     scene: Option<render::scene::Scene>,
+    render_frames: bool,
     camera: render::camera::Camera,
     stamps: Stamps,
     tally: Tally,
@@ -830,7 +859,8 @@ struct Tally {
 }
 
 impl LoadState {
-    fn new(rig: Option<Arc<Rig>>, threads: u8, frames_target: u32) -> Self {
+    fn new(rig: Option<Arc<Rig>>, threads: u8, frames_target: u32, render: bool) -> Self {
+        let render_frames = render && rig.as_ref().is_some_and(|rig| rig.hardware);
         let upload = rig.as_ref().map(|rig| {
             Arc::new(render::upload::UploadWindow::with_device(
                 render::upload::DeviceStatus::new(rig.device.clone()),
@@ -844,6 +874,7 @@ impl LoadState {
             rig,
             upload,
             scene,
+            render_frames,
             camera: render::camera::Camera::new(),
             stamps: Stamps {
                 job_start: Instant::now(),
@@ -935,6 +966,9 @@ impl LoadState {
         scene
             .attach_batch(&rig.pipelines, batch, permit)
             .map_err(|error| error.to_string())?;
+        if !self.render_frames {
+            return Ok(());
+        }
         // Renders at most once every 50 ms during the stream, matching the
         // `NativeRenderer::attach_batch` cadence the app ships.
         let due = self.has_visible
@@ -967,6 +1001,11 @@ impl LoadState {
             upload.drain(current)?;
         }
         self.streaming_peak_bytes = meter::AllocationMeter::peak();
+        if !self.render_frames {
+            self.scene = None;
+            self.stamps.stream_end = Some(Instant::now());
+            return Ok(());
+        }
         let Some(rig) = self.rig.as_ref() else {
             self.stamps.stream_end = Some(Instant::now());
             return Ok(());
@@ -1045,6 +1084,7 @@ impl LoadState {
             frames_p95_ms: percentile(self.frames.clone(), 0.95),
             frames_max_ms: self.frames.iter().cloned().fold(0.0, f64::max),
             frames_growth_bytes: frames_growth,
+            frames_measured: self.frames.len() as u32,
             samples: summary.samples,
             host_peak: summary.host_peak,
             child_peak: summary.child_peak,
@@ -1078,6 +1118,7 @@ fn run_load(
         rig,
         settings.threads,
         settings.frames,
+        settings.render,
     )));
     let (sender, receiver) = mpsc::channel::<OutcomeRow>();
     let mut watch = start_watch(Arc::clone(&worker), id);
@@ -1522,19 +1563,25 @@ fn report_metrics(report: &Report) -> Vec<(String, f64)> {
             ("decode_ms", row.decode_ms),
             ("stream_open_ms", row.stream_open_ms),
             ("first_batch_ms", row.first_batch_ms),
-            ("first_frame_ms", row.first_frame_ms),
-            ("full_render_ms", row.full_render_ms),
             (
                 "child_peak_mb",
                 row.child_peak.map(|v| v as f64 / 1048576.0).unwrap_or(0.0),
             ),
-            ("frames_p50_ms", row.frames_p50_ms),
-            ("frames_p95_ms", row.frames_p95_ms),
             ("staged_mb", mb_bytes(row.staged_bytes)),
             ("batches", row.batches as f64),
             ("triangles_m", row.triangles as f64 / 1_000_000.0),
         ] {
             rows.push((format!("{tag}/{suffix}"), value));
+        }
+        if row.frames_measured > 0 {
+            for (suffix, value) in [
+                ("first_frame_ms", row.first_frame_ms),
+                ("full_render_ms", row.full_render_ms),
+                ("frames_p50_ms", row.frames_p50_ms),
+                ("frames_p95_ms", row.frames_p95_ms),
+            ] {
+                rows.push((format!("{tag}/{suffix}"), value));
+            }
         }
     }
     rows
@@ -1676,8 +1723,16 @@ fn rendered_markdown(
                     format!("{}", row.batches),
                     mb_opt(row.child_peak),
                     num_opt(row.decoder_cap_percent),
-                    format!("{:.1} / {:.1}", row.frames_p50_ms, row.frames_p95_ms),
-                    format!("{:.1}", row.frames_growth_bytes as f64 / 1024.0),
+                    if row.frames_measured == 0 {
+                        String::from("-")
+                    } else {
+                        format!("{:.1} / {:.1}", row.frames_p50_ms, row.frames_p95_ms)
+                    },
+                    if row.frames_measured == 0 {
+                        String::from("-")
+                    } else {
+                        format!("{:.1}", row.frames_growth_bytes as f64 / 1024.0)
+                    },
                     mb_opt(row.host_peak),
                     format!("{:.2}", mb(row.retained_bytes)),
                 ]
@@ -1879,6 +1934,9 @@ fn run_suite(settings: &Settings) -> ExitCode {
         if let Some(notice) = gpu_notice {
             warnings.push(notice);
         }
+        if !settings.render {
+            warnings.push(String::from("Frame timings skipped by --no-render"));
+        }
     }
     if passes.iter().any(|pass| pass == "warm") {
         let rows = warm_loads(settings);
@@ -1938,10 +1996,10 @@ fn run_cold_pass(
     let mut rows = Vec::new();
     let mut breaches = Vec::new();
     let (rig, gpu_notice): (Option<Arc<Rig>>, Option<String>) = match request_rig() {
-        Ok(rig) => (Some(Arc::new(rig)), None),
+        Ok((rig, notice)) => (Some(Arc::new(rig)), notice),
         Err(notice) => (None, Some(notice)),
     };
-    let gpu_available = rig.is_some();
+    let frames_reported = settings.render && rig.as_ref().is_some_and(|rig| rig.hardware);
     let adapter = rig.as_ref().map(|rig| GpuMeta {
         adapter: rig.adapter.clone(),
         samples: rig.samples,
@@ -1954,7 +2012,7 @@ fn run_cold_pass(
         if let Some(error) = &row.error {
             breaches.push(format!("cold {}: {error}", row.fixture));
         }
-        breaches.extend(check_cold(&row, gpu_available));
+        breaches.extend(check_cold(&row, frames_reported));
         rows.push(row);
     }
     (rows, breaches, gpu_notice, adapter)

@@ -5,28 +5,29 @@ Windows x64 desktop app for offline Minecraft schematic and structure viewing (T
 - **Architecture**: Host (`src-tauri/`) embeds a Direct3D 12 wgpu renderer drawing directly into the main window beneath a transparent WebView2 overlay (`src/`). The frontend manages UI state and controls; it renders zero canvas pixels.
 - **Shared Core**: Geometry decoding, caching, and meshing logic live in `litematica-preview-core` (consumed from crates.io; override via `LP_CORE_PATH=../litematica-preview-core`).
 - **Formats**: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, `.nusn` (defined in `src-tauri/src/main.rs`).
-- **Assets & Fixtures**: Default pack in `Assets/pack.zip`. Test fixtures in `Fixtures/Demos/` and `Fixtures/Formats/`.
+- **Assets & Fixtures**: Default pack in `Assets/pack.zip`. Test fixtures in `Fixtures/Demos/` and `Fixtures/Formats/`; million-block pressure fixtures in `Fixtures/Pressure/` with pinned decode counts in `baselines.json` (refresh with `pnpm run pressure:host -- --write-baselines`).
 
 ## Commands
 
 Package manager is `pnpm` (v12). Vite+ (`vp`) powers the web toolchain; `tsx` runs project scripts.
 
-| Task                    | Command                                                                  | Notes                                             |
-| ----------------------- | ------------------------------------------------------------------------ | ------------------------------------------------- |
-| Install dependencies    | `pnpm install --frozen-lockfile`                                         |                                                   |
-| App dev (hot reload)    | `pnpm run tauri:dev`                                                     | Windows                                           |
-| Web dev server          | `pnpm run dev`                                                           | Port 1420                                         |
-| Web build & preview     | `pnpm run build && pnpm run preview`                                     | `tsc --noEmit && vp build`                        |
-| Full CI check           | `pnpm run check`                                                         | Runs lint, format, build, frontend and host tests |
-| Lint & format           | `pnpm run lint` / `pnpm run format`                                      | Oxlint & Oxfmt (`vp fmt`)                         |
-| Frontend tests          | `pnpm run test`                                                          | Vitest via `vp test run`                          |
-| Rust checks             | `pnpm run check:host`                                                    | `cargo check --all-targets --locked`              |
-| Rust tests              | `pnpm run test:host`                                                     | `cargo test --locked`                             |
-| Rust format check       | `pnpm run format:rust`                                                   | `cargo fmt -- --check`                            |
-| Test against local core | `LP_CORE_PATH=<path> pnpm run test:host`                                 | Run `pnpm run resolve:host` to revert             |
-| Version check / bump    | `pnpm run version:check` / `pnpm run version:bump [patch\|minor\|major]` | Syncs package.json, Cargo, and tauri configs      |
-| Windows package build   | `pnpm run build:win`                                                     | Creates portable zip & NSIS setup in `artifacts/` |
-| Release checksums       | `pnpm run checksums`                                                     | Generates `artifacts/SHA256SUMS.txt`              |
+| Task                    | Command                                                                  | Notes                                                            |
+| ----------------------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| Install dependencies    | `pnpm install --frozen-lockfile`                                         |                                                                  |
+| App dev (hot reload)    | `pnpm run tauri:dev`                                                     | Windows                                                          |
+| Web dev server          | `pnpm run dev`                                                           | Port 1420                                                        |
+| Web build & preview     | `pnpm run build && pnpm run preview`                                     | `tsc --noEmit && vp build`                                       |
+| Full CI check           | `pnpm run check`                                                         | Runs lint, format, build, frontend and host tests                |
+| Lint & format           | `pnpm run lint` / `pnpm run format`                                      | Oxlint & Oxfmt (`vp fmt`)                                        |
+| Frontend tests          | `pnpm run test`                                                          | Vitest via `vp test run`                                         |
+| Rust checks             | `pnpm run check:host`                                                    | `cargo check --all-targets --locked`                             |
+| Rust tests              | `pnpm run test:host`                                                     | `cargo test --locked`                                            |
+| Rust format check       | `pnpm run format:rust`                                                   | `cargo fmt -- --check`                                           |
+| Test against local core | `LP_CORE_PATH=<path> pnpm run test:host`                                 | Run `pnpm run resolve:host` to revert                            |
+| Host pressure suite     | `pnpm run pressure:host`                                                 | Release run; breaches exit nonzero; report in `target/pressure/` |
+| Version check / bump    | `pnpm run version:check` / `pnpm run version:bump [patch\|minor\|major]` | Syncs package.json, Cargo, and tauri configs                     |
+| Windows package build   | `pnpm run build:win`                                                     | Creates portable zip & NSIS setup in `artifacts/`                |
+| Release checksums       | `pnpm run checksums`                                                     | Generates `artifacts/SHA256SUMS.txt`                             |
 
 ## Architecture & Operational Constraints
 

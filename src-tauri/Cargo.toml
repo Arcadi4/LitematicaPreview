@@ -8,6 +8,12 @@ publish = false
 name = "LitematicaPreview"
 path = "src/main.rs"
 
+# The pressure suite runs through `cargo run`, never `cargo test`.
+[[bin]]
+name = "pressure"
+path = "src/bin/pressure.rs"
+test = false
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

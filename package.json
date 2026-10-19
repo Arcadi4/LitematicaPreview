@@ -18,6 +18,7 @@
     "format": "vp fmt",
     "lint": "vp lint",
     "preview": "vp preview --host 127.0.0.1",
+    "pressure:host": "tsx scripts/cargo.ts run --release --locked --manifest-path src-tauri/Cargo.toml --bin pressure --",
     "record-memory": "tsx scripts/record-memory.ts",
     "resolve:host": "tsx scripts/cargo.ts update --manifest-path src-tauri/Cargo.toml -p litematica-preview",
     "tauri:dev": "tauri dev",

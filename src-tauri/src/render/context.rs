@@ -482,7 +482,7 @@ impl NativeRenderer {
                             a: 1.0,
                         }),
                         store: if self.color_view.is_some() {
-                            wgpu::StoreOp::Store
+                            wgpu::StoreOp::Discard
                         } else {
                             wgpu::StoreOp::Store
                         },
@@ -493,7 +493,7 @@ impl NativeRenderer {
                         view,
                         depth_ops: Some(wgpu::Operations {
                             load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Store,
+                            store: wgpu::StoreOp::Discard,
                         }),
                         stencil_ops: None,
                     }

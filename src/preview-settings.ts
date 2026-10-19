@@ -9,7 +9,7 @@ export const chunkSizes = [16, 32, 64, 128, 256]
 
 export const defaultPreviewSettings: PreviewSettings = {
   chunkingEnabled: true,
-  chunkSize: 64,
+  chunkSize: 32,
   multithreadingEnabled: true,
   threadCount: 4,
 }

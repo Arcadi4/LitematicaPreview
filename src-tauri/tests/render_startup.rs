@@ -55,9 +55,9 @@ fn dx12_upload_credits_complete_cancel_and_remember_device_loss() {
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
     let status = DeviceStatus::new(device.clone());
     let first = Arc::new(UploadWindow::with_device(Arc::clone(&status), 1));
-    let reserved = first.acquire(&|| Ok(())).unwrap();
+    let reserved = first.acquire(1, &|| Ok(())).unwrap();
     let cancelled = std::cell::Cell::new(false);
-    let result = first.acquire(&|| {
+    let result = first.acquire(1, &|| {
         if cancelled.replace(true) {
             Err(String::from("cancelled"))
         } else {
@@ -67,13 +67,17 @@ fn dx12_upload_credits_complete_cancel_and_remember_device_loss() {
     assert!(matches!(result, Err(error) if error == "cancelled"));
     drop(reserved);
 
-    first.acquire(&|| Ok(())).unwrap().submit(&queue).unwrap();
+    first
+        .acquire(1, &|| Ok(()))
+        .unwrap()
+        .submit(&queue)
+        .unwrap();
     // A separate session must not receive the old session's completion credit.
     let next = Arc::new(UploadWindow::with_device(Arc::clone(&status), 1));
-    let reserved = next.acquire(&|| Ok(())).unwrap();
+    let reserved = next.acquire(1, &|| Ok(())).unwrap();
     first.drain(&|| Ok(())).unwrap();
     let cancelled = std::cell::Cell::new(false);
-    let result = next.acquire(&|| {
+    let result = next.acquire(1, &|| {
         if cancelled.replace(true) {
             Err(String::from("cancelled"))
         } else {
@@ -82,13 +86,13 @@ fn dx12_upload_credits_complete_cancel_and_remember_device_loss() {
     });
     assert!(matches!(result, Err(error) if error == "cancelled"));
     drop(reserved);
-    next.acquire(&|| Ok(())).unwrap().submit(&queue).unwrap();
-    next.acquire(&|| Ok(())).unwrap().submit(&queue).unwrap();
+    next.acquire(1, &|| Ok(())).unwrap().submit(&queue).unwrap();
+    next.acquire(1, &|| Ok(())).unwrap().submit(&queue).unwrap();
     next.drain(&|| Ok(())).unwrap();
 
     device.destroy();
     let _ = device.poll(wgpu::PollType::Poll);
-    assert!(next.acquire(&|| Ok(())).is_err());
+    assert!(next.acquire(1, &|| Ok(())).is_err());
     let after_loss = Arc::new(UploadWindow::with_device(status, 1));
-    assert!(after_loss.acquire(&|| Ok(())).is_err());
+    assert!(after_loss.acquire(1, &|| Ok(())).is_err());
 }

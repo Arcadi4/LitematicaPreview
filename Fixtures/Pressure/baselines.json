@@ -1,0 +1,52 @@
+{
+  "fixtures": [
+    {
+      "name": "Atrium",
+      "blocks": 1121671,
+      "block_entities": 337,
+      "content": [658.0, 253.0, 575.0],
+      "batches": 791,
+      "atlas": [512, 512],
+      "greedy_textures": 40,
+      "triangles": 10707032,
+      "payload_bytes": 580807196,
+      "geometry_extent": [658.0, 253.0, 575.0]
+    },
+    {
+      "name": "Valkyrie",
+      "blocks": 4408947,
+      "block_entities": 2753,
+      "content": [1003.0, 256.0, 1002.0],
+      "batches": 1016,
+      "atlas": [1024, 1024],
+      "greedy_textures": 43,
+      "triangles": 4947124,
+      "payload_bytes": 273516500,
+      "geometry_extent": [1003.0, 256.0, 1002.0000000596046]
+    },
+    {
+      "name": "DenseNonSolid",
+      "blocks": 912632,
+      "block_entities": 0,
+      "content": [97.84776306152344, 97.6500015258789, 97.84776306152344],
+      "batches": 64,
+      "atlas": [2048, 2048],
+      "greedy_textures": 458,
+      "triangles": 28667774,
+      "payload_bytes": 1731545784,
+      "geometry_extent": [97.84776103496552, 97.6500015258789, 97.84776103496552]
+    },
+    {
+      "name": "Concrete",
+      "blocks": 67108864,
+      "block_entities": 0,
+      "content": [256.0, 256.0, 1024.0],
+      "batches": 2048,
+      "atlas": [128, 128],
+      "greedy_textures": 16,
+      "triangles": 2101000,
+      "payload_bytes": 113535920,
+      "geometry_extent": [256.0, 256.0, 1024.0]
+    }
+  ]
+}

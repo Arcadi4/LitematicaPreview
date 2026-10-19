@@ -3,8 +3,7 @@
 //! Presentation goes directly to the main window's swapchain, with no
 //! offscreen target or output pass. An `*Srgb` surface format encodes on store.
 //! Windows uses DX12 only; there is no software fallback.
-//! The sRGB-encoded clear colour is expanded to linear for the `*Srgb` target.
-//! The camera uses CSS pixels; the swapchain uses physical pixels.
+//! The camera uses CSS pixels; the swapchain is bounded by device limits.
 //! Drawn geometry clips to the DOM-reported stage rectangle, while the clear
 //! spans the window.
 //!
@@ -19,7 +18,6 @@ use litematica_preview_core::{MeshBatch, PreviewInfo};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// sRGB-encoded clear colour, expanded to linear by [`clear_color_linear`].
 const CLEAR_SRGB: [f64; 3] = [0.00335, 0.00518, 0.00802];
 
 /// Errors the renderer can hand to the Tauri layer.
@@ -66,6 +64,7 @@ pub struct NativeRenderer {
     pipelines: Pipelines,
     camera: Camera,
     config: wgpu::SurfaceConfiguration,
+    physical_size: (u32, u32),
     /// Physical-pixel to CSS-pixel scale.
     scale: f64,
     /// DOM-reported stage rectangle in CSS pixels.
@@ -147,6 +146,8 @@ impl NativeRenderer {
         let depth_format = wgpu::TextureFormat::Depth24Plus;
         let samples = Self::samples(&adapter, format);
         let pipelines = Pipelines::new(&device, samples, format, depth_format);
+        let physical_size = (width.max(1), height.max(1));
+        let (width, height) = backing_size(physical_size, device.limits().max_texture_dimension_2d);
         let mut config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -171,6 +172,7 @@ impl NativeRenderer {
             pipelines,
             camera,
             config,
+            physical_size,
             scale,
             stage_css: None,
             color_view,
@@ -206,7 +208,6 @@ impl NativeRenderer {
         Self::new_from_raw(handle, Some(display), size)
     }
 
-    /// Negotiate the native adapter's buffer and resolution capabilities.
     fn limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
         let adapter_limits = adapter.limits();
         let max_buffer_size = adapter_limits.max_buffer_size;
@@ -287,6 +288,7 @@ impl NativeRenderer {
         (depth, color)
     }
 
+
     fn rebuild_targets(&mut self) {
         let (depth, color) = self.depth_and_color();
         self.depth_view = Some(depth);
@@ -298,6 +300,11 @@ impl NativeRenderer {
         if width == 0 || height == 0 {
             return;
         }
+        self.physical_size = (width, height);
+        let (width, height) = backing_size(
+            self.physical_size,
+            self.device.limits().max_texture_dimension_2d,
+        );
         if self.config.width != width || self.config.height != height {
             self.config.width = width;
             self.config.height = height;
@@ -337,13 +344,14 @@ impl NativeRenderer {
         let (css_width, css_height) = self.stage_css.map_or_else(
             || {
                 (
-                    (self.config.width as f64 / self.scale) as f32,
-                    (self.config.height as f64 / self.scale) as f32,
+                    (self.physical_size.0 as f64 / self.scale) as f32,
+                    (self.physical_size.1 as f64 / self.scale) as f32,
                 )
             },
             |(_, _, width, height)| (width, height),
         );
         self.camera.resize(css_width, css_height);
+        self.camera.mark_dirty();
     }
 
     pub fn upload_window(&self, capacity: usize) -> Arc<UploadWindow> {
@@ -483,20 +491,19 @@ impl NativeRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if let Some((left, top, width, height)) = self.stage_css {
-                let scale = self.scale as f32;
-                pass.set_viewport(
-                    left * scale,
-                    top * scale,
-                    width * scale,
-                    height * scale,
-                    0.0,
-                    1.0,
-                );
-            }
-            if let Some(scene) = self.scene.as_ref() {
-                let grid_visible = self.camera.grid_visible();
-                scene.draw(&self.pipelines, &mut pass, grid_visible)?;
+            let viewport = map_stage_viewport(
+                self.stage_css,
+                self.scale,
+                self.physical_size,
+                (self.config.width, self.config.height),
+                self.device.limits().max_texture_dimension_2d,
+            );
+            if let Some((left, top, width, height)) = viewport {
+                pass.set_viewport(left, top, width, height, 0.0, 1.0);
+                if let Some(scene) = self.scene.as_ref() {
+                    let grid_visible = self.camera.grid_visible();
+                    scene.draw(&self.pipelines, &mut pass, grid_visible)?;
+                }
             }
         }
         self.queue.submit(Some(encoder.finish()));
@@ -526,6 +533,49 @@ impl NativeRenderer {
     }
 }
 
+fn backing_size((width, height): (u32, u32), max_dimension: u32) -> (u32, u32) {
+    (
+        width.clamp(1, max_dimension),
+        height.clamp(1, max_dimension),
+    )
+}
+
+/// A stale DOM stage can exceed viewport limits while a resize is in flight.
+fn map_stage_viewport(
+    stage_css: Option<(f32, f32, f32, f32)>,
+    scale: f64,
+    physical_size: (u32, u32),
+    backing_size: (u32, u32),
+    max_dimension: u32,
+) -> Option<(f32, f32, f32, f32)> {
+    let Some((left, top, width, height)) = stage_css else {
+        return Some((0.0, 0.0, backing_size.0 as f32, backing_size.1 as f32));
+    };
+    let scale_x = scale * backing_size.0 as f64 / physical_size.0 as f64;
+    let scale_y = scale * backing_size.1 as f64 / physical_size.1 as f64;
+    let [left, top, width, height] = [
+        (left as f64 * scale_x) as f32,
+        (top as f64 * scale_y) as f32,
+        (width as f64 * scale_x) as f32,
+        (height as f64 * scale_y) as f32,
+    ];
+    ([left, top, width, height]
+        .iter()
+        .all(|value| value.is_finite())
+        && left >= 0.0
+        && top >= 0.0
+        && width > 0.0
+        && height > 0.0
+        && left as f64 + width as f64 <= max_dimension as f64
+        && top as f64 + height as f64 <= max_dimension as f64)
+        .then_some((left, top, width, height))
+}
+
+/// Matches the camera buffer size to `FrameCamera::encode`.
+const _: () = {
+    assert!(CAMERA_UNIFORM_BYTES == 80, "camera uniform layout drifted");
+};
+
 fn clear_color_linear() -> [f64; 3] {
     CLEAR_SRGB.map(|channel| {
         // The inverse sRGB transfer function with the standard cutoff.
@@ -536,11 +586,6 @@ fn clear_color_linear() -> [f64; 3] {
         }
     })
 }
-
-/// Matches the camera buffer size to `FrameCamera::encode`.
-const _: () = {
-    assert!(CAMERA_UNIFORM_BYTES == 80, "camera uniform layout drifted");
-};
 
 #[cfg(all(test, windows))]
 mod tests {

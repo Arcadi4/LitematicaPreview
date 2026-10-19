@@ -7,7 +7,7 @@ import { getByRole, type ByRoleMatcher } from "@testing-library/dom"
 import { afterAll, afterEach, beforeAll, test } from "vite-plus/test"
 import { AppDialog, type AppDialogProps } from "./app-dialog"
 import { AppHeader } from "./app-header"
-import type { Bootstrap, DialogKind, ThemePreference } from "./app-model"
+import type { Bootstrap, DialogKind, TexturePackState, ThemePreference } from "./app-model"
 import { defaultPreviewSettings, type PreviewSettings } from "./preview-settings"
 
 declare global {
@@ -26,18 +26,25 @@ const bootstrap: Bootstrap = {
   requestId: 0,
   maxWorkerThreads: 8,
   viewportError: null,
+  texturePacks: { packs: [], selected: null },
+  texturePackError: null,
 }
 const dialogProps: AppDialogProps = {
   actionBusy: false,
   bootstrap,
   dialog: "settings",
   errorDetails: "",
+  onImportTexturePacks: () => {},
   onNativeAction: () => {},
   onOpenChange: () => {},
+  onRemoveTexturePack: () => {},
+  onSelectTexturePack: () => {},
   onSettingsChange: () => {},
   onThemeChange: () => {},
   open: true,
   settings: defaultPreviewSettings,
+  texturePackBusy: false,
+  texturePacks: { packs: [], selected: null },
   theme: "system",
 }
 
@@ -107,7 +114,7 @@ function radio(value: string) {
 test("Settings defaults to Performance and switches to the existing controls reference", async () => {
   await mount(AppDialog, dialogProps)
   assert.equal(byRole("tablist", "Settings sections").getAttribute("aria-orientation"), "vertical")
-  for (const name of ["Performance", "Control", "Appearance"]) byRole("tab", name)
+  for (const name of ["Performance", "Textures", "Control", "Appearance"]) byRole("tab", name)
   assert.equal(byRole("tab", "Performance").getAttribute("aria-selected"), "true")
   assert.ok(selectedPanel().querySelector('input[aria-label="Worker threads"]'))
   assert.equal(getByRole(selectedPanel(), "heading", { name: "Performance" }).tagName, "H2")
@@ -144,6 +151,43 @@ test("Appearance selects the existing theme immediately without changing perform
   assert.ok(radio("dark").checked)
   await click(byRole("tab", "Performance"))
   assert.ok(selectedPanel().querySelector('input[aria-label="Worker threads"]'))
+})
+
+test("Textures selects a saved pack and confirms removal", async () => {
+  const selected: (string | null)[] = []
+  const removed: string[] = []
+  const packs = [{ id: "pack-1", name: "Cottage Textures" }]
+  const texturePacks: TexturePackState = { packs, selected: null }
+  const update = await mount(AppDialog, {
+    ...dialogProps,
+    onRemoveTexturePack: (id) => {
+      removed.push(id)
+    },
+    onSelectTexturePack: (id) => {
+      selected.push(id)
+    },
+    texturePacks,
+  })
+  await click(byRole("tab", "Textures"))
+  const panel = selectedPanel()
+  assert.equal(getByRole(panel, "heading", { name: "Textures" }).tagName, "H2")
+  assert.match(panel.textContent ?? "", /Vanilla \(bundled\)/)
+
+  await click(getByRole(panel, "combobox", { name: "Texture pack" }))
+  await click(getByRole(document.body, "option", { name: "Cottage Textures" }))
+  assert.deepEqual(selected, ["pack-1"])
+
+  await update({
+    ...dialogProps,
+    onRemoveTexturePack: (id) => {
+      removed.push(id)
+    },
+    texturePacks: { ...texturePacks, selected: "pack-1" },
+  })
+  await click(getByRole(selectedPanel(), "button", { name: "Remove saved copy" }))
+  assert.deepEqual(removed, [])
+  await click(getByRole(selectedPanel(), "button", { name: "Remove “Cottage Textures”" }))
+  assert.deepEqual(removed, ["pack-1"])
 })
 
 test("closing and reopening Settings resets navigation to Performance", async () => {

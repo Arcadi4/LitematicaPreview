@@ -217,15 +217,21 @@ impl DecoderProcess {
         &mut self,
         path: &Path,
         pack_path: &Path,
+        custom_pack_path: Option<&Path>,
         options: PreviewOptions,
         current: impl Fn() -> Result<(), String>,
         prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
         mut consume: impl FnMut(MeshBatch) -> Result<(), String>,
         mut progress: impl FnMut(&'static str, u64, u64),
     ) -> Result<Result<Metadata, String>, String> {
-        let request =
-            serde_json::to_vec(&(path, pack_path, options.chunk_size, options.thread_count))
-                .map_err(|e| format!("Unable to describe the decoder request: {e}"))?;
+        let request = serde_json::to_vec(&(
+            path,
+            pack_path,
+            custom_pack_path,
+            options.chunk_size,
+            options.thread_count,
+        ))
+        .map_err(|e| format!("Unable to describe the decoder request: {e}"))?;
         let control = &self.control;
         let stream = self
             .stream
@@ -280,6 +286,7 @@ pub fn load(
     id: u64,
     path: &Path,
     pack_path: &Path,
+    custom_pack_path: Option<&Path>,
     options: PreviewOptions,
     prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
     consume: impl FnMut(MeshBatch) -> Result<(), String>,
@@ -304,6 +311,7 @@ pub fn load(
     let result = process.load(
         path,
         pack_path,
+        custom_pack_path,
         options,
         || worker.ensure_current(id),
         prepared,
@@ -353,12 +361,13 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let mut input = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let output = RefCell::new(BufWriter::new(stream));
-    let mut pack = None;
+    let mut packs = crate::preview::PackCache::default();
     loop {
         let request = wire::read_frame(&mut input, MAX_REQUEST_BYTES).map_err(|e| e.to_string())?;
-        let (path, pack_path, chunk_size, thread_count): (
+        let (path, pack_path, custom_pack_path, chunk_size, thread_count): (
             PathBuf,
             PathBuf,
+            Option<PathBuf>,
             Option<u16>,
             Option<u8>,
         ) = serde_json::from_slice(&request)
@@ -373,7 +382,8 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
         let result = crate::preview::decode(
             &path,
             &pack_path,
-            &mut pack,
+            custom_pack_path.as_deref(),
+            &mut packs,
             options,
             || match transport_error.borrow().as_ref() {
                 Some(error) => Err(format!("The decoder connection failed: {error}")),

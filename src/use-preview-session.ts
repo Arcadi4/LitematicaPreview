@@ -9,6 +9,7 @@ import {
   fileName,
   type Bootstrap,
   type DialogKind,
+  type ImportedTexturePacks,
   type Loaded,
   type Loading,
   type NativeCommand,
@@ -16,6 +17,7 @@ import {
   type PreviewFailed,
   type PreviewLoaded,
   type PreviewProgress,
+  type TexturePackState,
   type ViewportCommand,
   type ViewportFailed,
 } from "./app-model"
@@ -34,6 +36,7 @@ export interface PreviewSession {
   fit: () => void
   grid: boolean
   home: () => void
+  importTexturePacks: () => void
   loadDemo: (path: string) => void
   loaded: Loaded | null
   loading: Loading | null
@@ -43,8 +46,12 @@ export interface PreviewSession {
   openFile: () => void
   previewMemory: number | null
   previewSettings: PreviewSettings
+  removeTexturePack: (id: string) => void
+  selectTexturePack: (id: string | null) => void
   setDialogOpen: (open: boolean) => void
   setNotice: (notice: Notice | null) => void
+  texturePackBusy: boolean
+  texturePacks: TexturePackState
   toggleGrid: () => void
   updatePreviewSettings: (patch: Partial<PreviewSettings>) => void
   viewportInput: (command: ViewportCommand) => void
@@ -71,10 +78,16 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const [previewMemory, setPreviewMemory] = useState<number | null>(null)
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [rawNotice, setRawNotice] = useState<Notice | null>(null)
+  const [statusNotice, setStatusNotice] = useState<Notice | null>(null)
   const [viewportError, setViewportError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const [grid, setGrid] = useState(true)
   const [previewSettings, setPreviewSettings] = useState<PreviewSettings>(savedPreviewSettings)
+  const [texturePacks, setTexturePacks] = useState<TexturePackState>({
+    packs: [],
+    selected: null,
+  })
+  const [texturePackBusy, setTexturePackBusy] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
   const [choosing, setChoosing] = useState(false)
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -82,6 +95,9 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const viewportErrorRef = useRef<string | null>(null)
   const gridRef = useRef(true)
   const previewSettingsRef = useRef(previewSettings)
+  const texturePacksRef = useRef(texturePacks)
+  const texturePackBusyRef = useRef(false)
+  const activePathRef = useRef<string | null>(null)
   const mounted = useRef(false)
   const generation = useRef(0)
   const initialPathConsumed = useRef(Boolean(initialError))
@@ -99,10 +115,13 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   } | null>(null)
 
   // Persistent viewport failures remain visible across per-load notice resets.
+  // Status notices report texture pack actions without closing the preview.
   const notice = useMemo(
     () =>
-      viewportError !== null ? ({ intent: "error", message: viewportError } as const) : rawNotice,
-    [viewportError, rawNotice],
+      viewportError !== null
+        ? ({ intent: "error", message: viewportError } as const)
+        : (rawNotice ?? statusNotice),
+    [viewportError, rawNotice, statusNotice],
   )
 
   const updatePreviewSettings = useCallback((patch: Partial<PreviewSettings>) => {
@@ -179,6 +198,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
 
   const home = useCallback(() => {
     const id = ++generation.current
+    activePathRef.current = null
     cancelNative(id)
     clearView()
     setRawNotice(null)
@@ -203,6 +223,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     setDialog("error")
     setDialogOpen(true)
     const id = ++generation.current
+    activePathRef.current = null
     pendingRequest.current = null
     setLoaded(null)
     setLoading(null)
@@ -347,6 +368,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         })
         return
       }
+      activePathRef.current = path
       setLoading({ path, requestId: id, phase: "decode", completed: 0, total: 0 })
       pendingRequest.current = {
         id,
@@ -371,6 +393,107 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       }
     },
     [cancelNative, clearView, isCurrent, updateTitle],
+  )
+
+  const reloadActivePreview = useCallback(() => {
+    const path = activePathRef.current
+    if (path) void loadPath(path)
+  }, [loadPath])
+
+  const beginTexturePackAction = useCallback(() => {
+    if (texturePackBusyRef.current) return false
+    texturePackBusyRef.current = true
+    setTexturePackBusy(true)
+    return true
+  }, [])
+
+  const endTexturePackAction = useCallback(() => {
+    texturePackBusyRef.current = false
+    if (mounted.current) setTexturePackBusy(false)
+  }, [])
+
+  const importTexturePacks = useCallback(async () => {
+    if (!beginTexturePackAction()) return
+    const previous = texturePacksRef.current
+    try {
+      const result = await invoke<ImportedTexturePacks | null>("import_texture_packs")
+      if (!mounted.current || !result) return
+      texturePacksRef.current = result.state
+      setTexturePacks(result.state)
+      if (result.state.selected !== previous.selected) reloadActivePreview()
+      if (result.failures.length > 0) {
+        const added = result.imported > 0 ? `Added ${result.imported}. ` : ""
+        setStatusNotice({
+          intent: "error",
+          message: `${added}Some texture packs could not be added: ${result.failures.join("; ")}`,
+        })
+      } else if (result.imported > 0) {
+        setStatusNotice({
+          intent: "success",
+          message: `Added ${result.imported} texture pack${result.imported === 1 ? "" : "s"}.`,
+        })
+      }
+    } catch (error) {
+      if (mounted.current) setStatusNotice({ intent: "error", message: errorMessage(error) })
+    } finally {
+      endTexturePackAction()
+    }
+  }, [beginTexturePackAction, endTexturePackAction, reloadActivePreview])
+
+  const selectTexturePack = useCallback(
+    async (id: string | null) => {
+      if (texturePacksRef.current.selected === id || !beginTexturePackAction()) return
+      const previous = texturePacksRef.current
+      try {
+        const next = await invoke<TexturePackState>("select_texture_pack", { id })
+        if (!mounted.current) return
+        texturePacksRef.current = next
+        setTexturePacks(next)
+        if (next.selected !== previous.selected) reloadActivePreview()
+      } catch (error) {
+        if (mounted.current) setStatusNotice({ intent: "error", message: errorMessage(error) })
+      } finally {
+        endTexturePackAction()
+      }
+    },
+    [beginTexturePackAction, endTexturePackAction, reloadActivePreview],
+  )
+
+  const removeTexturePack = useCallback(
+    async (id: string) => {
+      if (!beginTexturePackAction()) return
+      const removedSelected = texturePacksRef.current.selected === id
+      try {
+        const next = await invoke<TexturePackState>("remove_texture_pack", { id })
+        if (!mounted.current) return
+        texturePacksRef.current = next
+        setTexturePacks(next)
+        if (removedSelected) reloadActivePreview()
+      } catch (error) {
+        if (mounted.current) setStatusNotice({ intent: "error", message: errorMessage(error) })
+      } finally {
+        endTexturePackAction()
+      }
+    },
+    [beginTexturePackAction, endTexturePackAction, reloadActivePreview],
+  )
+
+  const requestImportTexturePacks = useCallback(() => {
+    void importTexturePacks()
+  }, [importTexturePacks])
+
+  const requestSelectTexturePack = useCallback(
+    (id: string | null) => {
+      void selectTexturePack(id)
+    },
+    [selectTexturePack],
+  )
+
+  const requestRemoveTexturePack = useCallback(
+    (id: string) => {
+      void removeTexturePack(id)
+    },
+    [removeTexturePack],
   )
 
   const chooseFile = useCallback(async () => {
@@ -446,6 +569,10 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         generation.current = Math.max(generation.current, result.requestId)
         bootstrapRef.current = result
         setBootstrap(result)
+        texturePacksRef.current = result.texturePacks
+        setTexturePacks(result.texturePacks)
+        if (result.texturePackError)
+          setStatusNotice({ intent: "info", message: result.texturePackError })
         // Bootstrap replays viewport failures that occurred before listeners were installed.
         if (result.viewportError) failViewport(result.viewportError)
         viewportQueue.push({ kind: "grid", visible: gridRef.current })
@@ -560,6 +687,11 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     setDialogOpen(true)
   }, [])
 
+  const clearNotice = useCallback((_notice: Notice | null) => {
+    setRawNotice(null)
+    setStatusNotice(null)
+  }, [])
+
   return {
     actionBusy,
     bootstrap,
@@ -572,6 +704,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     fit,
     grid,
     home,
+    importTexturePacks: requestImportTexturePacks,
     loadDemo,
     loaded,
     loading,
@@ -581,8 +714,12 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     openFile,
     previewMemory,
     previewSettings,
+    removeTexturePack: requestRemoveTexturePack,
+    selectTexturePack: requestSelectTexturePack,
     setDialogOpen,
-    setNotice: setRawNotice,
+    setNotice: clearNotice,
+    texturePackBusy,
+    texturePacks,
     toggleGrid,
     updatePreviewSettings,
     viewportInput,

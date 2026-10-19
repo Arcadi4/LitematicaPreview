@@ -14,6 +14,8 @@ const bootstrap: Bootstrap = {
   requestId: 0,
   maxWorkerThreads: 8,
   viewportError: null,
+  texturePacks: { packs: [], selected: null },
+  texturePackError: null,
 }
 
 function render(

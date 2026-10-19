@@ -7,16 +7,21 @@ mod preview_process;
 mod preview_protocol;
 mod render;
 mod resources;
+mod texture_packs;
 
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use litematica_preview_core::resource_pack_overlay;
+use nucleation::meshing::ResourcePackSource;
 use preview::PreviewWorker;
 use render::context::NativeRenderer;
 use resources::{Demo, Resources};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
+use texture_packs::{TexturePackLibrary, TexturePackState};
 
 pub use formats::EXTENSIONS;
 
@@ -26,6 +31,7 @@ const VIEWPORT_UNAVAILABLE: &str = "The native viewport is unavailable. \
 struct HostState {
     worker: Arc<PreviewWorker>,
     resources: Resources,
+    texture_packs: TexturePackLibrary,
     initial_path: Option<String>,
 }
 
@@ -83,6 +89,8 @@ struct Bootstrap {
     request_id: u64,
     max_worker_threads: u8,
     viewport_error: Option<String>,
+    texture_packs: TexturePackState,
+    texture_pack_error: Option<String>,
 }
 
 #[tauri::command]
@@ -91,6 +99,7 @@ async fn bootstrap(
     viewer: State<'_, ViewerState>,
 ) -> Result<Bootstrap, String> {
     let resources = state.resources.clone();
+    let texture_packs = state.texture_packs.clone();
     let initial_path = state.initial_path.clone();
     let request_id = state.worker.begin_session();
     let viewport_error = viewer
@@ -99,6 +108,10 @@ async fn bootstrap(
         .ok()
         .and_then(|error| error.clone());
     tauri::async_runtime::spawn_blocking(move || {
+        let (texture_packs, texture_pack_error) = match texture_packs.state() {
+            Ok(texture_packs) => (texture_packs, None),
+            Err(error) => (TexturePackState::default(), Some(error)),
+        };
         Ok(Bootstrap {
             extensions: EXTENSIONS,
             demos: resources.demos()?,
@@ -107,6 +120,8 @@ async fn bootstrap(
             request_id,
             max_worker_threads: litematica_preview_core::max_worker_threads(),
             viewport_error,
+            texture_packs,
+            texture_pack_error,
         })
     })
     .await
@@ -219,6 +234,7 @@ fn start_preview(
     let options = options.validate()?;
     let path = preview_path(path)?;
     let pack_path = state.resources.pack()?;
+    let custom_pack_path = state.texture_packs.selected_archive()?;
     let worker = Arc::clone(&state.worker);
     let renderer = Arc::clone(&viewer.renderer);
     let job_worker = Arc::clone(&worker);
@@ -246,6 +262,7 @@ fn start_preview(
                     request_id,
                     &path,
                     &pack_path,
+                    custom_pack_path.as_deref(),
                     options,
                     |min, max| {
                         job_worker.with_current(request_id, || {
@@ -455,6 +472,131 @@ async fn show_licenses(state: State<'_, HostState>) -> Result<(), String> {
         .map_err(|e| format!("Unable to open the license folder: {e}"))?
 }
 
+const MAX_TEXTURE_PACK_BYTES: u64 = 256 * 1024 * 1024;
+
+fn read_texture_pack(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("Unable to inspect the texture pack: {error}"))?;
+    if !metadata.is_file() {
+        return Err("Choose a resource-pack ZIP, not a folder or device.".into());
+    }
+    if metadata.len() > MAX_TEXTURE_PACK_BYTES {
+        return Err("Choose a resource pack smaller than 256 MB.".into());
+    }
+    fs::read(path).map_err(|error| format!("Unable to read the texture pack: {error}"))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportedTexturePacks {
+    imported: usize,
+    failures: Vec<String>,
+    state: TexturePackState,
+}
+
+#[tauri::command]
+async fn import_texture_packs(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, HostState>,
+) -> Result<Option<ImportedTexturePacks>, String> {
+    let resources = state.resources.clone();
+    let library = state.texture_packs.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(files) = app
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_title("Add Minecraft resource packs")
+            .add_filter("Minecraft resource packs", &["zip"])
+            .add_filter("All files", &["*"])
+            .blocking_pick_files()
+        else {
+            return Ok(None);
+        };
+        let base_path = resources.pack()?;
+        let base_bytes = fs::read(&base_path)
+            .map_err(|error| format!("Unable to read the bundled block resources: {error}"))?;
+        let base = ResourcePackSource::from_bytes(&base_bytes)
+            .map_err(|error| format!("The bundled block resources are invalid: {error}"))?;
+        let mut imported = 0;
+        let mut failures = Vec::new();
+        let mut last_imported = None;
+        for file in files {
+            let path = file
+                .into_path()
+                .map_err(|error| format!("Unable to open the selected file: {error}"))?;
+            let name = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("Texture Pack");
+            let bytes = match read_texture_pack(&path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    failures.push(format!("{name}: {error}"));
+                    continue;
+                }
+            };
+            match library.import(name, &bytes, |bytes| {
+                resource_pack_overlay(&base, bytes).map(|_| ())
+            }) {
+                Ok(pack) => {
+                    imported += 1;
+                    last_imported = Some(pack.id);
+                }
+                Err(error) => failures.push(format!("{name}: {error}")),
+            }
+        }
+        let mut state = library.state()?;
+        if let Some(id) = last_imported {
+            state = library.select(Some(&id), |_| Ok(()))?;
+        }
+        Ok(Some(ImportedTexturePacks {
+            imported,
+            failures,
+            state,
+        }))
+    })
+    .await
+    .map_err(|error| format!("Unable to add texture packs: {error}"))?
+}
+
+#[tauri::command]
+async fn select_texture_pack(
+    id: Option<String>,
+    state: State<'_, HostState>,
+) -> Result<TexturePackState, String> {
+    let resources = state.resources.clone();
+    let library = state.texture_packs.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(id) = id else {
+            return library.select(None, |_| Ok(()));
+        };
+        let base_path = resources.pack()?;
+        let base_bytes = fs::read(&base_path)
+            .map_err(|error| format!("Unable to read the bundled block resources: {error}"))?;
+        let base = ResourcePackSource::from_bytes(&base_bytes)
+            .map_err(|error| format!("The bundled block resources are invalid: {error}"))?;
+        library.select(Some(&id), |path| {
+            let bytes = read_texture_pack(path)?;
+            resource_pack_overlay(&base, &bytes).map(|_| ())
+        })
+    })
+    .await
+    .map_err(|error| format!("Unable to change the texture pack: {error}"))?
+}
+
+#[tauri::command]
+async fn remove_texture_pack(
+    id: String,
+    state: State<'_, HostState>,
+) -> Result<TexturePackState, String> {
+    let library = state.texture_packs.clone();
+    tauri::async_runtime::spawn_blocking(move || library.remove(&id))
+        .await
+        .map_err(|error| format!("Unable to remove the texture pack: {error}"))?
+}
+
 #[cfg(windows)]
 fn open_folder(path: &std::path::Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
@@ -564,6 +706,9 @@ fn run() -> Result<(), String> {
             app.manage(HostState {
                 worker: Arc::new(PreviewWorker::default()),
                 resources,
+                texture_packs: TexturePackLibrary::new(
+                    app.path().app_local_data_dir()?.join("Texture Packs"),
+                ),
                 initial_path,
             });
             app.manage(create_viewer(app.handle()));
@@ -607,6 +752,9 @@ fn run() -> Result<(), String> {
             register_associations,
             unregister_associations,
             show_licenses,
+            import_texture_packs,
+            select_texture_pack,
+            remove_texture_pack,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| format!("Unable to start Litematica Preview: {e}"))

@@ -30,7 +30,7 @@ permissions:
 jobs:
   pressure:
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
     env:
       RUSTFLAGS: "-C target-feature=+crt-static"
       CARGO_TARGET_DIR: target

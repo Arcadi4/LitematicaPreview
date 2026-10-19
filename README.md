@@ -24,8 +24,8 @@ If you are on macOS, check out the sister project [LitematicaQL](https://github.
 
 - Preview seven Minecraft schematic and structure formats offline in textured 3D with native wgpu (Direct3D 12) and Nucleation.
 - Load large `.litematic` files with compact decoding and chunked previews that avoid retaining the full decompressed file.
-- Generate and upload geometry concurrently with configurable chunk sizes and worker counts, progressive rendering, and cancellable loading progress.
-- Decode in one in-process background session with bounded mesh and GPU upload windows. Memory limiting and conservative scheduling are suspended; wide unchunked models currently use Core 0.1.4's compact-position precision.
+- Generate and upload geometry concurrently with 32-block chunks by default, configurable chunk sizes and worker counts, progressive rendering, and cancellable loading progress.
+- Decode in a reusable isolated worker capped at 2 GiB on Windows. Home and cancellation terminate the worker and release its cached resources; wide unchunked models currently use Core 0.1.4's compact-position precision.
 - Choose an installer with optional file associations or a portable ZIP that needs no installation.
 
 ## Install
@@ -57,6 +57,8 @@ Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https:
 Decoding, mesh packing, and first-use texture preparation live in
 [LitematicaPreview Core](https://github.com/Arcadi4/litematica-preview-core).
 The host transfers prepared bytes into the native renderer (wgpu/Direct3D 12) without converting attributes or rebasing indices.
+
+GPU upload admission is bounded by both batch count and a 64 MiB budget for geometry and texture bytes. One larger batch can upload on its own; this is not a total model or VRAM limit. Home releases scene geometry and the depth/MSAA attachments, which are allocated only when visible geometry needs them. Smaller chunks reduce intermediate meshing peaks; larger worker counts trade memory for throughput.
 
 Run the desktop app in development mode:
 

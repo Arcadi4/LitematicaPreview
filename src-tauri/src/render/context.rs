@@ -206,12 +206,12 @@ impl NativeRenderer {
         Self::new_from_raw(handle, Some(display), size)
     }
 
-    /// Downlevel limits; the 2D texture dimension is raised to 8192 so the
-    /// swapchain covers monitors up to 8K wide.
+    /// Negotiate the native adapter's buffer and resolution capabilities.
     fn limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
-        let mut limits =
-            wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits());
-        limits.max_texture_dimension_2d = 8192;
+        let adapter_limits = adapter.limits();
+        let max_buffer_size = adapter_limits.max_buffer_size;
+        let mut limits = wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter_limits);
+        limits.max_buffer_size = max_buffer_size;
         limits
     }
 

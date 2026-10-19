@@ -250,7 +250,18 @@ fn start_preview(
                         })
                     },
                     |batch| {
-                        let permit = uploads.acquire(&current)?;
+                        let bytes = batch
+                            .textures
+                            .iter()
+                            .try_fold(batch.geometry.len(), |bytes, texture| {
+                                bytes.checked_add(texture.pixels.len())
+                            })
+                            .ok_or_else(|| {
+                                String::from(
+                                    "The preview mesh batch overflowed the upload size accounting.",
+                                )
+                            })?;
+                        let permit = uploads.acquire(bytes, &current)?;
                         job_worker.with_current(request_id, || {
                             with_renderer(&renderer, |renderer| {
                                 renderer

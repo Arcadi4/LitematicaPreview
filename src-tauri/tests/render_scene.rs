@@ -229,7 +229,7 @@ fn dx12_uploaded_meshes_render_with_wgsl_part_layout() {
         (true, 2, 128),
     ] {
         let (batch, camera) = quad(compact, alpha_mode, alpha);
-        let permit = uploads.acquire(&|| Ok(())).unwrap();
+        let permit = uploads.acquire(batch.geometry.len() + batch.textures.iter().map(|t| t.pixels.len()).sum::<usize>(), &|| Ok(())).unwrap();
         let mut scene = Scene::new(device.clone(), queue.clone());
         scene.attach_batch(&pipelines, &batch, permit).unwrap();
         drop(batch);

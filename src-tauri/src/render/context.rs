@@ -18,7 +18,7 @@ use litematica_preview_core::{MeshBatch, PreviewInfo};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const CLEAR_SRGB: [f64; 3] = [0.00335, 0.00518, 0.00802];
+const CLEAR_LINEAR: [f64; 3] = [0.00335, 0.00518, 0.00802];
 
 /// Errors the renderer can hand to the Tauri layer.
 #[derive(Debug)]
@@ -461,7 +461,6 @@ impl NativeRenderer {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let clear = clear_color_linear();
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -476,9 +475,9 @@ impl NativeRenderer {
                     resolve_target: self.color_view.as_ref().map(|_| &view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: clear[0],
-                            g: clear[1],
-                            b: clear[2],
+                            r: CLEAR_LINEAR[0],
+                            g: CLEAR_LINEAR[1],
+                            b: CLEAR_LINEAR[2],
                             a: 1.0,
                         }),
                         store: if self.color_view.is_some() {
@@ -585,17 +584,6 @@ fn map_stage_viewport(
 const _: () = {
     assert!(CAMERA_UNIFORM_BYTES == 80, "camera uniform layout drifted");
 };
-
-fn clear_color_linear() -> [f64; 3] {
-    CLEAR_SRGB.map(|channel| {
-        // The inverse sRGB transfer function with the standard cutoff.
-        if channel <= 0.04045 {
-            channel / 12.92
-        } else {
-            ((channel + 0.055) / 1.055).powf(2.4)
-        }
-    })
-}
 
 #[cfg(test)]
 mod tests {

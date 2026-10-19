@@ -1,0 +1,107 @@
+name: Pressure
+on:
+  pull_request:
+    paths:
+      - "src-tauri/**"
+      - "Cargo.lock"
+      - "scripts/cargo.ts"
+      - "Assets/pack.zip"
+      - "Fixtures/Pressure/**"
+      - "package.json"
+      - ".github/workflows/pressure.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src-tauri/**"
+      - "Cargo.lock"
+      - "scripts/cargo.ts"
+      - "Assets/pack.zip"
+      - "Fixtures/Pressure/**"
+      - "package.json"
+      - ".github/workflows/pressure.yml"
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+jobs:
+  pressure:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
+      CARGO_TARGET_DIR: target
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+      # The main binary never compiles here, but tauri-build's build script
+      # runs for the package and embeds frontendDist.
+      - name: Create placeholder frontend directory
+        shell: bash
+        run: mkdir -p dist
+      - name: Locate main-branch baseline
+        if: github.event_name == 'pull_request'
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        continue-on-error: true
+        run: |
+          $run = gh run list --repo ${{ github.repository }} --workflow Pressure --branch main --status success --limit 1 --json databaseId --jq ".[0].databaseId"
+          if ([string]::IsNullOrWhiteSpace($run)) { exit 0 }
+          gh run download $run --repo ${{ github.repository }} --name pressure-metrics --dir baseline
+          Write-Output " Found main-branch baseline artifact from run $run"
+      - name: Run pressure suite
+        shell: bash
+        run: |
+          compare=()
+          if [ -f baseline/pressure.json ]; then
+            compare=(--compare baseline/pressure.json)
+          fi
+          cargo run --release --locked --manifest-path src-tauri/Cargo.toml --bin pressure \
+            -- --out pressure-report "${compare[@]}"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: pressure-metrics
+          path: |
+            pressure-report/pressure.json
+            pressure-report/pressure.md
+      - name: Comment the report on the pull request
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && hashFiles('pressure-report/pressure.md') != ''
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs')
+            const body = fs.readFileSync('pressure-report/pressure.md', 'utf8')
+            const marker = '<!-- litematica-preview-pressure-report -->'
+            const payload = `${marker}\n${body}`
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            })
+            const existing = comments.find((comment) => comment.body.includes(marker))
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: payload,
+              })
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: payload,
+              })
+            }

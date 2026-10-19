@@ -184,7 +184,11 @@ impl Camera {
             return;
         }
         let scale = self.fitted_distance;
-        self.distance = (self.distance * factor).clamp(scale * 0.05, scale * 8.0);
+        // Final geometry may shrink around a deliberately preserved distant
+        // view. Let zoom approach the normal range without snapping into it.
+        let minimum = (scale * 0.05).min(self.distance);
+        let maximum = (scale * 8.0).max(self.distance);
+        self.distance = (self.distance * factor).clamp(minimum, maximum);
         self.dirty = true;
     }
 
@@ -232,15 +236,32 @@ impl Camera {
     }
 
     /// Camera uniforms; non-grid frames offset the model by `-centre`.
+    /// Clipping follows the bounds at the current eye, including after final
+    /// geometry bounds shrink without refitting the user-controlled view.
     pub(crate) fn frame_camera(&self, grid: bool) -> FrameCamera {
         let direction = self.basis();
         let eye = add3(self.target, mul3(direction, self.distance));
         let view = math::look_at(eye, self.target, UP);
+        let mut nearest = self.distance;
+        let mut farthest = self.distance;
+        for axis in 0..3 {
+            let first = (self.target[axis] - self.minimum[axis]) * direction[axis];
+            let second = (self.target[axis] - self.maximum[axis]) * direction[axis];
+            nearest += first.min(second);
+            farthest += first.max(second);
+        }
+        // Outside the bounds, use their actual distance to preserve precision
+        // even when the final model is tiny relative to the original source.
+        // Inside, grow the near plane gradually with penetration depth; this
+        // stays continuous when the eye crosses a bound.
+        let near = (nearest * 0.5)
+            .max((-nearest).min(self.fitted_distance) / 1000.0)
+            .max(0.01);
         let projection = math::perspective(
             FOV_DEGREES.to_radians(),
             self.aspect,
-            (self.fitted_distance / 1000.0).max(0.01),
-            self.fitted_distance * 24.0,
+            near,
+            (self.fitted_distance * 24.0).max(farthest * 1.1),
         );
         FrameCamera {
             view_projection: math::multiply4(&projection, &view),

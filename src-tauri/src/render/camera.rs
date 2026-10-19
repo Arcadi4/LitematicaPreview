@@ -402,6 +402,53 @@ mod tests {
     }
 
     #[test]
+    fn shrunken_final_bounds_remain_visible_without_moving_the_view() {
+        for source_width in [1_000.0, 1_000_000.0] {
+            let mut camera = Camera::new();
+            camera.resize(800.0, 600.0);
+            camera.set_model_bounds([-0.5; 3], [source_width + 0.5, 0.5, 0.5]);
+            camera.orbit(1.0, 0.0);
+            camera.pan(42.0, -23.0);
+            camera.zoom(1.4);
+            let points: [Vec3; 8] = std::array::from_fn(|corner| {
+                std::array::from_fn(|axis| if corner & (1 << axis) == 0 { -0.5 } else { 0.5 })
+            });
+            let before = points.map(|point| project(&camera, point));
+
+            camera.update_model_bounds([-0.5; 3], [0.5; 3]);
+
+            for (point, before) in points.into_iter().zip(before) {
+                let after = project(&camera, point);
+                for axis in 0..2 {
+                    assert!((after[axis] - before[axis]).abs() < 1e-5);
+                }
+                assert!(
+                    (0.0..1.0).contains(&after[2]),
+                    "final geometry must remain inside the depth range: {after:?}"
+                );
+            }
+            let distance = camera.distance;
+            camera.zoom(0.88);
+            assert!((camera.distance / distance - 0.88).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn close_up_zoom_preserves_depth_separation_inside_large_bounds() {
+        let mut camera = Camera::new();
+        camera.resize(800.0, 600.0);
+        camera.set_model_bounds([-500.0; 3], [500.0; 3]);
+        camera.zoom(0.05);
+        let direction = camera.basis();
+        let eye = add3(camera.target, mul3(direction, camera.distance));
+        let front = project(&camera, scale_and_add3(eye, direction, -10.0));
+        let back = project(&camera, scale_and_add3(eye, direction, -10.01));
+        assert!((0.0..1.0).contains(&front[2]));
+        assert!((0.0..1.0).contains(&back[2]));
+        assert!(back[2] - front[2] > 1e-5);
+    }
+
+    #[test]
     fn zoom_clamps_to_fitted_ratio() {
         let mut camera = model_camera();
         camera.zoom(1e6);

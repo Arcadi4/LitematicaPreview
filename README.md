@@ -23,6 +23,7 @@ If you are on macOS, check out the sister project [LitematicaQL](https://github.
 ## Highlights
 
 - Preview seven Minecraft schematic and structure formats offline in textured 3D with native wgpu (Direct3D 12) and Nucleation.
+- Import Minecraft Java resource packs, keep them locally, and preview with the selected pack. Missing textures fall back to the bundled vanilla resources.
 - Load large `.litematic` files with compact decoding and chunked previews that avoid retaining the full decompressed file.
 - Generate and upload geometry concurrently with 32-block chunks by default, configurable chunk sizes and worker counts, progressive rendering, and cancellable loading progress.
 - Decode in a reusable isolated worker capped at 2 GiB on Windows. Home and cancellation terminate the worker and release its cached resources; wide unchunked models currently use Core 0.1.4's compact-position precision.

@@ -44,6 +44,7 @@ test("continuous drag preserves ordered input with only one native frame in flig
     },
     (error) => errors.push(error),
   )
+  queue.setReady(true)
   const first: ViewportCommand[] = Array.from({ length: 20 }, () => ({
     kind: "orbit",
     dx: 1,
@@ -83,6 +84,7 @@ test("leaving a preview drops pending movement and ignores stale errors", async 
     },
     (error) => errors.push(error),
   )
+  queue.setReady(true)
   queue.push({ kind: "orbit", dx: 2, dy: 0 })
   frame()
   queue.push({ kind: "orbit", dx: 100, dy: 0 })
@@ -103,6 +105,7 @@ test("a failed current frame reports the real error without replaying pending in
     () => new Promise<void>((_, failure) => rejecting.push(failure)),
     (error) => errors.push(error),
   )
+  queue.setReady(true)
   queue.push({ kind: "fit" })
   frame()
   queue.push({ kind: "zoom", factor: 0.88 })

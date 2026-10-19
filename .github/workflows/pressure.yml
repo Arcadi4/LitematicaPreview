@@ -43,6 +43,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
+          # A breach keeps the job red; the release artifacts are still worth
+          # restoring on the next run.
+          cache-on-failure: true
       # The main binary never compiles here, but tauri-build's build script
       # runs for the package and embeds frontendDist.
       - name: Create placeholder frontend directory

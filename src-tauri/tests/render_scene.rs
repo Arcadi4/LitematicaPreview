@@ -12,6 +12,18 @@ use std::sync::Arc;
 const SIZE: u32 = 64;
 const ROW_BYTES: u32 = SIZE * 4;
 
+/// Reservations account for exactly what a batch stages: the geometry buffer
+/// and every first-use texture upload.
+fn staged_bytes(batch: &MeshBatch) -> usize {
+    batch
+        .textures
+        .iter()
+        .try_fold(batch.geometry.len(), |bytes, texture| {
+            bytes.checked_add(texture.pixels.len())
+        })
+        .expect("the regression batch fits the staging arithmetic")
+}
+
 fn quad(compact: bool, alpha_mode: u32, alpha: u8) -> (MeshBatch, FrameCamera) {
     let (origin, extent, scale) = if compact {
         ([32.0, 41.0, 53.0], [150.0, 120.0, 0.0], 0.01)
@@ -97,6 +109,48 @@ fn quad(compact: bool, alpha_mode: u32, alpha: u8) -> (MeshBatch, FrameCamera) {
         ],
         offset: origin.map(|value| -value),
     };
+    (batch, camera)
+}
+
+fn material_strips(compact: bool) -> (MeshBatch, FrameCamera) {
+    let (mut batch, camera) = quad(compact, 0, 255);
+    batch.geometry.clear();
+    batch.parts.clear();
+    batch.textures.clear();
+    for (strip_index, alpha_mode) in [0, 1, 2, 0].into_iter().enumerate() {
+        let alpha = if alpha_mode == 1 { 0 } else { 128 };
+        let (mut strip, _) = quad(compact, alpha_mode, alpha);
+        let mut part = strip.parts.remove(0);
+        for (vertex, right) in [false, true, true, false].into_iter().enumerate() {
+            let fraction = (strip_index + usize::from(right)) as f32 / 4.0;
+            let at = vertex * strip.vertex_stride as usize;
+            if compact {
+                let x = (fraction * 65535.0).round() as u16;
+                strip.geometry[at..at + 2].copy_from_slice(&x.to_le_bytes());
+            } else {
+                let x = strip.origin[0] + fraction * strip.extent[0];
+                strip.geometry[at..at + 4].copy_from_slice(&x.to_le_bytes());
+            }
+        }
+        part.min[0] = strip.origin[0] + strip_index as f32 / 4.0 * strip.extent[0];
+        part.max[0] = part.min[0] + strip.extent[0] / 4.0;
+        part.vertex_offset += batch.geometry.len();
+        part.index_offset += batch.geometry.len();
+        part.texture_index += strip_index as u32;
+        let mut texture = strip.textures.remove(0);
+        texture.index = part.texture_index;
+        if strip_index == 3 {
+            texture.pixels = vec![0, 255, 0, alpha];
+        }
+        batch.geometry.extend_from_slice(&strip.geometry);
+        batch.parts.push(part);
+        batch.textures.push(texture);
+    }
+    batch.vertex_count = 16;
+    batch.index_count = 24;
+    batch.info.triangle_count = 8;
+    batch.info.part_count = 4;
+    batch.info.texture_count = 4;
     (batch, camera)
 }
 
@@ -229,7 +283,7 @@ fn dx12_uploaded_meshes_render_with_wgsl_part_layout() {
         (true, 2, 128),
     ] {
         let (batch, camera) = quad(compact, alpha_mode, alpha);
-        let permit = uploads.acquire(batch.geometry.len() + batch.textures.iter().map(|t| t.pixels.len()).sum::<usize>(), &|| Ok(())).unwrap();
+        let permit = uploads.acquire(staged_bytes(&batch), &|| Ok(())).unwrap();
         let mut scene = Scene::new(device.clone(), queue.clone());
         scene.attach_batch(&pipelines, &batch, permit).unwrap();
         drop(batch);
@@ -262,6 +316,39 @@ fn dx12_uploaded_meshes_render_with_wgsl_part_layout() {
             );
         }
         println!("Rendered Core layout: compact={compact}, alpha_mode={alpha_mode}");
+    }
+    for compact in [true, false] {
+        let (batch, camera) = material_strips(compact);
+        let permit = uploads.acquire(staged_bytes(&batch), &|| Ok(())).unwrap();
+        let mut scene = Scene::new(device.clone(), queue.clone());
+        scene.attach_batch(&pipelines, &batch, permit).unwrap();
+        drop(batch);
+        uploads.drain(&|| Ok(())).unwrap();
+        let image = render_pixels(&device, &queue, &pipelines, &scene, camera);
+        let pixel = |x: u32| {
+            let at = (32 * ROW_BYTES + x * 4) as usize;
+            &image[at..at + 4]
+        };
+        let opaque = pixel(14);
+        assert!(
+            opaque[0] > 200 && opaque[1..] == [0, 0, 255],
+            "Opaque must ignore texture alpha: {opaque:?}, compact={compact}",
+        );
+        assert_eq!(pixel(26), &[0; 4], "Cutout must discard, compact={compact}");
+        let blended = pixel(38);
+        assert!(
+            (150..=200).contains(&blended[0])
+                && blended[1..3] == [0, 0]
+                && (63..=65).contains(&blended[3]),
+            "Blended must retain its alpha mode: {blended:?}, compact={compact}",
+        );
+        let reused_opaque = pixel(50);
+        assert!(
+            reused_opaque[0] == 0
+                && reused_opaque[1] > 200
+                && reused_opaque[2..] == [0, 255],
+            "Shared alpha uniforms must preserve each texture: {reused_opaque:?}, compact={compact}",
+        );
     }
     let error = pollster::block_on(errors.pop());
     assert!(error.is_none(), "Scene rendering validation: {error:?}");

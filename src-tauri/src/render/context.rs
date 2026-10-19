@@ -185,7 +185,6 @@ impl NativeRenderer {
             has_visible_batch: false,
             last_render: None,
         };
-        renderer.rebuild_targets();
         renderer.refresh_camera();
         Ok(renderer)
     }
@@ -288,8 +287,13 @@ impl NativeRenderer {
         (depth, color)
     }
 
+    fn release_targets(&mut self) {
+        self.depth_view = None;
+        self.color_view = None;
+    }
 
     fn rebuild_targets(&mut self) {
+        self.release_targets();
         let (depth, color) = self.depth_and_color();
         self.depth_view = Some(depth);
         self.color_view = color;
@@ -309,7 +313,7 @@ impl NativeRenderer {
             self.config.width = width;
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
-            self.rebuild_targets();
+            self.release_targets();
         }
         self.refresh_camera();
     }
@@ -421,6 +425,7 @@ impl NativeRenderer {
     /// Clears all displayed geometry; the caller renders the empty surface immediately.
     pub fn cancel_load(&mut self) {
         self.scene = None;
+        self.release_targets();
         self.load_prepared = false;
         self.user_interacted = false;
         self.has_visible_batch = false;
@@ -448,14 +453,14 @@ impl NativeRenderer {
             self.camera.frame_camera(false),
         );
         let frame = self.acquire()?;
+        // Empty/loading/Home frames only clear the swapchain. Keep large MSAA
+        // and depth allocations resident only while visible geometry needs them.
+        if self.has_visible_batch && self.depth_view.is_none() {
+            self.rebuild_targets();
+        }
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let depth_view = self.depth_view.as_ref().ok_or_else(|| {
-            RenderError::Initialization(String::from(
-                "The depth attachment is unavailable. Reopen the schematic to retry.",
-            ))
-        })?;
         let clear = clear_color_linear();
         let mut encoder = self
             .device
@@ -476,16 +481,22 @@ impl NativeRenderer {
                             b: clear[2],
                             a: 1.0,
                         }),
-                        store: wgpu::StoreOp::Store,
+                        store: if self.color_view.is_some() {
+                            wgpu::StoreOp::Store
+                        } else {
+                            wgpu::StoreOp::Store
+                        },
                     },
                 })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
+                depth_stencil_attachment: self.depth_view.as_ref().map(|view| {
+                    wgpu::RenderPassDepthStencilAttachment {
+                        view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
@@ -500,7 +511,7 @@ impl NativeRenderer {
             );
             if let Some((left, top, width, height)) = viewport {
                 pass.set_viewport(left, top, width, height, 0.0, 1.0);
-                if let Some(scene) = self.scene.as_ref() {
+                if let Some(scene) = self.scene.as_ref().filter(|_| self.has_visible_batch) {
                     let grid_visible = self.camera.grid_visible();
                     scene.draw(&self.pipelines, &mut pass, grid_visible)?;
                 }
@@ -521,7 +532,6 @@ impl NativeRenderer {
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => Ok(texture),
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.device, &self.config);
-                self.rebuild_targets();
                 match self.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(texture)
                     | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => Ok(texture),

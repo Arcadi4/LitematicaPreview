@@ -587,11 +587,86 @@ fn clear_color_linear() -> [f64; 3] {
     })
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
+    #[cfg(windows)]
     use super::NativeRenderer;
+    use super::{backing_size, map_stage_viewport};
+    #[cfg(windows)]
     use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow};
 
+    #[test]
+    fn backing_size_preserves_supported_extents_and_bounds_oversized_windows() {
+        assert_eq!(backing_size((1200, 800), 16384), (1200, 800));
+        assert_eq!(backing_size((12000, 9000), 16384), (12000, 9000));
+        assert_eq!(backing_size((24000, 9000), 16384), (16384, 9000));
+        assert_eq!(backing_size((9000, 24000), 16384), (9000, 16384));
+        assert_eq!(backing_size((24000, 24000), 16384), (16384, 16384));
+        assert_eq!(backing_size((0, 0), 16384), (1, 1));
+    }
+
+    #[test]
+    fn stage_viewport_maps_dpi_and_each_backing_axis_independently() {
+        assert_eq!(
+            map_stage_viewport(
+                Some((100.0, 50.0, 600.0, 400.0)),
+                1.5,
+                (1200, 800),
+                (1200, 800),
+                16384,
+            ),
+            Some((150.0, 75.0, 900.0, 600.0)),
+        );
+        assert_eq!(
+            map_stage_viewport(
+                Some((1000.0, 100.0, 6000.0, 2000.0)),
+                2.0,
+                (32768, 8192),
+                (16384, 8192),
+                16384,
+            ),
+            Some((1000.0, 200.0, 6000.0, 4000.0)),
+        );
+        assert_eq!(
+            map_stage_viewport(None, 2.0, (32768, 8192), (16384, 8192), 16384),
+            Some((0.0, 0.0, 16384.0, 8192.0)),
+        );
+    }
+
+    #[test]
+    fn stale_stage_skips_out_of_limit_viewports_and_accepts_the_next_stage() {
+        let stage = Some((0.0, 0.0, 20000.0, 1000.0));
+        assert_eq!(
+            map_stage_viewport(stage, 1.0, (20000, 1000), (16384, 1000), 16384),
+            Some((0.0, 0.0, 16384.0, 1000.0)),
+        );
+        assert_eq!(
+            map_stage_viewport(stage, 1.0, (8000, 1000), (8000, 1000), 16384),
+            None,
+        );
+        assert_eq!(
+            map_stage_viewport(
+                Some((0.0, 0.0, 8000.0, 1000.0)),
+                1.0,
+                (8000, 1000),
+                (8000, 1000),
+                16384,
+            ),
+            Some((0.0, 0.0, 8000.0, 1000.0)),
+        );
+        for stage in [
+            (1.0, 0.0, 16384.0, 1.0),
+            (0.0, 1.0, 1.0, 16384.0),
+            (0.0, 0.0, f32::MAX, 1.0),
+        ] {
+            assert_eq!(
+                map_stage_viewport(Some(stage), 2.0, (8000, 1000), (8000, 1000), 16384),
+                None,
+            );
+        }
+    }
+
+    #[cfg(windows)]
     #[test]
     #[ignore = "Requires a Windows Direct3D 12 hardware adapter"]
     fn renderer_preserves_pixel_aspect_from_initialization_through_resize() {
@@ -633,8 +708,8 @@ mod tests {
                         .sum::<f32>()
                         .sqrt()
                 };
-                let horizontal = row_length(0) * renderer.config.width as f32;
-                let vertical = row_length(1) * renderer.config.height as f32;
+                let horizontal = row_length(0) * renderer.physical_size.0 as f32;
+                let vertical = row_length(1) * renderer.physical_size.1 as f32;
                 assert!((horizontal / vertical - 1.0).abs() < 0.002,
                 "World-unit pixel scales must match: horizontal={horizontal}, vertical={vertical}");
             };
@@ -644,5 +719,15 @@ mod tests {
             renderer.set_scale(scale);
             check(&renderer);
         }
+        renderer.camera.clear_dirty();
+        renderer.resize(800, 800);
+        assert!(renderer.camera.dirty());
+        renderer.camera.clear_dirty();
+        renderer.set_scale(1.0);
+        assert!(renderer.camera.dirty());
+        renderer.set_stage(0.0, 0.0, 400.0, 400.0);
+        renderer.camera.clear_dirty();
+        renderer.set_stage(10.0, 10.0, 400.0, 400.0);
+        assert!(renderer.camera.dirty());
     }
 }

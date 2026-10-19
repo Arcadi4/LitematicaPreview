@@ -132,23 +132,29 @@ impl Scene {
             } else {
                 ([0.0; 3], [1.0; 3])
             };
+            let mut uniform_bytes = [0u8; PART_UNIFORM_BYTES as usize];
+            for (base, values) in [(0, origin), (16, extent)] {
+                for (axis, value) in values.iter().enumerate() {
+                    let at = base + axis * 4;
+                    uniform_bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+                }
+            }
+            let mut uniforms_by_alpha: [Option<wgpu::Buffer>; 3] = [None, None, None];
             let mut parts = Vec::with_capacity(batch.parts.len());
             for part in &batch.parts {
-                let mut uniforms = [0u8; PART_UNIFORM_BYTES as usize];
-                for (base, values) in [(0, origin), (16, extent)] {
-                    for (axis, value) in values.iter().enumerate() {
-                        let at = base + axis * 4;
-                        uniforms[at..at + 4].copy_from_slice(&value.to_le_bytes());
-                    }
-                }
-                uniforms[28..32].copy_from_slice(&(part.alpha_mode as f32).to_le_bytes());
-                let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("mesh part uniform"),
-                    size: PART_UNIFORM_BYTES,
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-                self.queue.write_buffer(&uniform, 0, &uniforms);
+                let uniform =
+                    uniforms_by_alpha[part.alpha_mode as usize].get_or_insert_with(|| {
+                        uniform_bytes[28..32]
+                            .copy_from_slice(&(part.alpha_mode as f32).to_le_bytes());
+                        let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("mesh batch alpha uniform"),
+                            size: PART_UNIFORM_BYTES,
+                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                        self.queue.write_buffer(&uniform, 0, &uniform_bytes);
+                        uniform
+                    });
                 let texture = self.textures[part.texture_index as usize].as_ref().unwrap();
                 let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("mesh part bind group"),

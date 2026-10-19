@@ -1184,6 +1184,7 @@ fn run_load(
                     id,
                     &path,
                     &packed,
+                    None,
                     options.clone(),
                     {
                         let state = Arc::clone(&state);
@@ -1456,8 +1457,8 @@ fn run_core_pass(
     // The decoder child parses the pack once and reuses it across loads, so
     // the core pass parses once too and keeps the per-fixture retained
     // budget to the model alone.
-    let mut pack: Option<ResourcePackSource> = match decode_pack() {
-        Ok(parsed) => Some(parsed),
+    let mut packs = match decode_pack() {
+        Ok(parsed) => preview::PackCache::with_base(parsed),
         Err(error) => return (records, vec![error], notes),
     };
     for name in names {
@@ -1467,7 +1468,8 @@ fn run_core_pass(
         let result = preview::decode(
             &fixture_path(name),
             &pack_path(),
-            &mut pack,
+            None,
+            &mut packs,
             settings.options(),
             || Ok(()),
             {

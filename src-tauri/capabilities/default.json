@@ -17,6 +17,9 @@
     "allow-viewport-input",
     "allow-register-associations",
     "allow-unregister-associations",
-    "allow-show-licenses"
+    "allow-show-licenses",
+    "allow-import-texture-packs",
+    "allow-select-texture-pack",
+    "allow-remove-texture-pack"
   ]
 }

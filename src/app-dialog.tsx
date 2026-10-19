@@ -20,22 +20,29 @@ import {
   type Bootstrap,
   type DialogKind,
   type NativeCommand,
+  type TexturePackState,
   type ThemePreference,
 } from "./app-model"
 import type { PreviewSettings } from "./preview-settings"
 import { SettingsPanel } from "./settings-panel"
+import { TexturePacksPanel } from "./texture-packs-panel"
 
 export interface AppDialogProps {
   actionBusy: boolean
   bootstrap: Bootstrap | null
   dialog: DialogKind
   errorDetails: string
+  onImportTexturePacks: () => void
   onNativeAction: (command: NativeCommand) => void
   onOpenChange: (open: boolean) => void
+  onRemoveTexturePack: (id: string) => void
+  onSelectTexturePack: (id: string | null) => void
   onSettingsChange: (patch: Partial<PreviewSettings>) => void
   onThemeChange: (theme: ThemePreference) => void
   open: boolean
   settings: PreviewSettings
+  texturePackBusy: boolean
+  texturePacks: TexturePackState
   theme: ThemePreference
 }
 
@@ -96,13 +103,27 @@ function ControlsHelp() {
 
 function SettingsSections({
   bootstrap,
+  onImportTexturePacks,
+  onRemoveTexturePack,
+  onSelectTexturePack,
   onSettingsChange,
   onThemeChange,
   settings,
+  texturePackBusy,
+  texturePacks,
   theme,
 }: Pick<
   AppDialogProps,
-  "bootstrap" | "onSettingsChange" | "onThemeChange" | "settings" | "theme"
+  | "bootstrap"
+  | "onImportTexturePacks"
+  | "onRemoveTexturePack"
+  | "onSelectTexturePack"
+  | "onSettingsChange"
+  | "onThemeChange"
+  | "settings"
+  | "texturePackBusy"
+  | "texturePacks"
+  | "theme"
 >) {
   const [section, setSection] = useState("performance")
   const id = useId()
@@ -119,6 +140,9 @@ function SettingsSections({
       >
         <Tab id={`${id}-performance-tab`} aria-controls={`${id}-performance`} value="performance">
           Performance
+        </Tab>
+        <Tab id={`${id}-textures-tab`} aria-controls={`${id}-textures`} value="textures">
+          Textures
         </Tab>
         <Tab id={`${id}-control-tab`} aria-controls={`${id}-control`} value="control">
           Control
@@ -142,6 +166,26 @@ function SettingsSections({
                 bootstrap={bootstrap}
                 onChange={onSettingsChange}
                 settings={settings}
+              />
+            </div>
+          )}
+        </div>
+        <div
+          role="tabpanel"
+          id={`${id}-textures`}
+          aria-labelledby={`${id}-textures-tab`}
+          hidden={section !== "textures"}
+          tabIndex={0}
+        >
+          {section === "textures" && (
+            <div>
+              <h2 className="mt-0 mb-5 text-lg font-semibold">Textures</h2>
+              <TexturePacksPanel
+                busy={texturePackBusy}
+                onImport={onImportTexturePacks}
+                onRemove={onRemoveTexturePack}
+                onSelect={onSelectTexturePack}
+                state={texturePacks}
               />
             </div>
           )}
@@ -224,12 +268,17 @@ export function AppDialog({
   bootstrap,
   dialog,
   errorDetails,
+  onImportTexturePacks,
   onNativeAction,
   onOpenChange,
+  onRemoveTexturePack,
+  onSelectTexturePack,
   onSettingsChange,
   onThemeChange,
   open,
   settings,
+  texturePackBusy,
+  texturePacks,
   theme,
 }: AppDialogProps) {
   return (
@@ -249,9 +298,14 @@ export function AppDialog({
               open && (
                 <SettingsSections
                   bootstrap={bootstrap}
+                  onImportTexturePacks={onImportTexturePacks}
+                  onRemoveTexturePack={onRemoveTexturePack}
+                  onSelectTexturePack={onSelectTexturePack}
                   onSettingsChange={onSettingsChange}
                   onThemeChange={onThemeChange}
                   settings={settings}
+                  texturePackBusy={texturePackBusy}
+                  texturePacks={texturePacks}
                   theme={theme}
                 />
               )

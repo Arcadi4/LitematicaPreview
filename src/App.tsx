@@ -29,6 +29,7 @@ export default function App({ initialError }: { initialError?: string }) {
     fit,
     grid,
     home,
+    importTexturePacks,
     loadDemo,
     loaded,
     loading,
@@ -38,8 +39,12 @@ export default function App({ initialError }: { initialError?: string }) {
     openFile,
     previewMemory,
     previewSettings,
+    removeTexturePack,
+    selectTexturePack,
     setDialogOpen,
     setNotice,
+    texturePackBusy,
+    texturePacks,
     toggleGrid,
     updatePreviewSettings,
     viewportInput,
@@ -177,12 +182,17 @@ export default function App({ initialError }: { initialError?: string }) {
         bootstrap={bootstrap}
         dialog={dialog}
         errorDetails={errorDetails}
+        onImportTexturePacks={importTexturePacks}
         onNativeAction={nativeAction}
         onOpenChange={setDialogOpen}
+        onRemoveTexturePack={removeTexturePack}
+        onSelectTexturePack={selectTexturePack}
         onSettingsChange={updatePreviewSettings}
         onThemeChange={onThemeChange}
         open={dialogOpen}
         settings={previewSettings}
+        texturePackBusy={texturePackBusy}
+        texturePacks={texturePacks}
         theme={theme}
       />
     </FluentProvider>

@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::Read;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -263,11 +263,74 @@ fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
     format!("The preview worker encountered an internal error: {detail}")
 }
 
-/// The decoded source and cached pack outlive the borrowing mesh stream.
+/// Parsed packs reused across decoder requests. The overlay rebuilds when
+/// the selected archive changes.
+#[derive(Default)]
+pub struct PackCache {
+    base: Option<ResourcePackSource>,
+    overlay: Option<(PathBuf, ResourcePackSource)>,
+}
+
+impl PackCache {
+    /// Seeds the cache with an already parsed base pack so a caller can keep
+    /// that parse outside a measured window.
+    #[allow(dead_code)] // The pressure binary compiles this module on its own.
+    pub fn with_base(base: ResourcePackSource) -> Self {
+        Self {
+            base: Some(base),
+            overlay: None,
+        }
+    }
+
+    fn resolve(
+        &mut self,
+        base_path: &Path,
+        custom_path: Option<&Path>,
+        current: &impl Fn() -> Result<(), String>,
+    ) -> Result<&ResourcePackSource, String> {
+        if self.base.is_none() {
+            let bytes = read_resource_pack(base_path, current)?;
+            self.base =
+                Some(ResourcePackSource::from_bytes(&bytes).map_err(|error| {
+                    format!("The bundled block resources are invalid: {error}")
+                })?);
+        }
+        let Some(custom_path) = custom_path else {
+            self.overlay = None;
+            return Ok(self
+                .base
+                .as_ref()
+                .ok_or("The bundled block resources are unavailable.")?);
+        };
+        if self
+            .overlay
+            .as_ref()
+            .is_none_or(|(cached, _)| cached != custom_path)
+        {
+            let bytes = read_resource_pack(custom_path, current)?;
+            let merged = litematica_preview_core::resource_pack_overlay(
+                self.base
+                    .as_ref()
+                    .ok_or("The bundled block resources are unavailable.")?,
+                &bytes,
+            )
+            .map_err(|error| format!("The selected texture pack could not be used: {error}"))?;
+            self.overlay = Some((custom_path.to_path_buf(), merged));
+        }
+        Ok(&self
+            .overlay
+            .as_ref()
+            .ok_or("The selected texture pack is unavailable.")?
+            .1)
+    }
+}
+
+/// The decoded source and cached packs outlive the borrowing mesh stream.
 pub fn decode(
     path: &Path,
     pack_path: &Path,
-    pack: &mut Option<ResourcePackSource>,
+    custom_pack_path: Option<&Path>,
+    packs: &mut PackCache,
     options: PreviewOptions,
     current: impl Fn() -> Result<(), String>,
     prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
@@ -277,14 +340,8 @@ pub fn decode(
     let result = catch_unwind(AssertUnwindSafe(|| {
         options.validate()?;
         progress("decode", 0, 0);
-        let data = read_file(path, &current)?;
-        if pack.is_none() {
-            let bytes = read_file(pack_path, &current)?;
-            *pack = Some(
-                ResourcePackSource::from_bytes(&bytes)
-                    .map_err(|e| format!("The bundled block resources are invalid: {e}"))?,
-            );
-        }
+        let data = read_file(path, "schematic", &current)?;
+        let pack = packs.resolve(pack_path, custom_pack_path, &current)?;
         // Representation bounds are independent of the Windows job's hard cap.
         let limits = DecodeLimits {
             max_input_bytes: isize::MAX as usize,
@@ -322,8 +379,7 @@ pub fn decode(
         prepared(min, max)?;
         let mut stream = MeshStream::new(
             &source,
-            pack.as_ref()
-                .ok_or("The bundled block resources are unavailable.")?,
+            pack,
             &litematica_preview_core::mesh_config(),
             usize::from(options.thread_count.unwrap_or(1)),
             &current,
@@ -379,19 +435,36 @@ pub fn decode(
         Ok(metadata)
     }));
     result.unwrap_or_else(|panic| {
-        *pack = None;
+        *packs = PackCache::default();
         Err(panic_message(panic))
     })
 }
 
-fn read_file(path: &Path, current: impl Fn() -> Result<(), String>) -> Result<Vec<u8>, String> {
+fn read_resource_pack(
+    path: &Path,
+    current: impl Fn() -> Result<(), String>,
+) -> Result<Vec<u8>, String> {
+    const LIMIT: u64 = 256 * 1024 * 1024;
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| format!("Unable to inspect {}: {error}", path.display()))?;
+    if metadata.len() > LIMIT {
+        return Err("Choose a resource pack smaller than 256 MB.".into());
+    }
+    read_file(path, "resource pack", current)
+}
+
+fn read_file(
+    path: &Path,
+    kind: &str,
+    current: impl Fn() -> Result<(), String>,
+) -> Result<Vec<u8>, String> {
     let mut file =
         File::open(path).map_err(|e| format!("Unable to open {}: {e}", path.display()))?;
     let metadata = file
         .metadata()
         .map_err(|e| format!("Unable to inspect {}: {e}", path.display()))?;
     if !metadata.is_file() {
-        return Err("Choose a schematic file, not a folder or device.".into());
+        return Err(format!("Choose a {kind} file, not a folder or device."));
     }
     let mut bytes = Vec::new();
     let mut chunk = [0u8; 64 * 1024];
@@ -411,7 +484,7 @@ fn read_file(path: &Path, current: impl Fn() -> Result<(), String>) -> Result<Ve
         bytes.extend_from_slice(&chunk[..count]);
     }
     if bytes.is_empty() {
-        return Err("Choose a nonempty schematic.".into());
+        return Err(format!("Choose a nonempty {kind}."));
     }
     Ok(bytes)
 }
@@ -579,6 +652,55 @@ mod tests {
             )
             .unwrap();
         done.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn selected_pack_decodes_and_meshes_a_fixture() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let pack = root.join("../Assets/pack.zip");
+        let schematic = root.join("../Fixtures/Formats/Sponge.schem");
+        let mut packs = PackCache::default();
+        let mut batches = 0;
+        let metadata = decode(
+            &schematic,
+            &pack,
+            Some(&pack),
+            &mut packs,
+            PreviewOptions {
+                chunk_size: Some(32),
+                thread_count: Some(2),
+                ..PreviewOptions::default()
+            },
+            || Ok(()),
+            |_, _| Ok(()),
+            |_| {
+                batches += 1;
+                Ok(())
+            },
+            |_, _, _| {},
+        )
+        .expect("preview with the selected pack");
+        assert!(batches > 0);
+        assert!(metadata.part_count > 0);
+    }
+
+    #[test]
+    fn selected_pack_is_validated_against_the_bundled_pack() {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../Assets/pack.zip");
+        let custom = std::env::temp_dir().join(format!(
+            "litematica-preview-selected-pack-{}.zip",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&custom, b"not a zip").unwrap();
+        let mut packs = PackCache::default();
+        let current = || Ok(());
+        assert!(packs.resolve(&base, None, &current).is_ok());
+        let error = match packs.resolve(&base, Some(&custom), &current) {
+            Err(error) => error,
+            Ok(_) => panic!("a malformed selected pack must not be accepted"),
+        };
+        assert!(error.contains("selected texture pack"), "{error}");
+        std::fs::remove_file(&custom).unwrap();
     }
 
     #[test]

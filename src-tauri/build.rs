@@ -31,6 +31,9 @@ fn main() {
                 "register_associations",
                 "unregister_associations",
                 "show_licenses",
+                "import_texture_packs",
+                "select_texture_pack",
+                "remove_texture_pack",
             ])),
     )
     .expect("Unable to build Litematica Preview resources");

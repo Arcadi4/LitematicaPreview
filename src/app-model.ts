@@ -1,3 +1,10 @@
+export type TexturePack = { id: string; name: string }
+export type TexturePackState = { packs: TexturePack[]; selected: string | null }
+export type ImportedTexturePacks = {
+  imported: number
+  failures: string[]
+  state: TexturePackState
+}
 export type Bootstrap = {
   extensions: string[]
   demos: { name: string; path: string; extension: string }[]
@@ -7,6 +14,8 @@ export type Bootstrap = {
   maxWorkerThreads: number
   /** Replays a native viewport failure from before event listeners. */
   viewportError: string | null
+  texturePacks: TexturePackState
+  texturePackError: string | null
 }
 export type ThemePreference = "system" | "light" | "dark"
 /** Completed preview statistics serialized by the native `preview-loaded` event. */

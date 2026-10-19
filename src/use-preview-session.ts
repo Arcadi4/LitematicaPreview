@@ -79,6 +79,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const [choosing, setChoosing] = useState(false)
   const viewportRef = useRef<HTMLDivElement>(null)
   const bootstrapRef = useRef<Bootstrap | null>(null)
+  const viewportErrorRef = useRef<string | null>(null)
   const gridRef = useRef(true)
   const previewSettingsRef = useRef(previewSettings)
   const mounted = useRef(false)
@@ -153,6 +154,14 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       ),
     [],
   )
+  const failViewport = useCallback(
+    (message: string) => {
+      viewportQueue.setReady(false)
+      viewportErrorRef.current = message
+      setViewportError(message)
+    },
+    [viewportQueue],
+  )
   useEffect(() => () => viewportQueue.clear(), [viewportQueue])
   const viewportInput = useCallback(
     (command: ViewportCommand) => viewportQueue.push(command),
@@ -160,7 +169,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   )
 
   const clearView = useCallback(() => {
-    viewportQueue.clear()
+    viewportQueue.resetScene()
     pendingRequest.current = null
     setLoaded(null)
     setLoading(null)
@@ -298,23 +307,19 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         setRawNotice({ intent: "error", message: `${request.path}\n\n${payload.message}` })
       }).then(track),
       listen<ViewportFailed>("viewport-failed", ({ payload }) => {
-        if (active) setViewportError(payload.message)
+        if (active) failViewport(payload.message)
       }).then(track),
     ]).then(() => {})
     listenersReady.current = ready
     void ready.catch((error: unknown) => {
-      if (active)
-        setRawNotice({
-          intent: "error",
-          message: `Could not subscribe to preview events: ${errorMessage(error)}`,
-        })
+      if (active) failViewport(`Could not subscribe to preview events: ${errorMessage(error)}`)
     })
     return () => {
       active = false
       if (listenersReady.current === ready) listenersReady.current = null
       for (const dispose of unlisteners) dispose()
     }
-  }, [isCurrent, updateTitle])
+  }, [failViewport, isCurrent, updateTitle])
 
   const loadPath = useCallback(
     async (path: string) => {
@@ -442,7 +447,9 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         bootstrapRef.current = result
         setBootstrap(result)
         // Bootstrap replays viewport failures that occurred before listeners were installed.
-        if (result.viewportError) setViewportError(result.viewportError)
+        if (result.viewportError) failViewport(result.viewportError)
+        viewportQueue.push({ kind: "grid", visible: gridRef.current })
+        viewportQueue.setReady(viewportErrorRef.current === null)
         const settings = previewSettingsRef.current
         updatePreviewSettings({
           multithreadingEnabled:
@@ -453,15 +460,12 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         })
         if (!initialPathConsumed.current) {
           initialPathConsumed.current = true
-          if (result.initialPath && openInitialPath) void loadPath(result.initialPath)
+          if (result.initialPath && openInitialPath && viewportErrorRef.current === null)
+            void loadPath(result.initialPath)
         }
       })
       .catch((error: unknown) => {
-        if (active)
-          setRawNotice({
-            intent: "error",
-            message: `Could not initialize the application: ${errorMessage(error)}`,
-          })
+        if (active) failViewport(`Could not initialize the application: ${errorMessage(error)}`)
       })
     void getCurrentWebview()
       .onDragDropEvent(({ payload }) => {
@@ -513,7 +517,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       unlisten?.()
       pendingRequest.current = null
     }
-  }, [cancelNative, isCurrent, loadPath, updatePreviewSettings])
+  }, [cancelNative, failViewport, isCurrent, loadPath, updatePreviewSettings, viewportQueue])
 
   // One session-long subscription reads the active request id from a ref.
   useEffect(() => {

@@ -282,3 +282,73 @@ impl Drop for UploadPermit {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn progress(pending: usize, pending_bytes: usize, submitted: usize) -> Progress {
+        Progress {
+            pending,
+            pending_bytes,
+            submitted,
+            waiting_since: None,
+        }
+    }
+
+    fn state(progress: Progress) -> UploadState {
+        UploadState {
+            progress: Mutex::new(progress),
+            changed: Condvar::new(),
+            failure: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Progress stored by these tests is never poisoned; keep the poisoned
+    /// branch explicit instead of unwrapping the lock result directly.
+    fn guarded(progress: &Mutex<Progress>) -> Result<std::sync::MutexGuard<'_, Progress>, String> {
+        progress
+            .lock()
+            .map_err(|_| String::from("The tested window lock must stay unpoisoned."))
+    }
+
+    #[test]
+    fn admission_fits_only_within_free_credits_and_the_byte_budget() {
+        // A sum exactly on the budget still admits with free credits.
+        assert!(admits(&progress(1, MAX_PENDING_BYTES - 1024, 1), 2, 1024));
+        // One byte over the budget waits, even while credits remain.
+        assert!(!admits(&progress(1, MAX_PENDING_BYTES - 1024, 1), 2, 1025));
+        // An oversized batch waits behind any pending reservation...
+        assert!(!admits(&progress(1, 1024, 1), 2, MAX_PENDING_BYTES + 1));
+        // ...but one oversized batch passes through an empty window.
+        assert!(admits(&progress(0, 0, 0), 1, MAX_PENDING_BYTES + 1));
+        // A full credit budget blocks even zero-byte batches.
+        assert!(!admits(&progress(2, 0, 2), 2, 0));
+        // Saturated accounting never admits before arithmetic would overflow.
+        assert!(!admits(&progress(1, usize::MAX, 1), 2, 1));
+    }
+
+    #[test]
+    fn dropping_an_unused_permit_returns_its_bytes_and_credit_once() {
+        let state = state(progress(2, 3072, 0));
+        state.release(1024, false);
+        let progress = guarded(&state.progress).unwrap();
+        assert_eq!(progress.pending, 1);
+        assert_eq!(progress.pending_bytes, 2048);
+        assert_eq!(progress.submitted, 0);
+        assert!(progress.waiting_since.is_none());
+    }
+
+    #[test]
+    fn the_gpu_callback_release_returns_bytes_and_lifts_the_stall_clock() {
+        let mut progress = progress(1, 8192, 1);
+        progress.waiting_since = Some(Instant::now());
+        let state = state(progress);
+        state.release(8192, true);
+        let progress = guarded(&state.progress).unwrap();
+        assert_eq!(progress.pending, 0);
+        assert_eq!(progress.pending_bytes, 0);
+        assert_eq!(progress.submitted, 0);
+        assert!(progress.waiting_since.is_none());
+    }
+}

@@ -431,15 +431,47 @@ fn mb(bytes: usize) -> f64 {
     bytes as f64 / 1024.0 / 1024.0
 }
 
+/// Inserts thousands separators into the integer part while leaving the sign
+/// and fraction alone: `-1234567.5` becomes `-1,234,567.5`.
+fn grouped(text: &str) -> String {
+    let (sign, digits) = match text.as_bytes().first() {
+        Some(b'-') => ("-", &text[1..]),
+        Some(b'+') => ("+", &text[1..]),
+        _ => ("", text),
+    };
+    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
+    let mut text = String::with_capacity(digits.len() + digits.len() / 3 + sign.len());
+    text.push_str(sign);
+    for (index, digit) in whole.chars().enumerate() {
+        if index > 0 && (whole.len() - index) % 3 == 0 {
+            text.push(',');
+        }
+        text.push(digit);
+    }
+    if !fraction.is_empty() {
+        text.push('.');
+        text.push_str(fraction);
+    }
+    text
+}
+
+fn number(value: f64, digits: usize) -> String {
+    grouped(&format!("{value:.digits$}"))
+}
+
+fn count(value: u64) -> String {
+    grouped(&value.to_string())
+}
+
 fn mb_opt(bytes: Option<u64>) -> String {
     bytes
-        .map(|value| format!("{:.1}", value as f64 / 1024.0 / 1024.0))
+        .map(|value| number(value as f64 / 1024.0 / 1024.0, 1))
         .unwrap_or_else(|| String::from("-"))
 }
 
 fn num_opt(value: Option<f64>) -> String {
     value
-        .map(|number| format!("{number}"))
+        .map(|value| grouped(&value.to_string()))
         .unwrap_or_else(|| String::from("-"))
 }
 
@@ -480,6 +512,7 @@ struct Rig {
     samples: u32,
     format: wgpu::TextureFormat,
     adapter: String,
+    backend: String,
     /// Software adapters rasterize whole frames on the CPU, so their frame
     /// latencies are noise and dominate wall time. Those loads keep the
     /// upload and memory path but skip every draw.
@@ -591,7 +624,8 @@ fn request_rig() -> Result<(Rig, Option<String>), String> {
     });
     Ok((
         Rig {
-            adapter: format!("{info:?}"),
+            adapter: info.name.clone(),
+            backend: format!("{:?}", info.backend),
             device,
             queue,
             pipelines,
@@ -1509,6 +1543,9 @@ fn load_options(settings: &Settings) -> PreviewOptions {
 #[derive(Debug, Serialize, Deserialize)]
 struct GpuMeta {
     adapter: String,
+    /// Absent from older reports, which recorded only the adapter debug dump.
+    #[serde(default)]
+    backend: String,
     samples: u32,
     format: String,
     width: u32,
@@ -1624,68 +1661,81 @@ fn rendered_markdown(
 ) -> String {
     let mut text = String::new();
     let meta = &report.meta;
-    text.push_str("## Pressure report\n\n");
+    text.push_str("## Million-block pressure report\n\n");
     text.push_str(&format!(
-        "- Host: {} ({} cores), revision {}\n",
+        "- Host: {} with {} logical cores; revision `{}`\n",
         meta.os,
         meta.cores,
         meta.rev.clone().unwrap_or_else(|| String::from("unknown"))
     ));
     text.push_str(&format!(
-        "- Options: {} threads, chunk {}, {} timed frames\n",
+        "- Run: {} worker threads, chunk size {}, {} timed frames per load\n",
         meta.threads, meta.chunk, meta.frames
     ));
     match &meta.adapter {
-        Some(gpu) => text.push_str(&format!(
-            "- Device: `{}` ({}x MSAA, {})\n",
-            gpu.adapter, gpu.samples, gpu.format
-        )),
-        None => text.push_str("- Device: unavailable; GPU metrics omitted\n"),
+        Some(gpu) => {
+            let backend = if gpu.backend.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", gpu.backend)
+            };
+            text.push_str(&format!(
+                "- GPU: {}{backend}, {}×{}, {}× MSAA, {}\n",
+                gpu.adapter, gpu.width, gpu.height, gpu.samples, gpu.format
+            ));
+        }
+        None => text.push_str("- GPU: unavailable; frame and device metrics are omitted\n"),
     }
     text.push('\n');
     if !report.core.is_empty() {
-        text.push_str("### Core phase (in-process decode, allocator lens)\n\n");
+        text.push_str("### Core decode (in-process, allocator-measured memory)\n\n");
+        let decoded: Vec<&CoreRecord> = report
+            .core
+            .iter()
+            .filter(|record| record.error.is_none())
+            .collect();
         text.push_str(&markdown_table(
             &[
                 "fixture",
                 "blocks",
                 "batches",
-                "triangles",
-                "payload MB",
-                "decode ms",
-                "open ms",
-                "stream ms",
-                "total",
-                "decoded peak MB",
-                "stream peak MB",
-                "retained MB",
+                "triangles (M)",
+                "payload (MB)",
+                "decode (ms)",
+                "stream open (ms)",
+                "stream (ms)",
+                "total (ms)",
+                "peak decode (MB)",
+                "peak stream (MB)",
+                "retained (MB)",
             ],
             |index| {
-                let record = &report.core[index];
-                if let Some(error) = &record.error {
-                    return vec![
-                        record.fixture.clone(),
-                        String::from("ERR"),
-                        error.clone().lines().next().unwrap_or_default().to_string(),
-                    ];
-                }
+                let record = decoded[index];
                 vec![
                     record.fixture.clone(),
-                    format!("{}", record.blocks),
-                    record.batches.to_string(),
-                    format!("{:.2}", record.triangles as f64 / 1_000_000.0),
-                    format!("{:.1}", mb_bytes(record.payload_bytes)),
-                    format!("{}", round_at(record.decode_ms, 0)),
-                    format!("{}", round_at(record.stream_open_ms, 0)),
-                    format!("{}", round_at(record.stream_ms, 0)),
-                    format!("{}", round_at(record.total_ms, 0)),
-                    format!("{:.1}", mb(record.decode_peak_bytes)),
-                    format!("{:.1}", mb(record.streaming_peak_bytes)),
-                    format!("{:.2}", mb(record.retained_bytes)),
+                    count(record.blocks),
+                    count(record.batches),
+                    number(record.triangles as f64 / 1_000_000.0, 2),
+                    number(mb_bytes(record.payload_bytes), 1),
+                    number(record.decode_ms, 0),
+                    number(record.stream_open_ms, 0),
+                    number(record.stream_ms, 0),
+                    number(record.total_ms, 0),
+                    number(mb(record.decode_peak_bytes), 1),
+                    number(mb(record.streaming_peak_bytes), 1),
+                    number(mb(record.retained_bytes), 2),
                 ]
             },
-            report.core.len(),
+            decoded.len(),
         ));
+        for record in report.core.iter().filter(|record| record.error.is_some()) {
+            let error = record.error.as_deref().unwrap_or_default();
+            text.push_str(&format!(
+                "- **{} failed:** {}\n",
+                record.fixture,
+                error.lines().next().unwrap_or_default()
+            ));
+        }
         text.push('\n');
     }
     let cold: Vec<&OutcomeRow> = report
@@ -1694,47 +1744,51 @@ fn rendered_markdown(
         .filter(|row| row.mode == "cold")
         .collect();
     if !cold.is_empty() {
-        text.push_str("### Cold pass (production load, fresh decoder child per fixture)\n\n");
+        text.push_str("### Cold pass (fresh decoder child per fixture, full production load)\n\n");
         text.push_str(&markdown_table(
             &[
                 "fixture",
-                "connect ms",
-                "decode ms",
-                "open ms",
-                "first frame",
-                "full render",
+                "connect (ms)",
+                "decode (ms)",
+                "stream open (ms)",
+                "first frame (ms)",
+                "full render (ms)",
                 "batches",
-                "child peak",
-                "cap %",
-                "frames p50/p95",
-                "frames Δ KB",
-                "host peak",
-                "retained MB",
+                "decoder child peak (MB)",
+                "decoder cap use (%)",
+                "frames p50/p95 (ms)",
+                "frame-loop growth (KB)",
+                "host peak (MB)",
+                "retained (MB)",
             ],
             |index| {
                 let row = cold[index];
                 vec![
                     row.fixture.clone(),
-                    format!("{}", round_at(row.connect_ms, 0)),
-                    format!("{}", round_at(row.decode_ms, 0)),
-                    format!("{}", round_at(row.stream_open_ms, 0)),
+                    number(row.connect_ms, 0),
+                    number(row.decode_ms, 0),
+                    number(row.stream_open_ms, 0),
                     cell_option_time(row.first_frame_ms),
                     cell_option_time(row.full_render_ms),
-                    format!("{}", row.batches),
+                    count(row.batches),
                     mb_opt(row.child_peak),
                     num_opt(row.decoder_cap_percent),
                     if row.frames_measured == 0 {
                         String::from("-")
                     } else {
-                        format!("{:.1} / {:.1}", row.frames_p50_ms, row.frames_p95_ms)
+                        format!(
+                            "{} / {}",
+                            number(row.frames_p50_ms, 1),
+                            number(row.frames_p95_ms, 1)
+                        )
                     },
                     if row.frames_measured == 0 {
                         String::from("-")
                     } else {
-                        format!("{:.1}", row.frames_growth_bytes as f64 / 1024.0)
+                        number(row.frames_growth_bytes as f64 / 1024.0, 1)
                     },
                     mb_opt(row.host_peak),
-                    format!("{:.2}", mb(row.retained_bytes)),
+                    number(mb(row.retained_bytes), 2),
                 ]
             },
             cold.len(),
@@ -1747,27 +1801,27 @@ fn rendered_markdown(
         .filter(|row| row.mode == "warm")
         .collect();
     if !warm.is_empty() {
-        text.push_str("### Warm pass (one reused decoder child, four Atrium loads)\n\n");
+        text.push_str("### Warm pass (one decoder child reused across four Atrium loads)\n\n");
         text.push_str(&markdown_table(
             &[
                 "load",
-                "decode ms",
-                "open ms",
-                "stream ms",
-                "child peak",
-                "host peak",
-                "retained MB",
+                "decode (ms)",
+                "stream open (ms)",
+                "stream (ms)",
+                "decoder child peak (MB)",
+                "host peak (MB)",
+                "retained (MB)",
             ],
             |index| {
                 let row = warm[index];
                 vec![
                     row.load.to_string(),
-                    format!("{}", round_at(row.decode_ms, 0)),
-                    format!("{}", round_at(row.stream_open_ms, 0)),
-                    format!("{}", round_at(row.stream_ms, 0)),
+                    number(row.decode_ms, 0),
+                    number(row.stream_open_ms, 0),
+                    number(row.stream_ms, 0),
                     mb_opt(row.child_peak),
                     mb_opt(row.host_peak),
-                    format!("{:.2}", mb(row.retained_bytes)),
+                    number(mb(row.retained_bytes), 2),
                 ]
             },
             warm.len(),
@@ -1783,16 +1837,16 @@ fn rendered_markdown(
     }
     if let Some((base, deltas)) = deltas {
         let _ = base;
-        text.push_str("### Δ vs main baseline\n\n");
+        text.push_str("### Change vs main baseline\n\n");
         text.push_str(&markdown_table(
-            &["metric", "main", "current", "change"],
+            &["metric", "main", "this run", "change"],
             |index| {
                 let (key, base, current, change) = &deltas[index];
                 vec![
                     key.clone(),
-                    format!("{base:.3}"),
-                    format!("{current:.3}"),
-                    format!("{change:+.1}%"),
+                    number(*base, 3),
+                    number(*current, 3),
+                    format!("{}%", grouped(&format!("{change:+.1}"))),
                 ]
             },
             deltas.len(),
@@ -1801,7 +1855,7 @@ fn rendered_markdown(
     }
     if !report.meta.warnings.is_empty() {
         text.push_str(&format!(
-            "_Warnings: {}_\n",
+            "> **Warnings:** {}\n",
             report.meta.warnings.join("; ")
         ));
     }
@@ -1812,7 +1866,7 @@ fn cell_option_time(value: f64) -> String {
     if value <= 0.0 {
         String::from("-")
     } else {
-        format!("{}", round_at(value, 0))
+        number(value, 0)
     }
 }
 
@@ -2002,6 +2056,7 @@ fn run_cold_pass(
     let frames_reported = settings.render && rig.as_ref().is_some_and(|rig| rig.hardware);
     let adapter = rig.as_ref().map(|rig| GpuMeta {
         adapter: rig.adapter.clone(),
+        backend: rig.backend.clone(),
         samples: rig.samples,
         format: format!("{:?}", rig.format),
         width: FRAME_WIDTH,
@@ -2052,4 +2107,19 @@ pub fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     run_suite(&settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{count, grouped, number};
+
+    #[test]
+    fn groups_thousands_without_touching_sign_or_fraction() {
+        assert_eq!(count(1_121_671), "1,121,671");
+        assert_eq!(count(791), "791");
+        assert_eq!(number(1651.26, 1), "1,651.3");
+        assert_eq!(number(-9.0, 2), "-9.00");
+        assert_eq!(grouped("+1234567.5"), "+1,234,567.5");
+        assert_eq!(grouped("0.02"), "0.02");
+    }
 }

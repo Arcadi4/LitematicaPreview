@@ -3,25 +3,76 @@
 mod associations;
 mod formats;
 mod preview;
-mod preview_process;
-mod protocol;
+mod render;
 mod resources;
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use preview::PreviewWorker;
+use render::context::NativeRenderer;
 use resources::{Demo, Resources};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
 pub use formats::EXTENSIONS;
 
+const VIEWPORT_UNAVAILABLE: &str = "The native viewport is unavailable. \
+     Restart the application to initialize the graphics device.";
+
 struct HostState {
     worker: Arc<PreviewWorker>,
     resources: Resources,
     initial_path: Option<String>,
+}
+
+/// The native viewport. The renderer exists once the wgpu surface was created
+/// for the main window and stays `None` after a creation failure, so the DOM
+/// can show the actionable `viewport-failed` error without the app exiting.
+/// `init_error` retains that failure for `bootstrap`, which the setup hook
+/// completed before the frontend could subscribe to the event.
+struct ViewerState {
+    renderer: Arc<Mutex<Option<NativeRenderer>>>,
+    init_error: Arc<Mutex<Option<String>>>,
+}
+
+impl ViewerState {
+    fn unavailable(initial_error: Option<String>) -> Self {
+        Self {
+            renderer: Arc::new(Mutex::new(None)),
+            init_error: Arc::new(Mutex::new(initial_error)),
+        }
+    }
+}
+
+/// Locks the renderer, treating a poisoned lock as an unavailable viewport
+/// instead of unwinding. Callers never hold the lock across blocking waits.
+fn lock_renderer(
+    renderer: &Mutex<Option<NativeRenderer>>,
+) -> Result<MutexGuard<'_, Option<NativeRenderer>>, String> {
+    renderer
+        .lock()
+        .map_err(|_| VIEWPORT_UNAVAILABLE.to_string())
+}
+
+/// Runs one renderer action while holding the lock.
+fn with_renderer<T>(
+    renderer: &Arc<Mutex<Option<NativeRenderer>>>,
+    action: impl FnOnce(&mut NativeRenderer) -> T,
+) -> Result<T, String> {
+    let mut locked = lock_renderer(renderer)?;
+    let renderer = locked
+        .as_mut()
+        .ok_or_else(|| VIEWPORT_UNAVAILABLE.to_string())?;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(renderer))).map_err(|panic| {
+        let detail = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("Unknown graphics panic");
+        format!("The graphics operation failed: {detail}")
+    })
 }
 
 #[derive(Serialize)]
@@ -33,13 +84,22 @@ struct Bootstrap {
     version: &'static str,
     request_id: u64,
     max_worker_threads: u8,
+    viewport_error: Option<String>,
 }
 
 #[tauri::command]
-async fn bootstrap(state: State<'_, HostState>) -> Result<Bootstrap, String> {
+async fn bootstrap(
+    state: State<'_, HostState>,
+    viewer: State<'_, ViewerState>,
+) -> Result<Bootstrap, String> {
     let resources = state.resources.clone();
     let initial_path = state.initial_path.clone();
     let request_id = state.worker.begin_session();
+    let viewport_error = viewer
+        .init_error
+        .lock()
+        .ok()
+        .and_then(|error| error.clone());
     tauri::async_runtime::spawn_blocking(move || {
         Ok(Bootstrap {
             extensions: EXTENSIONS,
@@ -48,6 +108,7 @@ async fn bootstrap(state: State<'_, HostState>) -> Result<Bootstrap, String> {
             version: env!("CARGO_PKG_VERSION"),
             request_id,
             max_worker_threads: litematica_preview_core::max_worker_threads(),
+            viewport_error,
         })
     })
     .await
@@ -86,6 +147,27 @@ struct PreviewProgress {
     total: u64,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewFailed {
+    request_id: u64,
+    message: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewLoaded {
+    request_id: u64,
+    metadata: preview::Metadata,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ViewportFailed {
+    message: String,
+}
+
 fn preview_path(path: String) -> Result<PathBuf, String> {
     let path = PathBuf::from(path);
     let supported = path
@@ -109,51 +191,22 @@ fn report_progress(
     app: &AppHandle,
     worker: &PreviewWorker,
     request_id: u64,
+    phase: &'static str,
     completed: u64,
     total: u64,
 ) {
-    if worker.ensure_current(request_id).is_ok() {
-        let _ = app.emit(
+    let _ = worker.with_current(request_id, || {
+        app.emit(
             "preview-progress",
             PreviewProgress {
                 request_id,
-                phase: "mesh",
+                phase,
                 completed,
                 total,
             },
-        );
-    }
-}
-
-#[tauri::command]
-async fn load_preview(
-    path: String,
-    request_id: u64,
-    app: AppHandle,
-    options: preview::LoadOptions,
-    state: State<'_, HostState>,
-) -> Result<protocol::Metadata, String> {
-    let options = options.validate()?;
-    let worker = Arc::clone(&state.worker);
-    worker.advance(request_id);
-    worker.ensure_current(request_id)?;
-    let path = preview_path(path)?;
-    let resources = state.resources.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        worker.ensure_current(request_id)?;
-        let pack_path = resources.pack()?;
-        let metadata = worker.load(
-            &path,
-            &pack_path,
-            request_id,
-            options,
-            |completed, total| report_progress(&app, &worker, request_id, completed, total),
-        )?;
-        worker.ensure_current(request_id)?;
-        Ok(metadata)
-    })
-    .await
-    .map_err(|e| format!("The preview worker stopped unexpectedly: {e}"))?
+        )
+        .map_err(|error| error.to_string())
+    });
 }
 
 #[tauri::command]
@@ -163,64 +216,110 @@ fn start_preview(
     app: AppHandle,
     options: preview::LoadOptions,
     state: State<'_, HostState>,
+    viewer: State<'_, ViewerState>,
 ) -> Result<(), String> {
     let options = options.validate()?;
-    if options.thread_count.is_none() {
-        return Err("Streaming preview requires multithreading.".into());
-    }
     let path = preview_path(path)?;
+    let pack_path = state.resources.pack()?;
     let worker = Arc::clone(&state.worker);
-    worker.advance(request_id);
-    worker.begin_stream(request_id, options)?;
-    let resources = state.resources.clone();
-    tauri::async_runtime::spawn(async move {
-        let producer = Arc::clone(&worker);
-        let result = tauri::async_runtime::spawn_blocking(move || {
-            let pack = resources.pack()?;
-            producer.load_stream(&path, &pack, request_id, options, |completed, total| {
-                report_progress(&app, &producer, request_id, completed, total)
-            })
-        })
-        .await;
-        match result {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => worker.fail_stream(request_id, error),
-            Err(error) => worker.fail_stream(
-                request_id,
-                format!("The preview worker stopped unexpectedly: {error}"),
-            ),
-        }
-    });
-    Ok(())
-}
-
-#[tauri::command]
-async fn next_preview(
-    request_id: u64,
-    previous_batch_id: Option<u64>,
-    state: State<'_, HostState>,
-) -> Result<protocol::StreamEvent, String> {
-    let worker = Arc::clone(&state.worker);
-    tauri::async_runtime::spawn_blocking(move || worker.next(request_id, previous_batch_id))
-        .await
-        .map_err(|e| format!("Unable to receive the next preview batch: {e}"))?
-}
-
-#[tauri::command]
-async fn read_preview(
-    request_id: u64,
-    batch_id: Option<u64>,
-    ranges: Vec<protocol::ReadRange>,
-    state: State<'_, HostState>,
-) -> Result<tauri::ipc::Response, String> {
-    let worker = Arc::clone(&state.worker);
-    tauri::async_runtime::spawn_blocking(move || {
-        worker
-            .read(request_id, batch_id, &ranges)
-            .map(tauri::ipc::Response::new)
-    })
-    .await
-    .map_err(|e| format!("Unable to read the preview buffer: {e}"))?
+    let renderer = Arc::clone(&viewer.renderer);
+    let job_worker = Arc::clone(&worker);
+    let prepare_renderer = Arc::clone(&renderer);
+    worker.submit(
+        request_id,
+        move || {
+            with_renderer(&prepare_renderer, |renderer| {
+                renderer.begin_load();
+                renderer.render().map_err(|error| error.to_string())
+            })?
+        },
+        Box::new(move |pack| {
+            let current = || job_worker.ensure_current(request_id);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                current()?;
+                let uploads = job_worker.with_current(request_id, || {
+                    with_renderer(&renderer, |renderer| {
+                        renderer.upload_window(usize::from(options.thread_count.unwrap_or(1)))
+                    })
+                })?;
+                let metadata = preview::load(
+                    &path,
+                    &pack_path,
+                    pack,
+                    options,
+                    &current,
+                    |min, max| {
+                        job_worker.with_current(request_id, || {
+                            with_renderer(&renderer, |renderer| renderer.prepare_load(min, max))
+                        })
+                    },
+                    |batch| {
+                        let permit = uploads.acquire(&current)?;
+                        job_worker.with_current(request_id, || {
+                            with_renderer(&renderer, |renderer| {
+                                renderer
+                                    .attach_batch(&batch, permit)
+                                    .map_err(|error| error.to_string())
+                            })?
+                        })
+                    },
+                    |phase, completed, total| {
+                        report_progress(&app, &job_worker, request_id, phase, completed, total)
+                    },
+                );
+                let drained = uploads.drain(&|| Ok(()));
+                let metadata = metadata?;
+                drained?;
+                current()?;
+                job_worker.with_current(request_id, || {
+                    with_renderer(&renderer, |renderer| {
+                        renderer.finish_load(&metadata.info());
+                        renderer.render().map_err(|error| error.to_string())
+                    })??;
+                    job_worker.release(request_id);
+                    app.emit(
+                        "preview-loaded",
+                        PreviewLoaded {
+                            request_id,
+                            metadata,
+                        },
+                    )
+                    .map_err(|error| error.to_string())
+                })
+            }))
+            .unwrap_or_else(|panic| {
+                *pack = None;
+                let detail = panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("Unknown native panic");
+                Err(format!("The preview worker stopped unexpectedly: {detail}"))
+            });
+            if let Err(message) = result {
+                let _ = job_worker.with_current(request_id, || {
+                    let cleanup = with_renderer(&renderer, |renderer| {
+                        renderer.cancel_load();
+                        renderer.render().map_err(|error| error.to_string())
+                    })
+                    .and_then(|result| result);
+                    let message = match cleanup {
+                        Ok(()) => message,
+                        Err(error) => format!("{message}\n\nRecovery: {error}"),
+                    };
+                    job_worker.release(request_id);
+                    app.emit(
+                        "preview-failed",
+                        PreviewFailed {
+                            request_id,
+                            message,
+                        },
+                    )
+                    .map_err(|error| error.to_string())
+                });
+            }
+        }),
+    )
 }
 
 #[tauri::command]
@@ -229,13 +328,98 @@ fn preview_memory(request_id: u64, state: State<'_, HostState>) -> Option<u64> {
 }
 
 #[tauri::command]
-fn release_preview(request_id: u64, state: State<'_, HostState>) {
-    state.worker.release(request_id);
+fn cancel_load(
+    request_id: u64,
+    state: State<'_, HostState>,
+    viewer: State<'_, ViewerState>,
+) -> Result<(), String> {
+    state.worker.cancel(request_id, || {
+        with_renderer(&viewer.renderer, |renderer| {
+            renderer.cancel_load();
+            renderer.render().map_err(|error| error.to_string())
+        })?
+    })
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+enum ViewportInput {
+    Orbit {
+        dx: f32,
+        dy: f32,
+    },
+    Pan {
+        dx: f32,
+        dy: f32,
+    },
+    #[serde(rename_all = "camelCase")]
+    Wheel {
+        delta_y: f32,
+        delta_mode: u8,
+    },
+    Zoom {
+        factor: f32,
+    },
+    Arrow {
+        dx: f32,
+        dy: f32,
+        panning: bool,
+    },
+    Fit {},
+    Grid {
+        visible: bool,
+    },
+    /// The visible preview rectangle in CSS pixels, re-reported by the
+    /// frontend whenever the DOM chrome around it changes. It is not camera
+    /// input, but it rides the same ordered per-frame stream so a layout
+    /// change and its re-fit land in one presented frame.
+    Stage {
+        left: f32,
+        top: f32,
+        width: f32,
+        height: f32,
+    },
+}
+
+/// Applies ordered input accumulated for one display frame, then presents once.
 #[tauri::command]
-fn cancel_load(request_id: u64, state: State<'_, HostState>) {
-    state.worker.advance(request_id);
+fn viewport_input(
+    commands: Vec<ViewportInput>,
+    state: State<'_, ViewerState>,
+) -> Result<(), String> {
+    let mut locked = lock_renderer(&state.renderer)?;
+    let renderer = locked
+        .as_mut()
+        .ok_or_else(|| VIEWPORT_UNAVAILABLE.to_string())?;
+    for command in commands {
+        if !matches!(
+            command,
+            ViewportInput::Grid { .. } | ViewportInput::Stage { .. }
+        ) {
+            renderer.mark_user_interaction();
+        }
+        match command {
+            ViewportInput::Orbit { dx, dy } => renderer.camera().orbit(dx, dy),
+            ViewportInput::Pan { dx, dy } => renderer.camera().pan(dx, dy),
+            ViewportInput::Wheel {
+                delta_y,
+                delta_mode,
+            } => renderer.camera().zoom_wheel(delta_y, delta_mode),
+            ViewportInput::Zoom { factor } => renderer.camera().zoom(factor),
+            ViewportInput::Arrow { dx, dy, panning } => renderer.camera().arrow(dx, dy, panning),
+            ViewportInput::Fit {} => renderer.camera().fit(),
+            ViewportInput::Grid { visible } => renderer.camera().set_grid(visible),
+            ViewportInput::Stage {
+                left,
+                top,
+                width,
+                height,
+            } => {
+                renderer.set_stage(left, top, width, height);
+            }
+        }
+    }
+    renderer.render().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -316,6 +500,56 @@ fn initial_path() -> Result<Option<String>, String> {
     resources::path_string(&absolute).map(Some)
 }
 
+/// Composes the native viewport under the transparent DOM layer and creates
+/// the renderer for the main window's surface. A failure leaves the renderer
+/// absent, emits `viewport-failed` and retains the message in `ViewerState`,
+/// where `bootstrap` replays it for listeners the setup hook preceded, while
+/// the app keeps running.
+#[cfg(target_os = "windows")]
+fn create_viewer(handle: &AppHandle) -> ViewerState {
+    let surface = match render::viewport::install(handle) {
+        Ok(surface) => surface,
+        Err(error) => {
+            let message = error.to_string();
+            let _ = handle.emit(
+                "viewport-failed",
+                ViewportFailed {
+                    message: message.clone(),
+                },
+            );
+            return ViewerState::unavailable(Some(message));
+        }
+    };
+    match render::context::NativeRenderer::new_from_hwnd(surface.hwnd(), surface.size()) {
+        Ok(mut renderer) => {
+            if let Some(window) = handle.get_webview_window("main") {
+                if let Ok(scale) = window.scale_factor() {
+                    renderer.set_scale(scale);
+                }
+            }
+            ViewerState {
+                renderer: Arc::new(Mutex::new(Some(renderer))),
+                init_error: Arc::new(Mutex::new(None)),
+            }
+        }
+        Err(error) => {
+            let message = error.to_string();
+            let _ = handle.emit(
+                "viewport-failed",
+                ViewportFailed {
+                    message: message.clone(),
+                },
+            );
+            ViewerState::unavailable(Some(message))
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn create_viewer(_handle: &AppHandle) -> ViewerState {
+    ViewerState::unavailable(None)
+}
+
 fn run() -> Result<(), String> {
     let initial_path = initial_path()?;
     tauri::Builder::default()
@@ -327,23 +561,47 @@ fn run() -> Result<(), String> {
                 resources,
                 initial_path,
             });
+            // Synchronous init, matching the WebGL renderer it replaces: the
+            // surface and renderer exist before the first frame.
+            app.manage(create_viewer(app.handle()));
             Ok(())
         })
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
-                window.state::<HostState>().worker.advance(u64::MAX);
+                let _ = window
+                    .state::<HostState>()
+                    .worker
+                    .cancel(u64::MAX, || Ok(()));
+            }
+            if matches!(
+                event,
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
+            ) {
+                if let Some(viewer) = window.try_state::<ViewerState>() {
+                    if let Ok(mut renderer) = viewer.renderer.lock() {
+                        if let Some(renderer) = renderer.as_mut() {
+                            if let Ok(size) = window.inner_size() {
+                                renderer.resize(size.width, size.height);
+                            }
+                            if let Ok(scale) = window.scale_factor() {
+                                renderer.set_scale(scale);
+                            }
+                            // A failed frame here is retried by the next
+                            // input; only load failures reach the DOM as
+                            // `preview-failed`.
+                            let _ = renderer.render();
+                        }
+                    }
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
             bootstrap,
             choose_file,
-            load_preview,
             start_preview,
-            next_preview,
-            read_preview,
             preview_memory,
-            release_preview,
             cancel_load,
+            viewport_input,
             register_associations,
             unregister_associations,
             show_licenses,
@@ -355,22 +613,6 @@ fn run() -> Result<(), String> {
 fn main() {
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
-    // Decoder mode bypasses Tauri and WebView2. It receives authentication
-    // through the inherited stdin pipe, not process arguments or a Tauri command.
-    if first
-        .as_deref()
-        .is_some_and(|argument| argument == "--preview-worker")
-    {
-        let result = match (args.next(), args.next()) {
-            (Some(port), None) => preview_process::run(&port),
-            _ => Err("Invalid decoder process arguments.".into()),
-        };
-        if let Err(error) = result {
-            eprintln!("{error}");
-            std::process::exit(1);
-        }
-        return;
-    }
     let remaining: Vec<_> = args.collect();
     let registration = match first.as_deref().and_then(|arg| arg.to_str()) {
         Some("--register") if remaining.is_empty() => Some(associations::register()),

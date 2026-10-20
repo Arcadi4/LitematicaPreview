@@ -19,7 +19,7 @@ export function WelcomePanel({
 }: WelcomePanelProps) {
   return (
     <section
-      className="absolute inset-0 overflow-auto [overscroll-behavior:contain]"
+      className="absolute inset-0 overflow-auto bg-surface-secondary [overscroll-behavior:contain]"
       hidden={hidden}
     >
       <div className="w-full max-w-5xl mx-auto px-5 py-6 sm:px-8 sm:py-8 md:px-12 md:py-14">

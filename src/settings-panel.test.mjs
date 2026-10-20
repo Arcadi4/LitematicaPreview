@@ -38,14 +38,12 @@ test("disabled preview controls retain enabled and described help buttons", () =
   const markup = render(
     {
       ...defaultPreviewSettings,
-      memoryLimitEnabled: false,
       chunkingEnabled: false,
       multithreadingEnabled: false,
     },
     null,
   )
   assert.match(input(markup, "Worker threads"), /\bdisabled=""/)
-  assert.match(input(markup, "Decoder memory limit (MB)"), /\bdisabled=""/)
   const described = [...markup.matchAll(/<button\b[^>]*aria-describedby="([^"]+)"[^>]*>/g)].map(
     ([tag, id]) => ({ tag, id }),
   )

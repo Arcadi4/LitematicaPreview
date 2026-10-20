@@ -1,4 +1,4 @@
-// Records matching host and decoder processes until interrupted. It only observes
+// Records matching host processes until interrupted. It only observes
 // processes; it never starts the application. Run it through the package script:
 // `pnpm run record-memory -- --process LitematicaPreview`.
 
@@ -333,9 +333,7 @@ async function main(): Promise<void> {
     `Recording ${options.processName} processes every ${options.intervalMs} ms. Ctrl+C to stop.`,
   )
   console.log(`CSV: ${options.outputPath}`)
-  console.log(
-    "All matching processes are summed (host + decoder). WebView2/GPU processes are excluded.",
-  )
+  console.log("All matching host processes are summed. WebView2/GPU processes are excluded.")
   if (process.platform !== "win32") {
     console.log("This host reports the resident set; only Windows exposes a private-bytes counter.")
   }

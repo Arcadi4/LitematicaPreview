@@ -207,7 +207,7 @@ function AboutLicenses({ version }: { version: string | undefined }) {
         A local, interactive viewer for Minecraft schematics and structures, inspired by
         LitematicaQL.
       </p>
-      <p>Powered by Nucleation, Tauri, WebGL, React, and Fluent UI.</p>
+      <p>Powered by Nucleation, Tauri, wgpu, React, and Fluent UI.</p>
       <p>
         Distributed under the GNU Affero General Public License v3. This program comes with no
         warranty. Redistribution is permitted under the terms of the bundled license.

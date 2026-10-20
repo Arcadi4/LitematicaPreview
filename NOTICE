@@ -9,7 +9,8 @@ litematica-preview-core. Its bundled ThirdParty/ directory carries the license
 texts for the third-party crates it builds on (Nucleation, schematic-mesher).
 Tauri 2 provides the Rust desktop host and the Windows WebView2 integration.
 React and Fluent UI React v9 provide the desktop interface and Fluent System Icons.
-The preview renderer uses WebGL 2 and gl-matrix for camera and matrix operations.
+The preview renderer is a native wgpu pipeline (Direct3D 12) that draws into
+the main window beneath a transparent WebView2 layer.
 The shipped app does not use .NET, OpenTK, GLFW, or a Node.js runtime.
 
 See ThirdParty/ for bundled dependency license texts and dependency inventories.
@@ -22,7 +23,6 @@ Primary upstream license sources:
   React: https://github.com/facebook/react/blob/main/LICENSE
   Fluent UI: https://github.com/microsoft/fluentui/blob/master/LICENSE
   Fluent System Icons: https://github.com/microsoft/fluentui-system-icons/blob/main/LICENSE
-  gl-matrix: https://github.com/toji/gl-matrix/blob/master/LICENSE.md
 
 Third-party Minecraft resource pack
 ------------------------------------

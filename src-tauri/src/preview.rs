@@ -693,16 +693,20 @@ mod tests {
     }
 
     #[test]
-    fn selected_pack_decodes_and_meshes_a_fixture() {
+    fn stack_decodes_and_meshes_a_fixture() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let pack = root.join("../Assets/pack.zip");
         let schematic = root.join("../Fixtures/Formats/Sponge.schem");
+        let layer = PackLayer {
+            name: "Vanilla copy".into(),
+            path: pack.clone(),
+        };
         let mut packs = PackCache::default();
         let mut batches = 0;
         let metadata = decode(
             &schematic,
             &pack,
-            Some(&pack),
+            std::slice::from_ref(&layer),
             &mut packs,
             PreviewOptions {
                 chunk_size: Some(32),
@@ -717,28 +721,191 @@ mod tests {
             },
             |_, _, _| {},
         )
-        .expect("preview with the selected pack");
+        .expect("preview with the texture pack stack");
         assert!(batches > 0);
         assert!(metadata.part_count > 0);
     }
 
     #[test]
-    fn selected_pack_is_validated_against_the_bundled_pack() {
+    fn malformed_stack_layer_is_rejected_with_its_name() {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../Assets/pack.zip");
         let custom = std::env::temp_dir().join(format!(
-            "litematica-preview-selected-pack-{}.zip",
+            "litematica-preview-stack-layer-{}.zip",
             uuid::Uuid::new_v4()
         ));
         std::fs::write(&custom, b"not a zip").unwrap();
+        let layers = [PackLayer {
+            name: "Broken".into(),
+            path: custom.clone(),
+        }];
         let mut packs = PackCache::default();
         let current = || Ok(());
-        assert!(packs.resolve(&base, None, &current).is_ok());
-        let error = match packs.resolve(&base, Some(&custom), &current) {
+        assert!(packs.resolve(&base, &[], &current).is_ok());
+        let error = match packs.resolve(&base, &layers, &current) {
             Err(error) => error,
-            Ok(_) => panic!("a malformed selected pack must not be accepted"),
+            Ok(_) => panic!("a malformed stack layer must not be accepted"),
         };
-        assert!(error.contains("selected texture pack"), "{error}");
+        assert!(error.contains("Broken"), "{error}");
         std::fs::remove_file(&custom).unwrap();
+    }
+
+    #[test]
+    fn higher_priority_pack_wins_and_lower_pack_fills_missing_resources() {
+        let high = resource_pack(&[("shared", [0, 0, 255, 255])]);
+        let low = resource_pack(&[("shared", [255, 0, 0, 255]), ("low_only", [0, 255, 0, 255])]);
+        let layers = [
+            PackLayer {
+                name: "High".into(),
+                path: PathBuf::from("high.zip"),
+            },
+            PackLayer {
+                name: "Low".into(),
+                path: PathBuf::from("low.zip"),
+            },
+        ];
+        let base =
+            ResourcePackSource::from_bytes(&resource_pack(&[("base_only", [10, 20, 30, 255])]))
+                .unwrap();
+        let composed = compose_resource_packs(&base, &layers, |layer| {
+            Ok(if layer.name == "High" {
+                high.clone()
+            } else {
+                low.clone()
+            })
+        })
+        .unwrap();
+
+        assert_eq!(
+            composed.get_texture_pixels("minecraft:block/shared"),
+            Some([0_u8, 0, 255, 255].as_slice())
+        );
+        assert_eq!(
+            composed.get_texture_pixels("minecraft:block/low_only"),
+            Some([0_u8, 255, 0, 255].as_slice())
+        );
+        assert_eq!(
+            composed.get_texture_pixels("minecraft:block/base_only"),
+            Some([10_u8, 20, 30, 255].as_slice())
+        );
+    }
+
+    #[test]
+    fn invalid_layer_errors_name_the_pack() {
+        let base = ResourcePackSource::from_resource_pack(Default::default());
+        let layers = [PackLayer {
+            name: "Broken".into(),
+            path: PathBuf::from("broken.zip"),
+        }];
+        let error = compose_resource_packs(&base, &layers, |_| Ok(b"not a zip".to_vec()))
+            .err()
+            .expect("the invalid layer must fail");
+        assert!(error.contains("Broken"), "{error}");
+    }
+
+    fn resource_pack(textures: &[(&str, [u8; 4])]) -> Vec<u8> {
+        let mut files = vec![(
+            "pack.mcmeta".to_owned(),
+            br#"{"pack":{"pack_format":15,"description":"test"}}"#.to_vec(),
+        )];
+        for (name, color) in textures {
+            files.push((
+                format!("assets/minecraft/textures/block/{name}.png"),
+                texture_png(*color),
+            ));
+        }
+        zip_bytes(&files)
+    }
+
+    fn texture_png(color: [u8; 4]) -> Vec<u8> {
+        let raw = [0, color[0], color[1], color[2], color[3]];
+        let mut zlib = vec![0x78, 0x01, 0x01, 0x05, 0x00, 0xfa, 0xff];
+        zlib.extend_from_slice(&raw);
+        zlib.extend_from_slice(&adler32(&raw).to_be_bytes());
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        png_chunk(&mut png, b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]);
+        png_chunk(&mut png, b"IDAT", &zlib);
+        png_chunk(&mut png, b"IEND", &[]);
+        png
+    }
+
+    fn png_chunk(png: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        png.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        png.extend_from_slice(kind);
+        png.extend_from_slice(data);
+        let mut crc = Vec::with_capacity(4 + data.len());
+        crc.extend_from_slice(kind);
+        crc.extend_from_slice(data);
+        png.extend_from_slice(&crc32(&crc).to_be_bytes());
+    }
+
+    fn adler32(data: &[u8]) -> u32 {
+        let mut a = 1_u32;
+        let mut b = 0_u32;
+        for byte in data {
+            a = (a + u32::from(*byte)) % 65_521;
+            b = (b + a) % 65_521;
+        }
+        (b << 16) | a
+    }
+
+    fn zip_bytes(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
+        let mut archive = Vec::new();
+        let mut directory = Vec::new();
+        for (name, data) in entries {
+            let offset = archive.len() as u32;
+            let crc = crc32(data);
+            archive.extend_from_slice(&0x0403_4b50_u32.to_le_bytes());
+            archive.extend_from_slice(&20_u16.to_le_bytes());
+            archive.extend_from_slice(&[0; 2]);
+            archive.extend_from_slice(&[0; 2]);
+            archive.extend_from_slice(&[0; 4]);
+            archive.extend_from_slice(&crc.to_le_bytes());
+            archive.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            archive.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            archive.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            archive.extend_from_slice(&0_u16.to_le_bytes());
+            archive.extend_from_slice(name.as_bytes());
+            archive.extend_from_slice(data);
+
+            directory.extend_from_slice(&0x0201_4b50_u32.to_le_bytes());
+            directory.extend_from_slice(&20_u16.to_le_bytes());
+            directory.extend_from_slice(&20_u16.to_le_bytes());
+            directory.extend_from_slice(&[0; 2]);
+            directory.extend_from_slice(&[0; 2]);
+            directory.extend_from_slice(&[0; 4]);
+            directory.extend_from_slice(&crc.to_le_bytes());
+            directory.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            directory.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            directory.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            directory.extend_from_slice(&[0; 2]);
+            directory.extend_from_slice(&[0; 2]);
+            directory.extend_from_slice(&[0; 2]);
+            directory.extend_from_slice(&[0; 2]);
+            directory.extend_from_slice(&[0; 4]);
+            directory.extend_from_slice(&offset.to_le_bytes());
+            directory.extend_from_slice(name.as_bytes());
+        }
+        let directory_offset = archive.len() as u32;
+        archive.extend_from_slice(&directory);
+        archive.extend_from_slice(&0x0605_4b50_u32.to_le_bytes());
+        archive.extend_from_slice(&[0; 4]);
+        archive.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        archive.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        archive.extend_from_slice(&(directory.len() as u32).to_le_bytes());
+        archive.extend_from_slice(&directory_offset.to_le_bytes());
+        archive.extend_from_slice(&[0; 2]);
+        archive
+    }
+
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc = !0_u32;
+        for byte in data {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = (crc >> 1) ^ (0xedb8_8320 & (crc & 1).wrapping_neg());
+            }
+        }
+        !crc
     }
 
     #[test]

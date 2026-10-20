@@ -293,6 +293,8 @@ fn unique_name(packs: &[TexturePack], requested: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nucleation::meshing::ResourcePackSource;
+    use std::path::Path;
 
     struct Fixture {
         root: PathBuf,
@@ -311,6 +313,10 @@ mod tests {
         fn library(&self) -> TexturePackLibrary {
             TexturePackLibrary::new(self.root.clone())
         }
+
+        fn write_index(&self, contents: &str) {
+            fs::write(self.root.join("library.json"), contents).unwrap();
+        }
     }
 
     impl Drop for Fixture {
@@ -320,55 +326,57 @@ mod tests {
     }
 
     #[test]
-    fn imports_store_archives_and_restore_the_selection() {
+    fn imports_join_the_stack_enabled_at_lowest_priority() {
         let fixture = Fixture::new();
         let library = fixture.library();
         let first = library.import("Cottage", b"first", |_| Ok(())).unwrap();
         let second = library.import("Cottage", b"second", |_| Ok(())).unwrap();
         assert_eq!(first.name, "Cottage");
         assert_eq!(second.name, "Cottage (2)");
+        assert!(first.enabled && second.enabled);
         assert!(fixture.root.join(format!("{}.zip", first.id)).is_file());
         assert!(fixture.root.join(format!("{}.zip", second.id)).is_file());
 
-        let selected = library
-            .select(Some(&second.id), |path| {
-                assert_eq!(path, library.archive_path(&second.id));
-                Ok(())
-            })
-            .unwrap();
-        assert_eq!(selected.selected.as_deref(), Some(second.id.as_str()));
+        let state = library.state().unwrap();
+        assert_eq!(state.packs, [first.clone(), second.clone()]);
+        let layers = library.layers().unwrap();
+        assert_eq!(
+            layers
+                .iter()
+                .map(|layer| layer.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Cottage", "Cottage (2)"]
+        );
 
         let restored = fixture.library().state().unwrap();
-        assert_eq!(restored, selected);
+        assert_eq!(restored, state);
         assert_eq!(restored.packs, [first, second]);
     }
 
     #[test]
     fn accepts_and_reloads_a_real_resource_pack() {
         use litematica_preview_core::resource_pack_overlay;
-        use nucleation::meshing::ResourcePackSource;
 
         let fixture = Fixture::new();
         let library = fixture.library();
         let bytes = fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../Assets/pack.zip"))
             .expect("bundled resource pack");
-        let base = ResourcePackSource::from_bytes(&bytes).expect("parse bundled resource pack");
+        let empty = ResourcePackSource::from_resource_pack(Default::default());
         let pack = library
             .import("Vanilla copy", &bytes, |bytes| {
-                resource_pack_overlay(&base, bytes).map(|_| ())
+                resource_pack_overlay(&empty, bytes).map(|_| ())
             })
             .expect("import bundled resource pack");
 
-        let selected = library
-            .select(Some(&pack.id), |path| {
-                let bytes = fs::read(path).expect("saved resource pack");
-                resource_pack_overlay(&base, &bytes).map(|_| ())
-            })
-            .expect("select imported resource pack");
-        assert_eq!(selected.selected.as_deref(), Some(pack.id.as_str()));
+        let state = library.state().unwrap();
+        assert_eq!(state.packs, [pack.clone()]);
+        assert!(state.packs[0].enabled);
         assert_eq!(
-            library.selected_archive().expect("selected archive"),
-            Some(fixture.root.join(format!("{}.zip", pack.id)))
+            library.layers().expect("enabled stack"),
+            [PackLayer {
+                name: "Vanilla copy".into(),
+                path: fixture.root.join(format!("{}.zip", pack.id)),
+            }]
         );
     }
 
@@ -383,37 +391,182 @@ mod tests {
             "Invalid pack"
         );
         assert!(library.state().unwrap().packs.is_empty());
+        assert!(library.layers().unwrap().is_empty());
         assert_eq!(fs::read_dir(&fixture.root).unwrap().count(), 0);
     }
 
     #[test]
-    fn rejected_selections_keep_the_previous_choice() {
+    fn failed_enable_validation_keeps_the_previous_state() {
         let fixture = Fixture::new();
         let library = fixture.library();
-        let pack = library.import("Pack", b"data", |_| Ok(())).unwrap();
-        library.select(Some(&pack.id), |_| Ok(())).unwrap();
+        let pack = library.import("Template", b"data", |_| Ok(())).unwrap();
+        library.set_enabled(&pack.id, false, |_| Ok(())).unwrap();
+
+        let mut seen = Vec::new();
+        let error = library
+            .set_enabled(&pack.id, true, |layers| {
+                seen = layers.iter().map(|layer| layer.name.clone()).collect();
+                Err("The pack has no usable assets.".into())
+            })
+            .unwrap_err();
+        assert_eq!(error, "The pack has no usable assets.");
+        assert_eq!(seen, vec!["Template".to_owned()]);
+        assert!(!library.state().unwrap().packs[0].enabled);
+        assert!(library.set_enabled("missing", true, |_| Ok(())).is_err());
+
+        let enabled = library
+            .set_enabled(&pack.id, true, |layers| {
+                assert_eq!(layers.len(), 1);
+                Ok(())
+            })
+            .unwrap();
+        assert!(enabled.packs[0].enabled);
+        assert_eq!(library.layers().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn enabling_does_not_overwrite_changes_during_validation() {
+        let fixture = Fixture::new();
+        let library = fixture.library();
+        let original = library.import("Original", b"original", |_| Ok(())).unwrap();
+        library
+            .set_enabled(&original.id, false, |_| Ok(()))
+            .unwrap();
+
+        let result = library.set_enabled(&original.id, true, |_| {
+            library.import("Added", b"added", |_| Ok(()))?;
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        let restored = fixture.library().state().unwrap();
+        assert_eq!(restored.packs.len(), 2);
+        assert_eq!(restored.packs[0].id, original.id);
+        assert!(!restored.packs[0].enabled);
+        assert_eq!(restored.packs[1].name, "Added");
+        assert!(restored.packs[1].enabled);
+    }
+
+    #[test]
+    fn order_rejects_unknown_and_duplicate_ids_without_saving() {
+        let fixture = Fixture::new();
+        let library = fixture.library();
+        let first = library.import("First", b"one", |_| Ok(())).unwrap();
+        let second = library.import("Second", b"two", |_| Ok(())).unwrap();
+        let original = library.state().unwrap();
+
         assert!(library
-            .select(Some(&pack.id), |_| Err("Unreadable".into()))
-            .unwrap_err()
-            .contains("Unreadable"));
-        assert!(library.select(Some("missing"), |_| Ok(())).is_err());
+            .set_order(&[first.id.clone(), first.id.clone()])
+            .is_err());
+        assert!(library
+            .set_order(&[first.id.clone(), "missing".into()])
+            .is_err());
+        assert_eq!(library.state().unwrap(), original);
+
+        let ordered = library
+            .set_order(&[second.id.clone(), first.id.clone()])
+            .unwrap();
         assert_eq!(
-            library.state().unwrap().selected.as_deref(),
-            Some(pack.id.as_str())
+            ordered
+                .packs
+                .iter()
+                .map(|pack| pack.id.as_str())
+                .collect::<Vec<_>>(),
+            [second.id.as_str(), first.id.as_str()]
+        );
+        assert_eq!(fixture.library().state().unwrap(), ordered);
+    }
+
+    #[test]
+    fn removing_a_pack_deletes_its_archive_and_keeps_the_rest() {
+        let fixture = Fixture::new();
+        let library = fixture.library();
+        let first = library.import("First", b"one", |_| Ok(())).unwrap();
+        let second = library.import("Second", b"two", |_| Ok(())).unwrap();
+
+        let state = library.remove(&first.id).unwrap();
+        assert_eq!(state.packs, [second.clone()]);
+        assert!(!fixture.root.join(format!("{}.zip", first.id)).exists());
+        assert!(fixture.root.join(format!("{}.zip", second.id)).is_file());
+    }
+
+    #[test]
+    fn migrates_the_legacy_selected_pack_to_an_enabled_stack() {
+        let fixture = Fixture::new();
+        let selected = Uuid::new_v4().to_string();
+        let other = Uuid::new_v4().to_string();
+        fs::write(fixture.root.join(format!("{selected}.zip")), b"selected").unwrap();
+        fs::write(fixture.root.join(format!("{other}.zip")), b"other").unwrap();
+        fixture.write_index(&format!(
+            r#"{{"packs":[{{"id":"{other}","name":"Other"}},{{"id":"{selected}","name":"Selected"}}],"selected":"{selected}"}}"#
+        ));
+
+        let state = fixture.library().state().unwrap();
+        assert_eq!(
+            state
+                .packs
+                .iter()
+                .map(|pack| (pack.name.as_str(), pack.enabled))
+                .collect::<Vec<_>>(),
+            [("Other", false), ("Selected", true)]
+        );
+        assert_eq!(state.packs[0].id, other);
+        assert_eq!(state.packs[1].id, selected);
+
+        let library = fixture.library();
+        let ordered = library
+            .set_order(&[selected.clone(), other.clone()])
+            .unwrap();
+        assert_eq!(
+            ordered
+                .packs
+                .iter()
+                .map(|pack| (pack.id.as_str(), pack.enabled))
+                .collect::<Vec<_>>(),
+            [(selected.as_str(), true), (other.as_str(), false)]
+        );
+        assert_eq!(fixture.library().state().unwrap(), ordered);
+        assert_eq!(
+            library.layers().unwrap(),
+            [PackLayer {
+                name: "Selected".into(),
+                path: fixture.root.join(format!("{selected}.zip")),
+            }]
         );
     }
 
     #[test]
-    fn removing_the_selected_pack_clears_the_choice_and_archive() {
+    fn legacy_null_or_unknown_selection_enables_nothing() {
+        let fixture = Fixture::new();
+        let pack = Uuid::new_v4().to_string();
+        fixture.write_index(&format!(
+            r#"{{"packs":[{{"id":"{pack}","name":"Saved"}}],"selected":null}}"#
+        ));
+        let state = fixture.library().state().unwrap();
+        assert_eq!(state.packs.len(), 1);
+        assert!(!state.packs[0].enabled);
+        assert!(fixture.library().layers().unwrap().is_empty());
+
+        fixture.write_index(&format!(
+            r#"{{"packs":[{{"id":"{pack}","name":"Saved"}}],"selected":"{}"}}"#,
+            Uuid::new_v4()
+        ));
+        let state = fixture.library().state().unwrap();
+        assert_eq!(state.packs.len(), 1);
+        assert!(!state.packs[0].enabled);
+        assert!(fixture.library().layers().unwrap().is_empty());
+    }
+
+    #[test]
+    fn missing_enabled_archive_names_the_pack() {
         let fixture = Fixture::new();
         let library = fixture.library();
-        let pack = library.import("Pack", b"data", |_| Ok(())).unwrap();
-        library.select(Some(&pack.id), |_| Ok(())).unwrap();
+        let pack = library.import("Cottage", b"data", |_| Ok(())).unwrap();
+        fs::remove_file(fixture.root.join(format!("{}.zip", pack.id))).unwrap();
 
-        let state = library.remove(&pack.id).unwrap();
-        assert!(state.packs.is_empty());
-        assert!(state.selected.is_none());
-        assert!(!fixture.root.join(format!("{}.zip", pack.id)).exists());
+        let error = library.layers().unwrap_err();
+        assert!(error.contains("Cottage"), "{error}");
+        assert!(error.contains("missing"), "{error}");
     }
 
     #[test]
@@ -431,14 +584,8 @@ mod tests {
     #[test]
     fn ignores_index_entries_with_path_like_ids() {
         let fixture = Fixture::new();
-        fs::write(
-            fixture.root.join("library.json"),
-            br#"{"packs":[{"id":"../../outside","name":"Escape"}],"selected":"../../outside"}"#,
-        )
-        .unwrap();
+        fixture.write_index(r#"{"packs":[{"id":"../../outside","name":"Escape","enabled":true}]}"#);
 
-        let state = fixture.library().state().unwrap();
-        assert!(state.packs.is_empty());
-        assert!(state.selected.is_none());
+        assert!(fixture.library().state().unwrap().packs.is_empty());
     }
 }

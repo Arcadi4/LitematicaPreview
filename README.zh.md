@@ -96,6 +96,7 @@ pnpm run build:win
 
 构建产物（`*-setup.exe`、`*-portable.zip` 以及可直接运行的 `win-x64/` 目录）会输出到 `artifacts/`。
 Cargo 默认使用工作区的 `target/` 目录；可通过 `CARGO_TARGET_DIR` 指定其他目录。发布工作流在测试与打包时共用此目录及 Windows MSVC 目标平台。
+Cargo 包通过 `default-run` 指定 `LitematicaPreview`，确保同时存在 `pressure` 可执行程序时 Tauri 仍能选中主程序。压力工具需通过 `pnpm run pressure:host -- ...` 显式运行。
 
 ## 致谢
 

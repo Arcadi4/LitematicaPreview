@@ -3,6 +3,7 @@ name = "litematica-preview"
 version = "0.3.1"
 edition = "2021"
 publish = false
+default-run = "LitematicaPreview"
 
 [[bin]]
 name = "LitematicaPreview"

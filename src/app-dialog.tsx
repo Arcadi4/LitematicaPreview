@@ -36,7 +36,8 @@ export interface AppDialogProps {
   onNativeAction: (command: NativeCommand) => void
   onOpenChange: (open: boolean) => void
   onRemoveTexturePack: (id: string) => void
-  onSelectTexturePack: (id: string | null) => void
+  onSetTexturePackEnabled: (id: string, enabled: boolean) => void
+  onSetTexturePackOrder: (ids: string[]) => void
   onSettingsChange: (patch: Partial<PreviewSettings>) => void
   onThemeChange: (theme: ThemePreference) => void
   open: boolean
@@ -105,7 +106,8 @@ function SettingsSections({
   bootstrap,
   onImportTexturePacks,
   onRemoveTexturePack,
-  onSelectTexturePack,
+  onSetTexturePackEnabled,
+  onSetTexturePackOrder,
   onSettingsChange,
   onThemeChange,
   settings,
@@ -117,7 +119,8 @@ function SettingsSections({
   | "bootstrap"
   | "onImportTexturePacks"
   | "onRemoveTexturePack"
-  | "onSelectTexturePack"
+  | "onSetTexturePackEnabled"
+  | "onSetTexturePackOrder"
   | "onSettingsChange"
   | "onThemeChange"
   | "settings"
@@ -142,7 +145,7 @@ function SettingsSections({
           Performance
         </Tab>
         <Tab id={`${id}-textures-tab`} aria-controls={`${id}-textures`} value="textures">
-          Textures
+          Texture packs
         </Tab>
         <Tab id={`${id}-control-tab`} aria-controls={`${id}-control`} value="control">
           Control
@@ -179,12 +182,13 @@ function SettingsSections({
         >
           {section === "textures" && (
             <div>
-              <h2 className="mt-0 mb-5 text-lg font-semibold">Textures</h2>
+              <h2 className="mt-0 mb-5 text-lg font-semibold">Texture packs</h2>
               <TexturePacksPanel
                 busy={texturePackBusy}
                 onImport={onImportTexturePacks}
                 onRemove={onRemoveTexturePack}
-                onSelect={onSelectTexturePack}
+                onSetEnabled={onSetTexturePackEnabled}
+                onSetOrder={onSetTexturePackOrder}
                 state={texturePacks}
               />
             </div>
@@ -272,7 +276,8 @@ export function AppDialog({
   onNativeAction,
   onOpenChange,
   onRemoveTexturePack,
-  onSelectTexturePack,
+  onSetTexturePackEnabled,
+  onSetTexturePackOrder,
   onSettingsChange,
   onThemeChange,
   open,
@@ -300,7 +305,8 @@ export function AppDialog({
                   bootstrap={bootstrap}
                   onImportTexturePacks={onImportTexturePacks}
                   onRemoveTexturePack={onRemoveTexturePack}
-                  onSelectTexturePack={onSelectTexturePack}
+                  onSetTexturePackEnabled={onSetTexturePackEnabled}
+                  onSetTexturePackOrder={onSetTexturePackOrder}
                   onSettingsChange={onSettingsChange}
                   onThemeChange={onThemeChange}
                   settings={settings}

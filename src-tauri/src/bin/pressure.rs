@@ -1184,7 +1184,7 @@ fn run_load(
                     id,
                     &path,
                     &packed,
-                    None,
+                    &[],
                     options.clone(),
                     {
                         let state = Arc::clone(&state);
@@ -1468,7 +1468,7 @@ fn run_core_pass(
         let result = preview::decode(
             &fixture_path(name),
             &pack_path(),
-            None,
+            &[],
             &mut packs,
             settings.options(),
             || Ok(()),

@@ -40,9 +40,10 @@ export default function App({ initialError }: { initialError?: string }) {
     previewMemory,
     previewSettings,
     removeTexturePack,
-    selectTexturePack,
     setDialogOpen,
     setNotice,
+    setTexturePackEnabled,
+    setTexturePackOrder,
     texturePackBusy,
     texturePacks,
     toggleGrid,
@@ -186,7 +187,8 @@ export default function App({ initialError }: { initialError?: string }) {
         onNativeAction={nativeAction}
         onOpenChange={setDialogOpen}
         onRemoveTexturePack={removeTexturePack}
-        onSelectTexturePack={selectTexturePack}
+        onSetTexturePackEnabled={setTexturePackEnabled}
+        onSetTexturePackOrder={setTexturePackOrder}
         onSettingsChange={updatePreviewSettings}
         onThemeChange={onThemeChange}
         open={dialogOpen}

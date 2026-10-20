@@ -32,7 +32,8 @@ fn main() {
                 "unregister_associations",
                 "show_licenses",
                 "import_texture_packs",
-                "select_texture_pack",
+                "set_texture_pack_enabled",
+                "set_texture_pack_order",
                 "remove_texture_pack",
             ])),
     )

@@ -1,5 +1,6 @@
-export type TexturePack = { id: string; name: string }
-export type TexturePackState = { packs: TexturePack[]; selected: string | null }
+export type TexturePack = { id: string; name: string; enabled: boolean }
+/** All saved packs, highest priority first. Enabled packs layer over bundled vanilla resources. */
+export type TexturePackState = { packs: TexturePack[] }
 export type ImportedTexturePacks = {
   imported: number
   failures: string[]

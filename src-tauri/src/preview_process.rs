@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use litematica_preview_core::{MeshBatch, PreviewOptions};
 use parking_lot::Mutex;
 
-use crate::preview::{Metadata, PreviewWorker};
+use crate::preview::{Metadata, PackLayer, PreviewWorker};
 use crate::preview_protocol::{self as wire, Event};
 
 const TOKEN_BYTES: usize = 32;
@@ -217,7 +217,7 @@ impl DecoderProcess {
         &mut self,
         path: &Path,
         pack_path: &Path,
-        custom_pack_path: Option<&Path>,
+        layers: &[PackLayer],
         options: PreviewOptions,
         current: impl Fn() -> Result<(), String>,
         prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
@@ -227,7 +227,7 @@ impl DecoderProcess {
         let request = serde_json::to_vec(&(
             path,
             pack_path,
-            custom_pack_path,
+            layers,
             options.chunk_size,
             options.thread_count,
         ))
@@ -286,7 +286,7 @@ pub fn load(
     id: u64,
     path: &Path,
     pack_path: &Path,
-    custom_pack_path: Option<&Path>,
+    layers: &[PackLayer],
     options: PreviewOptions,
     prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
     consume: impl FnMut(MeshBatch) -> Result<(), String>,
@@ -311,7 +311,7 @@ pub fn load(
     let result = process.load(
         path,
         pack_path,
-        custom_pack_path,
+        layers,
         options,
         || worker.ensure_current(id),
         prepared,
@@ -364,10 +364,10 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
     let mut packs = crate::preview::PackCache::default();
     loop {
         let request = wire::read_frame(&mut input, MAX_REQUEST_BYTES).map_err(|e| e.to_string())?;
-        let (path, pack_path, custom_pack_path, chunk_size, thread_count): (
+        let (path, pack_path, layers, chunk_size, thread_count): (
             PathBuf,
             PathBuf,
-            Option<PathBuf>,
+            Vec<PackLayer>,
             Option<u16>,
             Option<u8>,
         ) = serde_json::from_slice(&request)
@@ -382,7 +382,7 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
         let result = crate::preview::decode(
             &path,
             &pack_path,
-            custom_pack_path.as_deref(),
+            &layers,
             &mut packs,
             options,
             || match transport_error.borrow().as_ref() {

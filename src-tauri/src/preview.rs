@@ -263,12 +263,49 @@ fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
     format!("The preview worker encountered an internal error: {detail}")
 }
 
-/// Parsed packs reused across decoder requests. The overlay rebuilds when
-/// the selected archive changes.
+/// One resource pack in priority order, highest first. `name` identifies the
+/// pack in errors.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackLayer {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+/// Overlays `layers` from lowest to highest on one clone of the parsed base.
+/// The bundled vanilla pack stays the final per-key fallback.
+pub fn compose_resource_packs(
+    base: &ResourcePackSource,
+    layers: &[PackLayer],
+    mut read: impl FnMut(&PackLayer) -> Result<Vec<u8>, String>,
+) -> Result<ResourcePackSource, String> {
+    let empty = ResourcePackSource::from_resource_pack(Default::default());
+    let mut merged = base.pack().clone();
+    for layer in layers.iter().rev() {
+        let bytes = read(layer).map_err(|error| {
+            format!(
+                "The texture pack “{}” could not be read: {error}",
+                layer.name
+            )
+        })?;
+        let mut parsed =
+            litematica_preview_core::resource_pack_overlay(&empty, &bytes).map_err(|error| {
+                format!(
+                    "The texture pack “{}” could not be used: {error}",
+                    layer.name
+                )
+            })?;
+        merged.overlay(std::mem::take(parsed.pack_mut()));
+    }
+    Ok(ResourcePackSource::from_resource_pack(merged))
+}
+
+/// Parsed packs reused across decoder requests. The base parses once. The
+/// overlay rebuilds only when the ordered layer paths change.
 #[derive(Default)]
 pub struct PackCache {
     base: Option<ResourcePackSource>,
-    overlay: Option<(PathBuf, ResourcePackSource)>,
+    overlay: Option<(Vec<PathBuf>, ResourcePackSource)>,
 }
 
 impl PackCache {
@@ -285,7 +322,7 @@ impl PackCache {
     fn resolve(
         &mut self,
         base_path: &Path,
-        custom_path: Option<&Path>,
+        layers: &[PackLayer],
         current: &impl Fn() -> Result<(), String>,
     ) -> Result<&ResourcePackSource, String> {
         if self.base.is_none() {
@@ -295,32 +332,33 @@ impl PackCache {
                     format!("The bundled block resources are invalid: {error}")
                 })?);
         }
-        let Some(custom_path) = custom_path else {
+        if layers.is_empty() {
             self.overlay = None;
             return Ok(self
                 .base
                 .as_ref()
                 .ok_or("The bundled block resources are unavailable.")?);
-        };
+        }
+        let key: Vec<PathBuf> = layers.iter().map(|layer| layer.path.clone()).collect();
         if self
             .overlay
             .as_ref()
-            .is_none_or(|(cached, _)| cached != custom_path)
+            .is_none_or(|(cached, _)| cached != &key)
         {
-            let bytes = read_resource_pack(custom_path, current)?;
-            let merged = litematica_preview_core::resource_pack_overlay(
+            self.overlay = None;
+            let merged = compose_resource_packs(
                 self.base
                     .as_ref()
                     .ok_or("The bundled block resources are unavailable.")?,
-                &bytes,
-            )
-            .map_err(|error| format!("The selected texture pack could not be used: {error}"))?;
-            self.overlay = Some((custom_path.to_path_buf(), merged));
+                layers,
+                |layer| read_resource_pack(&layer.path, current),
+            )?;
+            self.overlay = Some((key, merged));
         }
         Ok(&self
             .overlay
             .as_ref()
-            .ok_or("The selected texture pack is unavailable.")?
+            .ok_or("The texture pack stack is unavailable.")?
             .1)
     }
 }
@@ -329,7 +367,7 @@ impl PackCache {
 pub fn decode(
     path: &Path,
     pack_path: &Path,
-    custom_pack_path: Option<&Path>,
+    layers: &[PackLayer],
     packs: &mut PackCache,
     options: PreviewOptions,
     current: impl Fn() -> Result<(), String>,
@@ -341,7 +379,7 @@ pub fn decode(
         options.validate()?;
         progress("decode", 0, 0);
         let data = read_file(path, "schematic", &current)?;
-        let pack = packs.resolve(pack_path, custom_pack_path, &current)?;
+        let pack = packs.resolve(pack_path, layers, &current)?;
         // Representation bounds are independent of the Windows job's hard cap.
         let limits = DecodeLimits {
             max_input_bytes: isize::MAX as usize,

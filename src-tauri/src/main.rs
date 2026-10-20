@@ -234,7 +234,7 @@ fn start_preview(
     let options = options.validate()?;
     let path = preview_path(path)?;
     let pack_path = state.resources.pack()?;
-    let custom_pack_path = state.texture_packs.selected_archive()?;
+    let layers = state.texture_packs.layers()?;
     let worker = Arc::clone(&state.worker);
     let renderer = Arc::clone(&viewer.renderer);
     let job_worker = Arc::clone(&worker);
@@ -262,7 +262,7 @@ fn start_preview(
                     request_id,
                     &path,
                     &pack_path,
-                    custom_pack_path.as_deref(),
+                    &layers,
                     options,
                     |min, max| {
                         job_worker.with_current(request_id, || {
@@ -486,6 +486,14 @@ fn read_texture_pack(path: &std::path::Path) -> Result<Vec<u8>, String> {
     fs::read(path).map_err(|error| format!("Unable to read the texture pack: {error}"))
 }
 
+fn bundled_pack(resources: &Resources) -> Result<ResourcePackSource, String> {
+    let path = resources.pack()?;
+    let bytes = fs::read(&path)
+        .map_err(|error| format!("Unable to read the bundled block resources: {error}"))?;
+    ResourcePackSource::from_bytes(&bytes)
+        .map_err(|error| format!("The bundled block resources are invalid: {error}"))
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ImportedTexturePacks {
@@ -500,7 +508,6 @@ async fn import_texture_packs(
     window: WebviewWindow,
     state: State<'_, HostState>,
 ) -> Result<Option<ImportedTexturePacks>, String> {
-    let resources = state.resources.clone();
     let library = state.texture_packs.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let Some(files) = app
@@ -514,14 +521,9 @@ async fn import_texture_packs(
         else {
             return Ok(None);
         };
-        let base_path = resources.pack()?;
-        let base_bytes = fs::read(&base_path)
-            .map_err(|error| format!("Unable to read the bundled block resources: {error}"))?;
-        let base = ResourcePackSource::from_bytes(&base_bytes)
-            .map_err(|error| format!("The bundled block resources are invalid: {error}"))?;
+        let empty = ResourcePackSource::from_resource_pack(Default::default());
         let mut imported = 0;
         let mut failures = Vec::new();
-        let mut last_imported = None;
         for file in files {
             let path = file
                 .into_path()
@@ -538,19 +540,13 @@ async fn import_texture_packs(
                 }
             };
             match library.import(name, &bytes, |bytes| {
-                resource_pack_overlay(&base, bytes).map(|_| ())
+                resource_pack_overlay(&empty, bytes).map(|_| ())
             }) {
-                Ok(pack) => {
-                    imported += 1;
-                    last_imported = Some(pack.id);
-                }
+                Ok(_) => imported += 1,
                 Err(error) => failures.push(format!("{name}: {error}")),
             }
         }
-        let mut state = library.state()?;
-        if let Some(id) = last_imported {
-            state = library.select(Some(&id), |_| Ok(()))?;
-        }
+        let state = library.state()?;
         Ok(Some(ImportedTexturePacks {
             imported,
             failures,
@@ -562,28 +558,36 @@ async fn import_texture_packs(
 }
 
 #[tauri::command]
-async fn select_texture_pack(
-    id: Option<String>,
+async fn set_texture_pack_enabled(
+    id: String,
+    enabled: bool,
     state: State<'_, HostState>,
 ) -> Result<TexturePackState, String> {
     let resources = state.resources.clone();
     let library = state.texture_packs.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let Some(id) = id else {
-            return library.select(None, |_| Ok(()));
-        };
-        let base_path = resources.pack()?;
-        let base_bytes = fs::read(&base_path)
-            .map_err(|error| format!("Unable to read the bundled block resources: {error}"))?;
-        let base = ResourcePackSource::from_bytes(&base_bytes)
-            .map_err(|error| format!("The bundled block resources are invalid: {error}"))?;
-        library.select(Some(&id), |path| {
-            let bytes = read_texture_pack(path)?;
-            resource_pack_overlay(&base, &bytes).map(|_| ())
+        if !enabled {
+            return library.set_enabled(&id, false, |_| Ok(()));
+        }
+        let base = bundled_pack(&resources)?;
+        library.set_enabled(&id, true, |layers| {
+            preview::compose_resource_packs(&base, layers, |layer| read_texture_pack(&layer.path))
+                .map(|_| ())
         })
     })
     .await
     .map_err(|error| format!("Unable to change the texture pack: {error}"))?
+}
+
+#[tauri::command]
+async fn set_texture_pack_order(
+    ids: Vec<String>,
+    state: State<'_, HostState>,
+) -> Result<TexturePackState, String> {
+    let library = state.texture_packs.clone();
+    tauri::async_runtime::spawn_blocking(move || library.set_order(&ids))
+        .await
+        .map_err(|error| format!("Unable to reorder the texture packs: {error}"))?
 }
 
 #[tauri::command]
@@ -753,7 +757,8 @@ fn run() -> Result<(), String> {
             unregister_associations,
             show_licenses,
             import_texture_packs,
-            select_texture_pack,
+            set_texture_pack_enabled,
+            set_texture_pack_order,
             remove_texture_pack,
         ])
         .run(tauri::generate_context!())

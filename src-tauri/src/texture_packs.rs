@@ -1,32 +1,54 @@
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::preview::PackLayer;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TexturePack {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TexturePackState {
+    /// Highest priority first. Enabled packs override the bundled resources.
     pub packs: Vec<TexturePack>,
-    pub selected: Option<String>,
 }
 
-/// A directory of validated resource-pack ZIPs and the selected entry.
+/// A directory of validated resource-pack ZIPs and their saved stack.
 /// Every mutation loads and saves the index under one lock.
 #[derive(Clone)]
 pub struct TexturePackLibrary {
     directory: PathBuf,
     lock: Arc<Mutex<()>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedState {
+    #[serde(default)]
+    packs: Vec<PersistedPack>,
+    #[serde(default)]
+    selected: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistedPack {
+    id: String,
+    name: String,
+    #[serde(default)]
+    enabled: Option<bool>,
 }
 
 impl TexturePackLibrary {
@@ -42,31 +64,17 @@ impl TexturePackLibrary {
         self.load()
     }
 
-    /// Resolves the selected archive, if any. A missing file is an error so
-    /// the preview does not silently render with different textures.
-    pub fn selected_archive(&self) -> Result<Option<PathBuf>, String> {
+    /// Resolves the enabled archives highest priority first. A missing saved
+    /// copy is an error so the preview cannot silently use other resources.
+    pub fn layers(&self) -> Result<Vec<PackLayer>, String> {
         let _guard = self.lock.lock();
         let state = self.load()?;
-        let Some(id) = state.selected.as_deref() else {
-            return Ok(None);
-        };
-        let pack = state
-            .packs
-            .iter()
-            .find(|pack| pack.id == id)
-            .ok_or("The selected texture pack is not in the library.")?;
-        let archive = self.archive_path(id);
-        if !archive.is_file() {
-            return Err(format!(
-                "The saved copy of “{}” is missing. Import the texture pack again or choose Vanilla.",
-                pack.name
-            ));
-        }
-        Ok(Some(archive))
+        self.layers_for(&state)
     }
 
-    /// Stores an archive after `validate` accepts its bytes. A rejected or
-    /// unsaved archive leaves no entry behind.
+    /// Stores an archive after `validate` accepts its bytes. The pack joins the
+    /// stack at the lowest priority and enabled, so it overrides vanilla only.
+    /// A rejected or unsaved archive leaves no entry behind.
     pub fn import(
         &self,
         name: &str,
@@ -95,47 +103,73 @@ impl TexturePackLibrary {
             }
         };
         let name = unique_name(&state.packs, name);
-        state.packs.push(TexturePack {
-            id: id.clone(),
-            name: name.clone(),
-        });
+        let pack = TexturePack {
+            id,
+            name,
+            enabled: true,
+        };
+        state.packs.push(pack.clone());
         if let Err(error) = self.save(&state) {
             let _ = fs::remove_file(&archive);
             return Err(error);
         }
-        Ok(TexturePack { id, name })
+        Ok(pack)
     }
 
-    pub fn select(
+    /// Validates the prospective enabled stack without the index lock.
+    /// A concurrent library change rejects the save and preserves that change.
+    pub fn set_enabled(
         &self,
-        id: Option<&str>,
-        validate: impl FnOnce(&Path) -> Result<(), String>,
+        id: &str,
+        enabled: bool,
+        validate: impl FnOnce(&[PackLayer]) -> Result<(), String>,
     ) -> Result<TexturePackState, String> {
-        let Some(id) = id else {
+        let snapshot = {
             let _guard = self.lock.lock();
-            let mut state = self.load()?;
-            state.selected = None;
-            self.save(&state)?;
-            return Ok(state);
+            self.load()?
         };
-        // Parsing a pack can take seconds, so validate before taking the lock.
-        let (name, archive) = {
-            let _guard = self.lock.lock();
-            let state = self.load()?;
-            let pack = state
-                .packs
-                .iter()
-                .find(|pack| pack.id == id)
-                .ok_or("The selected texture pack is not in the library.")?;
-            (pack.name.clone(), self.archive_path(id))
-        };
-        validate(&archive).map_err(|error| format!("Unable to use “{name}”: {error}"))?;
+        let position = snapshot
+            .packs
+            .iter()
+            .position(|pack| pack.id == id)
+            .ok_or("The texture pack is not in the library.")?;
+        if snapshot.packs[position].enabled == enabled {
+            return Ok(snapshot);
+        }
+        let mut next = snapshot.clone();
+        next.packs[position].enabled = enabled;
+        if enabled {
+            validate(&self.layers_for(&next)?)?;
+        }
+        let _guard = self.lock.lock();
+        if self.load()? != snapshot {
+            return Err("The texture pack library changed. Try the change again.".into());
+        }
+        self.save(&next)?;
+        Ok(next)
+    }
+
+    /// Replaces the priority order with exactly the saved pack IDs.
+    pub fn set_order(&self, ids: &[String]) -> Result<TexturePackState, String> {
         let _guard = self.lock.lock();
         let mut state = self.load()?;
-        if !state.packs.iter().any(|pack| pack.id == id) {
-            return Err("The selected texture pack is not in the library.".into());
+        if ids.len() != state.packs.len() {
+            return Err("The texture pack order no longer matches the library.".into());
         }
-        state.selected = Some(id.to_owned());
+        let mut remaining: Vec<Option<TexturePack>> = state.packs.drain(..).map(Some).collect();
+        let mut ordered = Vec::with_capacity(ids.len());
+        for id in ids {
+            let position = remaining
+                .iter()
+                .position(|pack| pack.as_ref().is_some_and(|pack| &pack.id == id))
+                .ok_or("The order contains an unknown or duplicate texture pack.")?;
+            ordered.push(
+                remaining[position]
+                    .take()
+                    .ok_or("The order contains an unknown or duplicate texture pack.")?,
+            );
+        }
+        state.packs = ordered;
         self.save(&state)?;
         Ok(state)
     }
@@ -147,12 +181,30 @@ impl TexturePackLibrary {
             return Ok(state);
         };
         state.packs.remove(position);
-        if state.selected.as_deref() == Some(id) {
-            state.selected = None;
-        }
         self.save(&state)?;
         let _ = fs::remove_file(self.archive_path(id));
         Ok(state)
+    }
+
+    fn layers_for(&self, state: &TexturePackState) -> Result<Vec<PackLayer>, String> {
+        state
+            .packs
+            .iter()
+            .filter(|pack| pack.enabled)
+            .map(|pack| {
+                let path = self.archive_path(&pack.id);
+                if !path.is_file() {
+                    return Err(format!(
+                        "The saved copy of “{}” is missing. Import the texture pack again or disable it.",
+                        pack.name
+                    ));
+                }
+                Ok(PackLayer {
+                    name: pack.name.clone(),
+                    path,
+                })
+            })
+            .collect()
     }
 
     fn index_path(&self) -> PathBuf {
@@ -172,22 +224,36 @@ impl TexturePackLibrary {
             }
             Err(error) => return Err(format!("Unable to read the texture pack library: {error}")),
         };
-        let Ok(mut state) = serde_json::from_slice::<TexturePackState>(&bytes) else {
+        let Ok(persisted) = serde_json::from_slice::<PersistedState>(&bytes) else {
             let _ = fs::rename(&index, self.directory.join("library.invalid.json"));
             return Ok(TexturePackState::default());
         };
+        // A legacy index has no enabled flags and one selected pack. Enable
+        // exactly that pack. A null or unknown selection enables nothing.
+        let legacy = persisted.packs.iter().any(|pack| pack.enabled.is_none());
+        let selected = persisted.selected.clone();
+        let selected = selected.as_deref();
         let mut seen = HashSet::new();
-        state
+        let packs = persisted
             .packs
-            .retain(|pack| Uuid::parse_str(&pack.id).is_ok() && seen.insert(pack.id.clone()));
-        if state
-            .selected
-            .as_ref()
-            .is_some_and(|id| !state.packs.iter().any(|pack| &pack.id == id))
-        {
-            state.selected = None;
-        }
-        Ok(state)
+            .into_iter()
+            .filter_map(|pack| {
+                if Uuid::parse_str(&pack.id).is_err() || !seen.insert(pack.id.clone()) {
+                    return None;
+                }
+                let enabled = if legacy {
+                    selected == Some(pack.id.as_str())
+                } else {
+                    pack.enabled.unwrap_or(false)
+                };
+                Some(TexturePack {
+                    id: pack.id,
+                    name: pack.name,
+                    enabled,
+                })
+            })
+            .collect();
+        Ok(TexturePackState { packs })
     }
 
     fn save(&self, state: &TexturePackState) -> Result<(), String> {

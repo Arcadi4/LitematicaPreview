@@ -47,9 +47,10 @@ export interface PreviewSession {
   previewMemory: number | null
   previewSettings: PreviewSettings
   removeTexturePack: (id: string) => void
-  selectTexturePack: (id: string | null) => void
   setDialogOpen: (open: boolean) => void
   setNotice: (notice: Notice | null) => void
+  setTexturePackEnabled: (id: string, enabled: boolean) => void
+  setTexturePackOrder: (ids: string[]) => void
   texturePackBusy: boolean
   texturePacks: TexturePackState
   toggleGrid: () => void
@@ -85,7 +86,6 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const [previewSettings, setPreviewSettings] = useState<PreviewSettings>(savedPreviewSettings)
   const [texturePacks, setTexturePacks] = useState<TexturePackState>({
     packs: [],
-    selected: null,
   })
   const [texturePackBusy, setTexturePackBusy] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
@@ -414,13 +414,12 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
 
   const importTexturePacks = useCallback(async () => {
     if (!beginTexturePackAction()) return
-    const previous = texturePacksRef.current
     try {
       const result = await invoke<ImportedTexturePacks | null>("import_texture_packs")
       if (!mounted.current || !result) return
       texturePacksRef.current = result.state
       setTexturePacks(result.state)
-      if (result.state.selected !== previous.selected) reloadActivePreview()
+      if (result.imported > 0) reloadActivePreview()
       if (result.failures.length > 0) {
         const added = result.imported > 0 ? `Added ${result.imported}. ` : ""
         setStatusNotice({
@@ -440,16 +439,34 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     }
   }, [beginTexturePackAction, endTexturePackAction, reloadActivePreview])
 
-  const selectTexturePack = useCallback(
-    async (id: string | null) => {
-      if (texturePacksRef.current.selected === id || !beginTexturePackAction()) return
-      const previous = texturePacksRef.current
+  const setTexturePackEnabled = useCallback(
+    async (id: string, enabled: boolean) => {
+      const current = texturePacksRef.current.packs.find((pack) => pack.id === id)
+      if (current?.enabled === enabled || !beginTexturePackAction()) return
       try {
-        const next = await invoke<TexturePackState>("select_texture_pack", { id })
+        const next = await invoke<TexturePackState>("set_texture_pack_enabled", { id, enabled })
         if (!mounted.current) return
         texturePacksRef.current = next
         setTexturePacks(next)
-        if (next.selected !== previous.selected) reloadActivePreview()
+        reloadActivePreview()
+      } catch (error) {
+        if (mounted.current) setStatusNotice({ intent: "error", message: errorMessage(error) })
+      } finally {
+        endTexturePackAction()
+      }
+    },
+    [beginTexturePackAction, endTexturePackAction, reloadActivePreview],
+  )
+
+  const setTexturePackOrder = useCallback(
+    async (ids: string[]) => {
+      if (!beginTexturePackAction()) return
+      try {
+        const next = await invoke<TexturePackState>("set_texture_pack_order", { ids })
+        if (!mounted.current) return
+        texturePacksRef.current = next
+        setTexturePacks(next)
+        reloadActivePreview()
       } catch (error) {
         if (mounted.current) setStatusNotice({ intent: "error", message: errorMessage(error) })
       } finally {
@@ -462,13 +479,13 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const removeTexturePack = useCallback(
     async (id: string) => {
       if (!beginTexturePackAction()) return
-      const removedSelected = texturePacksRef.current.selected === id
+      const wasEnabled = texturePacksRef.current.packs.find((pack) => pack.id === id)?.enabled
       try {
         const next = await invoke<TexturePackState>("remove_texture_pack", { id })
         if (!mounted.current) return
         texturePacksRef.current = next
         setTexturePacks(next)
-        if (removedSelected) reloadActivePreview()
+        if (wasEnabled) reloadActivePreview()
       } catch (error) {
         if (mounted.current) setStatusNotice({ intent: "error", message: errorMessage(error) })
       } finally {
@@ -482,11 +499,18 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     void importTexturePacks()
   }, [importTexturePacks])
 
-  const requestSelectTexturePack = useCallback(
-    (id: string | null) => {
-      void selectTexturePack(id)
+  const requestSetTexturePackEnabled = useCallback(
+    (id: string, enabled: boolean) => {
+      void setTexturePackEnabled(id, enabled)
     },
-    [selectTexturePack],
+    [setTexturePackEnabled],
+  )
+
+  const requestSetTexturePackOrder = useCallback(
+    (ids: string[]) => {
+      void setTexturePackOrder(ids)
+    },
+    [setTexturePackOrder],
   )
 
   const requestRemoveTexturePack = useCallback(
@@ -715,9 +739,10 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     previewMemory,
     previewSettings,
     removeTexturePack: requestRemoveTexturePack,
-    selectTexturePack: requestSelectTexturePack,
     setDialogOpen,
     setNotice: clearNotice,
+    setTexturePackEnabled: requestSetTexturePackEnabled,
+    setTexturePackOrder: requestSetTexturePackOrder,
     texturePackBusy,
     texturePacks,
     toggleGrid,

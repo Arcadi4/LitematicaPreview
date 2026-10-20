@@ -2,6 +2,7 @@
 
 ## Features
 
+- Extend saved texture packs with enabled priority stacks, fallback through lower packs to vanilla, and migration of the previous selection ([#29](https://github.com/Arcadi4/LitematicaPreview/issues/29)).
 - Gather preview settings, control help, and theme choice in a single settings dialog with Performance, Control, and Appearance sections in a scrollable sidebar layout.
 - Make every preview setting more compact and add an info notice that explains what the setting does without leaving the dialog.
 

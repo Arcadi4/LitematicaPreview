@@ -23,7 +23,7 @@ If you are on macOS, check out the sister project [LitematicaQL](https://github.
 ## Highlights
 
 - Preview seven Minecraft schematic and structure formats offline in textured 3D with native wgpu (Direct3D 12) and Nucleation.
-- Import Minecraft Java resource packs, keep them locally, and preview with the selected pack. Missing textures fall back to the bundled vanilla resources.
+- Import Minecraft Java resource packs, keep them locally, and arrange an enabled stack by priority. Missing resources fall back to lower packs, then bundled vanilla.
 - Load large `.litematic` files with compact decoding and chunked previews that avoid retaining the full decompressed file.
 - Generate and upload geometry concurrently with 32-block chunks by default, configurable chunk sizes and worker counts, progressive rendering, and cancellable loading progress.
 - Decode in a reusable isolated worker capped at 2 GiB on Windows. Home and cancellation terminate the worker and release its cached resources; wide unchunked models currently use Core 0.1.4's compact-position precision.
@@ -40,6 +40,12 @@ Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https:
 
 > [!NOTE]
 > To change file associations after installation, open the top-right menu and select **Set as default app…** or **Remove file associations**. Portable copies can also register or unregister from PowerShell with `.\LitematicaPreview.exe --register` and `.\LitematicaPreview.exe --unregister`.
+
+## Texture Packs
+
+Open **Settings → Texture packs** to import Minecraft Java resource-pack ZIPs. Enable packs with the switches and arrange them with the arrow buttons, highest priority first. New imports start at the lowest custom priority.
+
+Missing textures, models, and blockstates fall back through lower packs to bundled vanilla. Changes reload the current preview. Saved packs and the previous single-pack selection are preserved; removing a saved copy never deletes the original ZIP.
 
 ## Supported Formats
 

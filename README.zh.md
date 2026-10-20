@@ -21,7 +21,7 @@ Litematica Preview 是一款适用于 Windows 桌面的 Minecraft 投影与结�
 ## 亮点
 
 - 使用原生 wgpu（Direct3D 12）和 Nucleation，在本地以带纹理的 3D 视图预览七种 Minecraft 投影与结构格式。
-- 可导入 Minecraft Java 资源包并保存在本地，使用所选资源包预览建筑；缺失的纹理回退到内置原版资源。
+- 可导入 Minecraft Java 资源包并保存在本地，按优先级排列已启用的资源包；缺失的资源依次从下方资源包及内置原版资源中获取。
 - 通过紧凑解码和分块预览加载大型 `.litematic` 文件，避免常驻完整解压后的文件内容。
 - 并行生成与上传几何数据，默认使用 32 方块分块，可调整分块大小和工作线程数，并显示渐进预览与可取消的加载进度。
 - 在可复用的独立进程中解码，Windows 下限制其内存为 2 GiB。返回主页或取消加载会终止解码进程并释放缓存资源；大跨度、不分块的模型目前仍受 Core 0.1.4 紧凑坐标精度的限制。
@@ -38,6 +38,12 @@ Litematica Preview 是一款适用于 Windows 桌面的 Minecraft 投影与结�
 
 > [!NOTE]
 > 若需在安装后更改文件关联，请打开右上角菜单并选择 **Set as default app…** 或 **Remove file associations**。便携版也可以在 PowerShell 中通过 `.\LitematicaPreview.exe --register` 和 `.\LitematicaPreview.exe --unregister` 注册或取消注册。
+
+## 资源包
+
+打开 **Settings → Texture packs** 导入 Minecraft Java 版资源包 ZIP 文件。用开关启用资源包，再用箭头按钮调整顺序，最上方的优先级最高。新导入的资源包位于自定义资源包的最低优先级。
+
+缺失的纹理、模型和方块状态依次从下方资源包及内置原版资源中获取。修改后，当前预览会重新加载。已保存的资源包和原有的单资源包选择会保留，移除已保存的副本不会删除原始 ZIP 文件。
 
 ## 支持的格式
 

@@ -57,3 +57,19 @@ jobs:
         run: mkdir -p dist
       - name: Test App
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.14.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: cargo check --manifest-path src-tauri/Cargo.toml --all-targets --locked

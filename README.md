@@ -1,9 +1,9 @@
 <div align="center">
   <img src="Assets/icon.png" alt="Litematica Preview icon" width="200"/>
   <h1>Litematica Preview</h1>
-  <p><strong>Offline Minecraft schematic viewer for Windows</strong></p>
+  <p><strong>Offline Minecraft schematic viewer for Windows and Linux</strong></p>
 
-[![Platform](https://img.shields.io/badge/Platform-Windows%20x64-0078d4?style=flat-square&logo=windows)](https://github.com/Arcadi4/LitematicaPreview)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-0078d4?style=flat-square)](https://github.com/Arcadi4/LitematicaPreview)
 [![Tauri 2](https://img.shields.io/badge/Tauri-v2-24c8db?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
 [![Fluent UI](https://img.shields.io/badge/Fluent%20UI-React%20v9-0078d4?style=flat-square&logo=react)](https://react.fluentui.dev)
 [![Nucleation](https://img.shields.io/badge/Powered%20by-Nucleation-ff8c00?style=flat-square)](https://github.com/Schem-at/Nucleation)
@@ -22,11 +22,11 @@ If you are on macOS, check out the sister project [LitematicaQL](https://github.
 
 ## Highlights
 
-- Preview seven Minecraft schematic and structure formats offline in textured 3D with native wgpu (Direct3D 12) and Nucleation.
+- Preview seven Minecraft schematic and structure formats offline in textured 3D with native wgpu and Nucleation.
 - Load large `.litematic` files with compact decoding and chunked previews that avoid retaining the full decompressed file.
 - Generate and upload geometry concurrently with 32-block chunks by default, configurable chunk sizes and worker counts, progressive rendering, and cancellable loading progress.
-- Decode in a reusable isolated worker capped at 2 GiB on Windows. Home and cancellation terminate the worker and release its cached resources; wide unchunked models currently use Core 0.1.4's compact-position precision.
-- Choose an installer with optional file associations or a portable ZIP that needs no installation.
+- Linux supports a portable directory build and uses the system WebKitGTK runtime and graphics drivers.
+- Windows uses WebView2; Linux uses WebKitGTK. Native renderer backend selection is delegated to wgpu.
 
 ## Install
 
@@ -36,6 +36,8 @@ Download the latest release from the [release page](https://github.com/Arcadi4/L
 - **Portable (`LitematicaPreview-<version>-win-x64-portable.zip`)**: Extract the archive and run `LitematicaPreview.exe`. Keep `Assets`, `Demos`, and `Licenses` next to the executable.
 
 Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (pre-installed on Windows 11 and current Windows 10 builds; the setup installer downloads it automatically if missing).
+
+Linux portable builds are currently development artifacts, not distribution packages. They require a Linux system with WebKitGTK and a compatible GPU driver installed.
 
 > [!NOTE]
 > To change file associations after installation, open the top-right menu and select **Set as default app…** or **Remove file associations**. Portable copies can also register or unregister from PowerShell with `.\LitematicaPreview.exe --register` and `.\LitematicaPreview.exe --unregister`.

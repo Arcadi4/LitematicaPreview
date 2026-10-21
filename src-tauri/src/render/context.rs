@@ -81,23 +81,15 @@ pub struct NativeRenderer {
     last_render: Option<Instant>,
 }
 
-impl NativeRenderer {
     /// Creates a renderer from raw window handles and a physical pixel size.
-    /// On Windows, initialization requires a Direct3D 12 adapter; there is no
-    /// software fallback.
     #[allow(dead_code)]
     pub fn new_from_raw(
         handle: wgpu::rwh::RawWindowHandle,
         display: Option<wgpu::rwh::RawDisplayHandle>,
         (width, height): (u32, u32),
     ) -> Result<Self, RenderError> {
-        #[cfg(windows)]
-        let backends = wgpu::Backends::DX12;
-        #[cfg(not(windows))]
-        let backends = wgpu::Backends::METAL;
-        let _ = backends;
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = backends;
+        descriptor.backends = wgpu::Backends::all();
         let instance = wgpu::Instance::new(descriptor);
         let surface = unsafe {
             instance
@@ -119,7 +111,7 @@ impl NativeRenderer {
         }))
         .map_err(|_| {
             RenderError::Initialization(String::from(
-                "Direct3D 12 is unavailable. Update your graphics driver to preview schematics.",
+                "No compatible graphics adapter is available. Update the graphics driver to preview schematics.",
             ))
         })?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {

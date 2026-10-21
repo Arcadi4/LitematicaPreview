@@ -464,11 +464,7 @@ fn git_rev() -> Option<String> {
 }
 
 /// The production app negotiates this backend on each platform.
-#[cfg(windows)]
-const RIG_BACKENDS: wgpu::Backends = wgpu::Backends::DX12;
-#[cfg(not(windows))]
-const RIG_BACKENDS: wgpu::Backends = wgpu::Backends::METAL;
-
+const RIG_BACKENDS: wgpu::Backends = wgpu::Backends::all();
 const FRAME_WIDTH: u32 = 1920;
 const FRAME_HEIGHT: u32 = 1080;
 const WAIT_TIMEOUT: Duration = Duration::from_secs(60);

@@ -1,9 +1,9 @@
 <div align="center">
   <img src="Assets/icon.png" alt="Litematica Preview 图标" width="200"/>
   <h1>Litematica Preview</h1>
-  <p><strong>适用于 Windows 的离线 Minecraft 投影与结构查看器</strong></p>
+  <p><strong>适用于 Windows 和 Linux 的离线 Minecraft 投影与结构查看器</strong></p>
 
-[![Platform](https://img.shields.io/badge/Platform-Windows%20x64-0078d4?style=flat-square&logo=windows)](https://github.com/Arcadi4/LitematicaPreview)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-0078d4?style=flat-square)](https://github.com/Arcadi4/LitematicaPreview)
 [![Tauri 2](https://img.shields.io/badge/Tauri-v2-24c8db?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
 [![Fluent UI](https://img.shields.io/badge/Fluent%20UI-React%20v9-0078d4?style=flat-square&logo=react)](https://react.fluentui.dev)
 [![Nucleation](https://img.shields.io/badge/Powered%20by-Nucleation-ff8c00?style=flat-square)](https://github.com/Schem-at/Nucleation)
@@ -20,11 +20,11 @@ Litematica Preview 是一款适用于 Windows 桌面的 Minecraft 投影与结�
 
 ## 亮点
 
-- 使用原生 wgpu（Direct3D 12）和 Nucleation，在本地以带纹理的 3D 视图预览七种 Minecraft 投影与结构格式。
+- 使用原生 wgpu 和 Nucleation，在本地以带纹理的 3D 视图预览七种 Minecraft 投影与结构格式。
 - 通过紧凑解码和分块预览加载大型 `.litematic` 文件，避免常驻完整解压后的文件内容。
 - 并行生成与上传几何数据，默认使用 32 方块分块，可调整分块大小和工作线程数，并显示渐进预览与可取消的加载进度。
-- 在可复用的独立进程中解码，Windows 下限制其内存为 2 GiB。返回主页或取消加载会终止解码进程并释放缓存资源；大跨度、不分块的模型目前仍受 Core 0.1.4 紧凑坐标精度的限制。
-- 可选择支持文件关联的安装包，或无需安装的便携版 ZIP。
+- Linux 当前支持 portable 目录构建，运行时依赖系统提供的 WebKitGTK 和图形驱动。
+- Windows 使用 WebView2，Linux 使用 WebKitGTK；原生渲染后端由 wgpu 自动选择。
 
 ## 安装
 
@@ -34,6 +34,8 @@ Litematica Preview 是一款适用于 Windows 桌面的 Minecraft 投影与结�
 - **便携版 (`LitematicaPreview-<version>-win-x64-portable.zip`)**：解压压缩包并运行 `LitematicaPreview.exe`。请将 `Assets`、`Demos` 和 `Licenses` 目录保留在可执行文件同级目录下。
 
 需要 Windows 10 或 11 (x64) 以及 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)（Windows 11 和当前版本的 Windows 10 已预装；若缺失，安装程序会自动下载）。
+
+Linux portable 构建目前仅作为开发产物，不是发行版安装包；运行时需要 Linux 系统提供 WebKitGTK 和兼容的 GPU 驱动。
 
 > [!NOTE]
 > 若需在安装后更改文件关联，请打开右上角菜单并选择 **Set as default app…** 或 **Remove file associations**。便携版也可以在 PowerShell 中通过 `.\LitematicaPreview.exe --register` 和 `.\LitematicaPreview.exe --unregister` 注册或取消注册。

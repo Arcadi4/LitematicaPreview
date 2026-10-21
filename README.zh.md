@@ -16,7 +16,7 @@
 
 <!-- README-I18N:END -->
 
-Litematica Preview 是一款适用于 Windows 桌面的 Minecraft 投影与结构查看器，改编自 [LitematicaQL](https://github.com/Arcadi4/LitematicaQL)。它支持在本地以 3D 方式预览 `.litematic`、`.schem`、`.schematic`、`.nbt`、`.snbt`、`.mcstructure` 和 `.nusn` 文件。
+Litematica Preview 是一款适用于 Windows 桌面的 Minecraft 投影与结构查看器，改编自 [LitematicaQL](https://github.com/Arcadi4/LitematicaQL)。它支持在本地以 3D 方式预览 `.litematic`、`.schem`、`.schematic`、`.nbt`、`.snbt`、`.mcstructure`、`.mca` 和 `.nusn` 文件。
 
 ## 亮点
 
@@ -48,6 +48,7 @@ Litematica Preview 是一款适用于 Windows 桌面的 Minecraft 投影与结�
 | `.nbt`         | Java 版结构方块（Structure block）      |
 | `.snbt`        | 结构 SNBT（支持花括号或方括号方块状态） |
 | `.mcstructure` | 基岩版结构（Bedrock structure）         |
+| `.mca`         | Minecraft Anvil 区域文件                |
 | `.nusn`        | Nucleation 快照（Nucleation snapshot）  |
 
 ## 开发

@@ -8,4 +8,5 @@
 *.schematic binary
 *.nbt binary
 *.mcstructure binary
+*.mca binary
 *.nusn binary

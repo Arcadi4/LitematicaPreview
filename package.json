@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build:win": "pnpm install --frozen-lockfile && tsx scripts/build.ts",
     "build:linux:portable": "pnpm install --frozen-lockfile && tsx scripts/build-linux.ts",
     "build": "tsc --noEmit && vp build",
     "bump": "tsx scripts/bump-version.ts",

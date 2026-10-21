@@ -81,6 +81,7 @@ pub struct NativeRenderer {
     last_render: Option<Instant>,
 }
 
+impl NativeRenderer {
     /// Creates a renderer from raw window handles and a physical pixel size.
     #[allow(dead_code)]
     pub fn new_from_raw(

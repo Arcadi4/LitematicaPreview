@@ -62,7 +62,7 @@
 
 ## Highlights
 
-- Supports `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, and `.nusn` formats
+- Supports `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, `.mca`, and `.nusn` formats
 - Fast offline rendering powered by WebGL 2 and Nucleation
 - Distributed as both an installer (`.exe`) and a portable zip package
 

@@ -159,7 +159,6 @@ struct PreviewLoaded {
     metadata: preview::Metadata,
 }
 
-#[cfg(target_os = "windows")]
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ViewportFailed {
@@ -510,22 +509,20 @@ fn initial_path() -> Result<Option<String>, String> {
 /// Composes the native viewport and builds the renderer for the main window's
 /// surface. A failure emits `viewport-failed` and leaves the renderer absent,
 /// so the app keeps running without a viewport.
-#[cfg(target_os = "windows")]
 fn create_viewer(handle: &AppHandle) -> ViewerState {
     let surface = match render::viewport::install(handle) {
         Ok(surface) => surface,
         Err(error) => {
             let message = error.to_string();
-            let _ = handle.emit(
-                "viewport-failed",
-                ViewportFailed {
-                    message: message.clone(),
-                },
-            );
+            let _ = handle.emit("viewport-failed", ViewportFailed { message: message.clone() });
             return ViewerState::unavailable(Some(message));
         }
     };
-    match render::context::NativeRenderer::new_from_hwnd(surface.hwnd(), surface.size()) {
+    match render::context::NativeRenderer::new_from_raw(
+        surface.handle(),
+        Some(surface.display()),
+        surface.size(),
+    ) {
         Ok(mut renderer) => {
             if let Some(window) = handle.get_webview_window("main") {
                 if let Ok(scale) = window.scale_factor() {
@@ -539,20 +536,10 @@ fn create_viewer(handle: &AppHandle) -> ViewerState {
         }
         Err(error) => {
             let message = error.to_string();
-            let _ = handle.emit(
-                "viewport-failed",
-                ViewportFailed {
-                    message: message.clone(),
-                },
-            );
+            let _ = handle.emit("viewport-failed", ViewportFailed { message: message.clone() });
             ViewerState::unavailable(Some(message))
         }
     }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn create_viewer(_handle: &AppHandle) -> ViewerState {
-    ViewerState::unavailable(None)
 }
 
 fn run() -> Result<(), String> {

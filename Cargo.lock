@@ -2218,6 +2218,7 @@ dependencies = [
  "nucleation",
  "parking_lot",
  "pollster",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "tauri",

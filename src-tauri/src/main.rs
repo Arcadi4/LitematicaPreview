@@ -623,7 +623,19 @@ fn open_folder(path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn open_folder(path: &std::path::Path) -> Result<(), String> {
+    let status = std::process::Command::new("xdg-open")
+        .arg(path)
+        .status()
+        .map_err(|error| format!("Unable to launch the desktop folder opener: {error}"))?;
+    if !status.success() {
+        return Err(format!("The desktop folder opener failed: {status}"));
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn open_folder(_: &std::path::Path) -> Result<(), String> {
     Err("Litematica Preview's desktop integration requires Windows.".into())
 }

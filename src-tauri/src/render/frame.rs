@@ -127,3 +127,43 @@ pub(crate) fn padded_stride(width: u32) -> Option<u32> {
 /// from the renderer's readback worker, never from the main thread.
 pub type FrameSink = Arc<dyn Fn(Result<Frame, String>) + Send + Sync>;
 
+#[cfg(test)]
+mod tests {
+    use super::{padded_stride, FramePixels, PixelPool};
+
+    #[test]
+    fn stride_is_aligned_and_rejects_widths_that_exceed_u32() {
+        assert_eq!(padded_stride(1), Some(256));
+        assert_eq!(padded_stride(64), Some(256));
+        assert_eq!(padded_stride(65), Some(512));
+        assert_eq!(padded_stride(16384), Some(65536));
+        assert_eq!(padded_stride(u32::MAX), None);
+        assert_eq!(padded_stride(u32::MAX / 4), None);
+    }
+
+    #[test]
+    fn dropping_pixels_recycles_the_allocation_through_the_shared_pool() {
+        let pool = PixelPool::new();
+        let mut bytes = pool.take(512);
+        bytes.resize(512, 7);
+        let mut pixels = FramePixels::new(pool.clone(), bytes);
+        let allocation = pixels.as_mut().as_ptr();
+        drop(pixels);
+        let recycled = pool.take(512);
+        assert!(recycled.capacity() >= 512);
+        assert_eq!(recycled.as_ptr(), allocation);
+        assert!(recycled.is_empty());
+    }
+
+    #[test]
+    fn dropping_retired_frames_does_not_retain_their_large_allocations() {
+        let pool = PixelPool::new();
+        let mut previous = pool.take(4096);
+        previous.resize(4096, 1);
+        let previous = FramePixels::new(pool.clone(), previous);
+        let _current = pool.take(1024);
+        drop(previous);
+        let next = pool.take(1024);
+        assert!(next.capacity() < 4096);
+    }
+}

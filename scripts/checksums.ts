@@ -1,4 +1,5 @@
 // Writes `SHA256SUMS.txt` for the release packages; run `pnpm run checksums`.
+// Pass `--win`, `--linux`, or both (default: `--win`).
 
 import { createHash } from "node:crypto"
 import fs from "node:fs"
@@ -23,9 +24,37 @@ function packageVersion(): string {
   return parsed.version
 }
 
+const PLATFORM_FLAGS: Record<string, true> = {
+  "--win": true,
+  "--linux": true,
+}
+
+function platforms(): string[] {
+  const requested = process.argv.slice(2)
+  const selected = requested.length === 0 ? ["--win"] : requested
+  for (const platform of selected) {
+    if (PLATFORM_FLAGS[platform] !== true) {
+      throw new Error(`Unsupported checksum platform: ${platform}. Use --win or --linux.`)
+    }
+  }
+  return selected
+}
+
+function artifactNames(version: string, selected: readonly string[]): string[] {
+  const names: string[] = []
+  if (selected.includes("--win")) {
+    const packageName = `LitematicaPreview-${version}-win-x64`
+    names.push(`${packageName}-setup.exe`, `${packageName}-portable.zip`)
+  }
+  if (selected.includes("--linux")) {
+    const packageName = `LitematicaPreview-${version}-linux-x64`
+    names.push(`${packageName}.deb`, `${packageName}.AppImage`)
+  }
+  return names
+}
+
 function main(): void {
-  const packageName = `LitematicaPreview-${packageVersion()}-win-x64`
-  const lines = [`${packageName}-setup.exe`, `${packageName}-portable.zip`].map((name) => {
+  const lines = artifactNames(packageVersion(), platforms()).map((name) => {
     const target = path.join(ARTIFACTS_ROOT, name)
     if (!fs.existsSync(target)) {
       throw new Error(`Release package not found: ${target}`)

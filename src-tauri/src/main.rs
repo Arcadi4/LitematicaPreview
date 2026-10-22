@@ -174,7 +174,7 @@ struct PreviewLoaded {
     metadata: preview::Metadata,
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ViewportFailed {
@@ -696,7 +696,81 @@ fn create_viewer(handle: &AppHandle) -> ViewerState {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+fn create_viewer(handle: &AppHandle) -> ViewerState {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let renderer = Arc::new(Mutex::new(None));
+    let init_error = Arc::new(Mutex::new(None));
+    let extent = Rc::new(Cell::new(None));
+    let initialized = Rc::new(Cell::new(false));
+    let initialize = || -> Result<(), String> {
+        let window = handle
+            .get_webview_window("main")
+            .ok_or("The main WebView is no longer available.")?;
+        let resize_renderer = Arc::clone(&renderer);
+        let resize_error = Arc::clone(&init_error);
+        let resize_extent = Rc::clone(&extent);
+        let resize_initialized = Rc::clone(&initialized);
+        let app = handle.clone();
+        let gtk_sink = render::viewport_linux::install(&window, move |size, scale| {
+            if resize_extent.replace(Some((size, scale))) == Some((size, scale))
+                || !resize_initialized.get()
+            {
+                return;
+            }
+            let result = with_renderer(&resize_renderer, |renderer| {
+                renderer.resize(size.0, size.1);
+                renderer.set_scale(scale);
+                renderer.render().map_err(|error| error.to_string())
+            })
+            .and_then(|result| result);
+            if let Err(message) = result {
+                if let Ok(mut error) = resize_error.lock() {
+                    *error = Some(message.clone());
+                }
+                let _ = app.emit("viewport-failed", ViewportFailed { message });
+            }
+        })?;
+        let retained_error = Arc::clone(&init_error);
+        let sink: render::frame::FrameSink = Arc::new(move |frame| {
+            if let Err(message) = &frame {
+                if let Ok(mut error) = retained_error.lock() {
+                    *error = Some(message.clone());
+                }
+            }
+            gtk_sink(frame);
+        });
+        let (size, scale) = extent
+            .get()
+            .ok_or("The GTK drawing area has no nonzero allocation.")?;
+        let mut viewport =
+            NativeRenderer::new_offscreen(size, sink).map_err(|error| error.to_string())?;
+        viewport.set_scale(scale);
+        viewport.render().map_err(|error| error.to_string())?;
+        *lock_renderer(&renderer)? = Some(viewport);
+        initialized.set(true);
+        Ok(())
+    };
+    match initialize() {
+        Ok(()) => ViewerState {
+            renderer,
+            init_error,
+        },
+        Err(message) => {
+            let _ = handle.emit(
+                "viewport-failed",
+                ViewportFailed {
+                    message: message.clone(),
+                },
+            );
+            ViewerState::unavailable(Some(message))
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn create_viewer(_handle: &AppHandle) -> ViewerState {
     ViewerState::unavailable(None)
 }
@@ -725,6 +799,7 @@ fn run() -> Result<(), String> {
                     .worker
                     .cancel(u64::MAX, || Ok(()));
             }
+            #[cfg(not(target_os = "linux"))]
             if matches!(
                 event,
                 tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }

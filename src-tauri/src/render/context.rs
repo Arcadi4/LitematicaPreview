@@ -1,16 +1,19 @@
-//! Device, surface and frame orchestration for the native renderer.
+//! Device, presentation and frame orchestration for the native renderer.
 //!
-//! Presentation goes directly to the main window's swapchain, with no
-//! offscreen target or output pass. An `*Srgb` surface format encodes on store.
-//! Windows uses DX12 only; there is no software fallback.
-//! The camera uses CSS pixels; the swapchain is bounded by device limits.
-//! Drawn geometry clips to the DOM-reported stage rectangle, while the clear
-//! spans the window.
+//! Windows presents directly to the main window's swapchain. Offscreen hosts
+//! (Linux) render the same pass into a bounded BGRA8 sRGB texture and hand the
+//! completed pixels to a readback worker and [`FrameSink`]. Both paths use an
+//! `*Srgb` target format, so blends and stores encode in linear space.
+//! There is no software fallback. The camera uses CSS pixels; the backing
+//! target is bounded by device limits. Drawn geometry clips to the
+//! DOM-reported stage rectangle, while the clear spans the window.
 //!
 //! Scene state lives in [`crate::render::scene::Scene`]; camera math lives in
 //! [`crate::render::camera::Camera`].
 
 use crate::render::camera::Camera;
+use crate::render::frame::FrameSink;
+use crate::render::offscreen::OffscreenTarget;
 use crate::render::pipelines::{Pipelines, CAMERA_UNIFORM_BYTES};
 use crate::render::scene::Scene;
 use crate::render::upload::{DeviceStatus, UploadPermit, UploadWindow};
@@ -18,7 +21,7 @@ use litematica_preview_core::{MeshBatch, PreviewInfo};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const CLEAR_LINEAR: [f64; 3] = [0.00335, 0.00518, 0.00802];
+pub(super) const CLEAR_LINEAR: [f64; 3] = [0.00335, 0.00518, 0.00802];
 
 /// Errors the renderer can hand to the Tauri layer.
 #[derive(Debug)]
@@ -55,16 +58,38 @@ impl std::fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
-/// One device, surface and progressively displayed scene. Only upload-window
-/// waits may block for GPU completion, and those run outside this renderer.
+/// Where completed frames go. Only the target differs between hosts; the
+/// render pass, camera, scene and upload code are shared.
+enum Presentation {
+    /// Direct presentation through the window's swapchain (Windows).
+    Surface {
+        surface: wgpu::Surface<'static>,
+        config: wgpu::SurfaceConfiguration,
+    },
+    /// Bounded BGRA8 target read back and published to GTK (Linux).
+    Offscreen(OffscreenTarget),
+}
+
+impl Presentation {
+    fn is_surface(&self) -> bool {
+        matches!(self, Self::Surface { .. })
+    }
+}
+
+/// One device, presentation target and progressively displayed scene. Only
+/// upload-window waits may block for GPU completion, and those run outside
+/// this renderer. Offscreen GPU waits run on the readback worker.
 pub struct NativeRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    surface: wgpu::Surface<'static>,
+    presentation: Presentation,
     pipelines: Pipelines,
     camera: Camera,
-    config: wgpu::SurfaceConfiguration,
+    /// Format of whichever presentation target is active.
+    format: wgpu::TextureFormat,
     physical_size: (u32, u32),
+    /// Device-bounded target extent; may be smaller than `physical_size`.
+    backing_size: (u32, u32),
     /// Physical-pixel to CSS-pixel scale.
     scale: f64,
     /// DOM-reported stage rectangle in CSS pixels.
@@ -79,6 +104,9 @@ pub struct NativeRenderer {
     user_interacted: bool,
     has_visible_batch: bool,
     last_render: Option<Instant>,
+    /// Monotonic ordering for offscreen readback; stale work cannot replace a
+    /// newer clear or frame.
+    frame_generation: u64,
 }
 
 impl NativeRenderer {
@@ -168,11 +196,12 @@ impl NativeRenderer {
         let mut renderer = Self {
             device,
             queue,
-            surface,
+            presentation: Presentation::Surface { surface, config },
             pipelines,
             camera,
-            config,
+            format,
             physical_size,
+            backing_size: (width, height),
             scale,
             stage_css: None,
             color_view,
@@ -184,6 +213,7 @@ impl NativeRenderer {
             user_interacted: false,
             has_visible_batch: false,
             last_render: None,
+            frame_generation: 0,
         };
         renderer.refresh_camera();
         Ok(renderer)
@@ -205,6 +235,75 @@ impl NativeRenderer {
         let handle = wgpu::rwh::RawWindowHandle::Win32(window);
         let display = wgpu::rwh::RawDisplayHandle::Windows(wgpu::rwh::WindowsDisplayHandle::new());
         Self::new_from_raw(handle, Some(display), size)
+    }
+
+    /// Creates a headless renderer whose completed BGRA8 sRGB frames go to
+    /// `sink` from the renderer's readback worker. Linux requires Vulkan and
+    /// macOS verification requires Metal; neither requests a compatible
+    /// surface. No native window or display handle is created.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn new_offscreen(size: (u32, u32), sink: FrameSink) -> Result<Self, RenderError> {
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.backends = offscreen_backends();
+        let instance = wgpu::Instance::new(descriptor);
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::default(),
+            force_fallback_adapter: false,
+            compatible_surface: None,
+            apply_limit_buckets: false,
+        }))
+        .map_err(|_| {
+            RenderError::Initialization(format!(
+                "{} is unavailable. Update your graphics driver to preview schematics.",
+                offscreen_backend_label()
+            ))
+        })?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("schematic offscreen renderer"),
+            required_features: wgpu::Features::empty(),
+            required_limits: Self::limits(&adapter),
+            memory_hints: wgpu::MemoryHints::Performance,
+            ..Default::default()
+        }))
+        .map_err(|error| {
+            RenderError::Initialization(format!(
+                "The graphics device could not initialize: {error}"
+            ))
+        })?;
+        let format = wgpu::TextureFormat::Bgra8UnormSrgb;
+        let samples = Self::samples(&adapter, format);
+        let pipelines = Pipelines::new(&device, samples, format, wgpu::TextureFormat::Depth24Plus);
+        let physical_size = (size.0.max(1), size.1.max(1));
+        let target = OffscreenTarget::new(&device, &queue, physical_size, sink)?;
+        let backing_size = target.size();
+        let scale = 1.0;
+        let camera = Camera::new();
+        let (depth_view, color_view) = (None, None);
+        let device_status = DeviceStatus::new(device.clone());
+        let mut renderer = Self {
+            device,
+            queue,
+            presentation: Presentation::Offscreen(target),
+            pipelines,
+            camera,
+            format,
+            physical_size,
+            backing_size,
+            scale,
+            stage_css: None,
+            color_view,
+            depth_view,
+            samples,
+            scene: None,
+            device_status,
+            load_prepared: false,
+            user_interacted: false,
+            has_visible_batch: false,
+            last_render: None,
+            frame_generation: 0,
+        };
+        renderer.refresh_camera();
+        Ok(renderer)
     }
 
     fn limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
@@ -248,7 +347,7 @@ impl NativeRenderer {
 
     /// Builds depth and MSAA attachments for the current size.
     fn depth_and_color(&self) -> (wgpu::TextureView, Option<wgpu::TextureView>) {
-        let (width, height) = (self.config.width.max(1), self.config.height.max(1));
+        let (width, height) = (self.backing_size.0.max(1), self.backing_size.1.max(1));
         let depth = self
             .device
             .create_texture(&wgpu::TextureDescriptor {
@@ -278,7 +377,7 @@ impl NativeRenderer {
                     mip_level_count: 1,
                     sample_count: self.samples,
                     dimension: wgpu::TextureDimension::D2,
-                    format: self.config.format,
+                    format: self.format,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                     view_formats: &[],
                 })
@@ -305,14 +404,24 @@ impl NativeRenderer {
             return;
         }
         self.physical_size = (width, height);
-        let (width, height) = backing_size(
-            self.physical_size,
-            self.device.limits().max_texture_dimension_2d,
-        );
-        if self.config.width != width || self.config.height != height {
-            self.config.width = width;
-            self.config.height = height;
-            self.surface.configure(&self.device, &self.config);
+        let previous = self.backing_size;
+        let next = match &mut self.presentation {
+            Presentation::Surface { surface, config } => {
+                let (width, height) = backing_size(
+                    self.physical_size,
+                    self.device.limits().max_texture_dimension_2d,
+                );
+                if (config.width, config.height) != (width, height) {
+                    config.width = width;
+                    config.height = height;
+                    surface.configure(&self.device, config);
+                }
+                (width, height)
+            }
+            Presentation::Offscreen(target) => target.resize(&self.device, self.physical_size),
+        };
+        self.backing_size = next;
+        if next != previous {
             self.release_targets();
         }
         self.refresh_camera();
@@ -441,9 +550,16 @@ impl NativeRenderer {
         &mut self.camera
     }
 
-    /// Presents one frame; a clean camera makes this a no-op.
+    /// Presents one frame; a clean camera makes this a no-op. Surface hosts
+    /// present to the swapchain; offscreen hosts post the completed frame to
+    /// their readback worker and never wait for it here.
     pub fn render(&mut self) -> Result<(), RenderError> {
         self.device_status.check().map_err(RenderError::Device)?;
+        if let Presentation::Offscreen(target) = &self.presentation {
+            if let Some(message) = target.failure() {
+                return Err(RenderError::Device(message));
+            }
+        }
         if !self.camera.dirty() {
             return Ok(());
         }
@@ -452,86 +568,108 @@ impl NativeRenderer {
             self.camera.frame_camera(true),
             self.camera.frame_camera(false),
         );
-        let frame = self.acquire()?;
-        // Empty/loading/Home frames only clear the swapchain. Keep large MSAA
+        // Empty/loading/Home frames only clear the target. Keep large MSAA
         // and depth allocations resident only while visible geometry needs them.
         if self.has_visible_batch && self.depth_view.is_none() {
             self.rebuild_targets();
         }
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.frame_generation = self.frame_generation.checked_add(1).unwrap_or(1);
+        let generation = self.frame_generation;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("schematic frame"),
             });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("schematic render"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: self.color_view.as_ref().unwrap_or(&view),
-                    depth_slice: None,
-                    resolve_target: self.color_view.as_ref().map(|_| &view),
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: CLEAR_LINEAR[0],
-                            g: CLEAR_LINEAR[1],
-                            b: CLEAR_LINEAR[2],
-                            a: 1.0,
-                        }),
-                        store: if self.color_view.is_some() {
-                            wgpu::StoreOp::Discard
-                        } else {
-                            wgpu::StoreOp::Store
-                        },
-                    },
-                })],
-                depth_stencil_attachment: self.depth_view.as_ref().map(|view| {
-                    wgpu::RenderPassDepthStencilAttachment {
-                        view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Discard,
-                        }),
-                        stencil_ops: None,
-                    }
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            let viewport = map_stage_viewport(
-                self.stage_css,
-                self.scale,
-                self.physical_size,
-                (self.config.width, self.config.height),
-                self.device.limits().max_texture_dimension_2d,
-            );
-            if let Some((left, top, width, height)) = viewport {
-                pass.set_viewport(left, top, width, height, 0.0, 1.0);
-                if let Some(scene) = self.scene.as_ref().filter(|_| self.has_visible_batch) {
-                    let grid_visible = self.camera.grid_visible();
-                    scene.draw(&self.pipelines, &mut pass, grid_visible)?;
-                }
-            }
+        if self.presentation.is_surface() {
+            let frame = self.acquire()?;
+            let view = frame
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.encode_scene(&mut encoder, &view)?;
+            self.queue.submit(Some(encoder.finish()));
+            self.queue.present(frame);
+        } else {
+            let Presentation::Offscreen(target) = &self.presentation else {
+                unreachable!("the presentation target cannot change during a frame")
+            };
+            self.encode_scene(&mut encoder, target.view())?;
+            self.queue.submit(Some(encoder.finish()));
+            target.request(generation, self.physical_size);
         }
-        self.queue.submit(Some(encoder.finish()));
-        self.queue.present(frame);
         self.camera.clear_dirty();
         self.last_render = Some(Instant::now());
+        Ok(())
+    }
+
+    /// Encodes the clear and scene into `target`, resolving MSAA when enabled.
+    fn encode_scene(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+    ) -> Result<(), RenderError> {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("schematic render"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: self.color_view.as_ref().unwrap_or(target),
+                depth_slice: None,
+                resolve_target: self.color_view.as_ref().map(|_| target),
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: CLEAR_LINEAR[0],
+                        g: CLEAR_LINEAR[1],
+                        b: CLEAR_LINEAR[2],
+                        a: 1.0,
+                    }),
+                    store: if self.color_view.is_some() {
+                        wgpu::StoreOp::Discard
+                    } else {
+                        wgpu::StoreOp::Store
+                    },
+                },
+            })],
+            depth_stencil_attachment: self.depth_view.as_ref().map(|view| {
+                wgpu::RenderPassDepthStencilAttachment {
+                    view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        let viewport = map_stage_viewport(
+            self.stage_css,
+            self.scale,
+            self.physical_size,
+            self.backing_size,
+            self.device.limits().max_texture_dimension_2d,
+        );
+        if let Some((left, top, width, height)) = viewport {
+            pass.set_viewport(left, top, width, height, 0.0, 1.0);
+            if let Some(scene) = self.scene.as_ref().filter(|_| self.has_visible_batch) {
+                let grid_visible = self.camera.grid_visible();
+                scene.draw(&self.pipelines, &mut pass, grid_visible)?;
+            }
+        }
         Ok(())
     }
 
     /// Acquires the next swapchain frame, reconfiguring once on an expected
     /// resize race and failing with `SurfaceLost` for everything else.
     fn acquire(&mut self) -> Result<wgpu::SurfaceTexture, RenderError> {
-        match self.surface.get_current_texture() {
+        let Presentation::Surface { surface, config } = &mut self.presentation else {
+            return Err(RenderError::SurfaceLost);
+        };
+        match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => Ok(texture),
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.config);
-                match self.surface.get_current_texture() {
+                surface.configure(&self.device, config);
+                match surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(texture)
                     | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => Ok(texture),
                     _ => Err(RenderError::SurfaceLost),
@@ -540,6 +678,30 @@ impl NativeRenderer {
             _ => Err(RenderError::SurfaceLost),
         }
     }
+}
+
+fn offscreen_backends() -> wgpu::Backends {
+    #[cfg(windows)]
+    let backends = wgpu::Backends::DX12;
+    #[cfg(target_os = "linux")]
+    let backends = wgpu::Backends::VULKAN;
+    #[cfg(target_os = "macos")]
+    let backends = wgpu::Backends::METAL;
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    let backends = wgpu::Backends::PRIMARY;
+    backends
+}
+
+fn offscreen_backend_label() -> &'static str {
+    #[cfg(windows)]
+    let label = "Direct3D 12";
+    #[cfg(target_os = "linux")]
+    let label = "Vulkan";
+    #[cfg(target_os = "macos")]
+    let label = "Metal";
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    let label = "The graphics backend";
+    label
 }
 
 fn backing_size((width, height): (u32, u32), max_dimension: u32) -> (u32, u32) {

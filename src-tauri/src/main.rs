@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod associations;
+mod file_dialog;
 mod formats;
 mod preview;
 mod preview_process;
@@ -20,7 +21,6 @@ use render::context::NativeRenderer;
 use resources::{Demo, Resources};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
-use tauri_plugin_dialog::DialogExt;
 use texture_packs::{TexturePackLibrary, TexturePackState};
 
 pub use formats::EXTENSIONS;
@@ -132,20 +132,17 @@ async fn bootstrap(
 async fn choose_file(app: AppHandle, window: WebviewWindow) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let extensions: Vec<_> = EXTENSIONS.iter().map(|extension| &extension[1..]).collect();
-        app.dialog()
-            .file()
-            .set_parent(&window)
-            .set_title("Open Minecraft schematic")
-            .add_filter("Minecraft schematics", &extensions)
-            .add_filter("All files", &["*"])
-            .blocking_pick_file()
-            .map(|file| {
-                let path = file
-                    .into_path()
-                    .map_err(|e| format!("Unable to open the selected file: {e}"))?;
-                resources::path_string(&path)
-            })
-            .transpose()
+        file_dialog::pick_files(
+            &app,
+            window,
+            "Open Minecraft schematic",
+            "Minecraft schematics",
+            &extensions,
+            false,
+        )?
+        .and_then(|files| files.into_iter().next())
+        .map(|path| resources::path_string(&path))
+        .transpose()
     })
     .await
     .map_err(|e| format!("Unable to show the file picker: {e}"))?
@@ -510,24 +507,21 @@ async fn import_texture_packs(
 ) -> Result<Option<ImportedTexturePacks>, String> {
     let library = state.texture_packs.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let Some(files) = app
-            .dialog()
-            .file()
-            .set_parent(&window)
-            .set_title("Add Minecraft resource packs")
-            .add_filter("Minecraft resource packs", &["zip"])
-            .add_filter("All files", &["*"])
-            .blocking_pick_files()
+        let Some(files) = file_dialog::pick_files(
+            &app,
+            window,
+            "Add Minecraft resource packs",
+            "Minecraft resource packs",
+            &["zip"],
+            true,
+        )?
         else {
             return Ok(None);
         };
         let empty = ResourcePackSource::from_resource_pack(Default::default());
         let mut imported = 0;
         let mut failures = Vec::new();
-        for file in files {
-            let path = file
-                .into_path()
-                .map_err(|error| format!("Unable to open the selected file: {error}"))?;
+        for path in files {
             let name = path
                 .file_stem()
                 .and_then(|stem| stem.to_str())

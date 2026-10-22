@@ -13,6 +13,7 @@ export type Bootstrap = {
   version: string
   requestId: number
   maxWorkerThreads: number
+  fileAssociationsSupported: boolean
   /** Replays a native viewport failure from before event listeners. */
   viewportError: string | null
   texturePacks: TexturePackState

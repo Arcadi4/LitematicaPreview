@@ -129,7 +129,12 @@ export default function App({ initialError }: { initialError?: string }) {
       // Keep FluentProvider's opaque background off the native swapchain.
       className={`flex flex-col w-full h-full min-w-[320px] bg-transparent! text-text ${dark ? "dark theme-dark" : "theme-light"}`}
     >
-      <AppHeader actionBusy={actionBusy} onNativeAction={nativeAction} onOpenDialog={openDialog} />
+      <AppHeader
+        actionBusy={actionBusy}
+        fileAssociationsSupported={bootstrap?.fileAssociationsSupported ?? false}
+        onNativeAction={nativeAction}
+        onOpenDialog={openDialog}
+      />
 
       <PreviewToolbar
         busy={busy}

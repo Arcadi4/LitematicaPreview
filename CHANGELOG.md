@@ -34,6 +34,7 @@
 
 ## Features
 
+- Add Linux x64 Debian/AppImage packaging and a Vulkan offscreen viewport composited beneath WebKitGTK by GTK, with bounded asynchronous frame readback and parented modal file pickers ([#28](https://github.com/Arcadi4/LitematicaPreview/issues/28)). Windows retains its Direct3D 12 surface; macOS support is unchanged.
 - Extend saved texture packs with enabled priority stacks, fallback through lower packs to vanilla, and migration of the previous selection ([#29](https://github.com/Arcadi4/LitematicaPreview/issues/29)).
 - Gather preview settings, control help, and theme choice in a single settings dialog with Performance, Control, and Appearance sections in a scrollable sidebar layout.
 - Make every preview setting more compact and add an info notice that explains what the setting does without leaving the dialog.

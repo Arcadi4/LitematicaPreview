@@ -536,3 +536,58 @@ fn record_failure(failure: &Mutex<Option<String>>, sink: &FrameSink, message: St
     (sink)(Err(message));
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{LatestRequest, Mailbox};
+    use crate::render::frame::padded_stride;
+
+    #[test]
+    fn mailbox_keeps_only_the_latest_unclaimed_request() {
+        let mailbox = Mailbox::new();
+        for generation in 1..=3 {
+            mailbox.post(generation);
+        }
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        assert_eq!(mailbox.take(&stop), Some(3));
+        stop.store(true, std::sync::atomic::Ordering::Release);
+        assert_eq!(mailbox.take(&stop), None);
+    }
+
+    #[test]
+    fn a_newer_request_obsoletes_an_in_flight_frame() {
+        let latest = LatestRequest::new();
+        latest.post(1);
+        assert!(latest.is_current(1));
+
+        // A scene readback in flight at generation 1 becomes obsolete as soon
+        // as Home or a resize posts generation 3.
+        latest.post(3);
+        assert!(!latest.is_current(1));
+        assert!(!latest.is_current(2));
+
+        // A delayed post cannot lower the newest requested generation.
+        latest.post(2);
+        assert!(!latest.is_current(2));
+        assert!(latest.is_current(3));
+
+        latest.post(5);
+        assert!(!latest.is_current(3));
+        assert!(latest.is_current(5));
+    }
+
+    #[test]
+    fn readback_requests_are_bounded_by_the_device_limits() {
+        let limits = wgpu::Limits {
+            max_texture_dimension_2d: 16384,
+            max_buffer_size: 65536,
+            ..wgpu::Limits::downlevel_webgl2_defaults()
+        };
+        let size = super::bounded_size((20000, 20000), &limits);
+        assert_eq!(size.0, 16384);
+        assert_eq!(size.1, 1);
+        assert_eq!(
+            u64::from(size.1) * u64::from(padded_stride(size.0).unwrap()),
+            65536
+        );
+    }
+}

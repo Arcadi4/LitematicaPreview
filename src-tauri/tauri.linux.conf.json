@@ -1,0 +1,62 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Litematica Preview",
+        "width": 1180,
+        "height": 800,
+        "minWidth": 760,
+        "minHeight": 560,
+        "center": true,
+        "resizable": true,
+        "decorations": true,
+        "dragDropEnabled": true,
+        "transparent": true
+      }
+    ]
+  },
+  "bundle": {
+    "targets": ["deb", "appimage"],
+    "fileAssociations": [
+      {
+        "ext": ["litematic"],
+        "mimeType": "application/x-litematic"
+      },
+      {
+        "ext": ["schem", "schematic"],
+        "mimeType": "application/x-schematic"
+      },
+      {
+        "ext": ["nbt"],
+        "mimeType": "application/x-nbt"
+      },
+      {
+        "ext": ["snbt"],
+        "mimeType": "application/x-snbt"
+      },
+      {
+        "ext": ["mcstructure"],
+        "mimeType": "application/x-mcstructure"
+      },
+      {
+        "ext": ["mca"],
+        "mimeType": "application/x-mca"
+      },
+      {
+        "ext": ["nusn"],
+        "mimeType": "application/x-nusn"
+      }
+    ],
+    "linux": {
+      "deb": {
+        "depends": ["libvulkan1", "mesa-vulkan-drivers", "xdg-utils"],
+        "desktopTemplate": "linux/litematica-preview.desktop",
+        "files": {
+          "/usr/share/mime/packages/dev.litematica.preview.xml": "linux/dev.litematica.preview.xml"
+        }
+      }
+    }
+  }
+}

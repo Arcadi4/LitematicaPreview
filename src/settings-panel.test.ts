@@ -13,6 +13,7 @@ const bootstrap: Bootstrap = {
   version: "0.3.0",
   requestId: 0,
   maxWorkerThreads: 8,
+  fileAssociationsSupported: true,
   viewportError: null,
   texturePacks: { packs: [] },
   texturePackError: null,

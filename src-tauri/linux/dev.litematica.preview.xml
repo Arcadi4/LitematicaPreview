@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-litematic">
+    <comment>Litematica schematic</comment>
+    <glob pattern="*.litematic"/>
+  </mime-type>
+  <mime-type type="application/x-schematic">
+    <comment>Minecraft schematic</comment>
+    <glob pattern="*.schem"/>
+    <glob pattern="*.schematic"/>
+  </mime-type>
+  <mime-type type="application/x-nbt">
+    <comment>Minecraft NBT data</comment>
+    <glob pattern="*.nbt"/>
+  </mime-type>
+  <mime-type type="application/x-snbt">
+    <comment>Minecraft SNBT data</comment>
+    <glob pattern="*.snbt"/>
+  </mime-type>
+  <mime-type type="application/x-mcstructure">
+    <comment>Minecraft structure</comment>
+    <glob pattern="*.mcstructure"/>
+  </mime-type>
+  <mime-type type="application/x-mca">
+    <comment>Minecraft Anvil region</comment>
+    <glob pattern="*.mca"/>
+  </mime-type>
+  <mime-type type="application/x-nusn">
+    <comment>Minecraft NUSN data</comment>
+    <glob pattern="*.nusn"/>
+  </mime-type>
+</mime-info>

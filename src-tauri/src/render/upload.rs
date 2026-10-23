@@ -12,13 +12,13 @@ const MAX_PENDING_BYTES: usize = 64 * 1024 * 1024;
 
 type DeviceFailure = Arc<Mutex<Option<String>>>;
 
-pub(crate) struct DeviceStatus {
+pub struct DeviceStatus {
     device: wgpu::Device,
     failure: DeviceFailure,
 }
 
 impl DeviceStatus {
-    pub(crate) fn new(device: wgpu::Device) -> Arc<Self> {
+    pub fn new(device: wgpu::Device) -> Arc<Self> {
         let status = Arc::new(Self {
             device,
             failure: Arc::new(Mutex::new(None)),
@@ -76,7 +76,7 @@ struct Progress {
     waiting_since: Option<Instant>,
 }
 
-pub(crate) struct UploadState {
+pub struct UploadState {
     progress: Mutex<Progress>,
     changed: Condvar,
     failure: DeviceFailure,
@@ -118,7 +118,7 @@ pub struct UploadWindow {
 }
 
 impl UploadWindow {
-    pub(crate) fn with_device(device: Arc<DeviceStatus>, capacity: usize) -> Self {
+    pub fn with_device(device: Arc<DeviceStatus>, capacity: usize) -> Self {
         let state = Arc::new(UploadState {
             progress: Mutex::new(Progress::default()),
             changed: Condvar::new(),
@@ -255,7 +255,7 @@ impl UploadPermit {
         check(&self.state.as_ref().unwrap().failure)
     }
 
-    pub(crate) fn submit(mut self, queue: &wgpu::Queue) -> Result<(), String> {
+    pub fn submit(mut self, queue: &wgpu::Queue) -> Result<(), String> {
         let state = Arc::clone(self.state.as_ref().unwrap());
         let reserved_bytes = self.reserved_bytes;
         // Queue writes become submissions even when no frame is due.

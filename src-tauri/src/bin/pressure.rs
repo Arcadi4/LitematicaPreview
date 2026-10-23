@@ -37,14 +37,7 @@ use nucleation::meshing::ResourcePackSource;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-#[path = "../preview.rs"]
-mod preview;
-#[path = "../preview_process.rs"]
-mod preview_process;
-#[path = "../preview_protocol.rs"]
-mod preview_protocol;
-#[path = "../render/mod.rs"]
-mod render;
+use litematica_preview::{preview, preview_process, render};
 
 mod meter {
     use std::alloc::{GlobalAlloc, Layout, System};

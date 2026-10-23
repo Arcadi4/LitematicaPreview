@@ -53,7 +53,7 @@ pub struct Scene {
 }
 
 impl Scene {
-    pub(crate) fn new(device: wgpu::Device, queue: wgpu::Queue) -> Self {
+    pub fn new(device: wgpu::Device, queue: wgpu::Queue) -> Self {
         Self {
             device,
             queue,
@@ -64,7 +64,7 @@ impl Scene {
     }
 
     /// First-use textures land before geometry. No CPU mesh bytes are retained.
-    pub(crate) fn attach_batch(
+    pub fn attach_batch(
         &mut self,
         pipelines: &Pipelines,
         batch: &MeshBatch,
@@ -261,7 +261,7 @@ impl Scene {
 
     /// Builds the ground-grid geometry from the completed model bounds,
     /// mirroring renderer.ts's `buildGrid`.
-    pub(crate) fn finish(&mut self, metadata: &PreviewInfo) {
+    pub fn finish(&mut self, metadata: &PreviewInfo) {
         // Same numeric steps as `buildGrid`: a 15%-padded extent, a step that
         // keeps the line count bounded, and a floor half a block below the
         // model's centre line.
@@ -297,7 +297,7 @@ impl Scene {
     }
 
     /// Draws the grid and parts; `grid_visible` comes from the camera.
-    pub(crate) fn draw(
+    pub fn draw(
         &self,
         pipelines: &Pipelines,
         pass: &mut wgpu::RenderPass,

@@ -1,6 +1,4 @@
-#[allow(dead_code)]
-#[path = "../src/render/mod.rs"]
-mod render;
+use litematica_preview::render;
 
 use litematica_preview_core::{MeshBatch, MeshPart, PreviewInfo, Texture};
 use render::camera::FrameCamera;

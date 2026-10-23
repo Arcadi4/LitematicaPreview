@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::EXTENSIONS;
+use crate::formats::EXTENSIONS;
 
 #[derive(Clone)]
 pub struct Resources {

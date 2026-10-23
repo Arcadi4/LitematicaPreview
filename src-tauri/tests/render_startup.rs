@@ -1,6 +1,4 @@
-#[allow(dead_code)]
-#[path = "../src/render/mod.rs"]
-mod render;
+use litematica_preview::render;
 
 use render::upload::{DeviceStatus, UploadWindow};
 use std::sync::Arc;

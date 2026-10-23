@@ -1,3 +1,35 @@
+# v0.4.0
+
+## Features
+
+- Render previews with a native wgpu (Direct3D 12) pipeline that draws directly into the window surface beneath the Fluent interface. Pointer and keyboard gestures are forwarded to the renderer, and load progress arrives as events instead of streamed geometry ([#17](https://github.com/Arcadi4/LitematicaPreview/issues/17)).
+- Import Minecraft Java resource packs, keep them in the app data folder, and arrange the enabled packs by priority. Missing textures, models, and block states fall back through lower packs to bundled vanilla, and the previous single-pack selection is migrated.
+- Preview Minecraft Anvil region files (`.mca`).
+
+## Improvements
+
+- Feed the native renderer from bounded in-process mesh sessions. Prepared batches reach the GPU without converting attributes or rebasing indices, upload admission is bounded by batch count and a 64 MiB staging budget, and upload credits track the actual worker count.
+- Discard transient render attachment contents and release the depth and MSAA attachments when no visible geometry needs them.
+- Share material uniforms within geometry batches, reducing per-part buffer allocations.
+- Reduce default preview chunk memory peaks and parallelize palette analysis.
+- Add a host pressure suite with pinned decode baselines and frame metrics on Windows hardware, with pull-request reports that fail on regressions.
+- Port the test suites to TypeScript and add the comment policy to the contributor guide.
+
+## Fixes
+
+- Bound viewport backing sizes to device limits and negotiate native adapter buffer capabilities instead of assuming them.
+- Preserve durable viewport state across scene resets and camera depth when the final geometry bounds arrive.
+- Fit and clip the camera to the visible stage rectangle, and keep pointer mapping aligned with the native viewport across resizes.
+- Restore isolated decoder failure boundaries and binary transfer recovery on cancellation.
+- Keep the viewport clear color in the linear color space.
+- Set `default-run` to `LitematicaPreview` so `cargo run` starts the app.
+
+## ToDos
+
+- Add recent-files history.
+- Add lighting shader.
+- Multi-file preview ([#13](https://github.com/Arcadi4/LitematicaPreview/issues/13))
+
 # v0.3.1
 
 ## Features

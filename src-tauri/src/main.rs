@@ -1,29 +1,21 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod associations;
-mod file_dialog;
-mod formats;
-mod preview;
-mod preview_process;
-mod preview_protocol;
-mod render;
-mod resources;
-mod texture_packs;
-
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use litematica_preview::associations;
+use litematica_preview::file_dialog;
+use litematica_preview::formats;
+use litematica_preview::preview::{self, PreviewWorker};
+use litematica_preview::preview_process;
+use litematica_preview::render::context::NativeRenderer;
+use litematica_preview::resources::{self, Demo, Resources};
+use litematica_preview::texture_packs::{TexturePackLibrary, TexturePackState};
 use litematica_preview_core::resource_pack_overlay;
 use nucleation::meshing::ResourcePackSource;
-use preview::PreviewWorker;
-use render::context::NativeRenderer;
-use resources::{Demo, Resources};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
-use texture_packs::{TexturePackLibrary, TexturePackState};
-
-pub use formats::EXTENSIONS;
 
 const VIEWPORT_UNAVAILABLE: &str = "The native viewport is unavailable. \
      Restart the application to initialize the graphics device.";
@@ -114,7 +106,7 @@ async fn bootstrap(
             Err(error) => (TexturePackState::default(), Some(error)),
         };
         Ok(Bootstrap {
-            extensions: EXTENSIONS,
+            extensions: formats::EXTENSIONS,
             demos: resources.demos()?,
             initial_path,
             version: env!("CARGO_PKG_VERSION"),
@@ -133,7 +125,10 @@ async fn bootstrap(
 #[tauri::command]
 async fn choose_file(app: AppHandle, window: WebviewWindow) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let extensions: Vec<_> = EXTENSIONS.iter().map(|extension| &extension[1..]).collect();
+        let extensions: Vec<_> = formats::EXTENSIONS
+            .iter()
+            .map(|extension| &extension[1..])
+            .collect();
         file_dialog::pick_files(
             &app,
             window,
@@ -186,14 +181,14 @@ fn preview_path(path: String) -> Result<PathBuf, String> {
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
-            EXTENSIONS
+            formats::EXTENSIONS
                 .iter()
                 .any(|candidate| candidate[1..].eq_ignore_ascii_case(extension))
         });
     if !supported {
         return Err(format!(
             "Choose a supported schematic: {}.",
-            EXTENSIONS.join(", ")
+            formats::EXTENSIONS.join(", ")
         ));
     }
     Ok(path)
@@ -666,6 +661,8 @@ fn initial_path() -> Result<Option<String>, String> {
 /// so the app keeps running without a viewport.
 #[cfg(target_os = "windows")]
 fn create_viewer(handle: &AppHandle) -> ViewerState {
+    use litematica_preview::render;
+
     let surface = match render::viewport::install(handle) {
         Ok(surface) => surface,
         Err(error) => {
@@ -706,6 +703,7 @@ fn create_viewer(handle: &AppHandle) -> ViewerState {
 
 #[cfg(target_os = "linux")]
 fn create_viewer(handle: &AppHandle) -> ViewerState {
+    use litematica_preview::render;
     use std::cell::Cell;
     use std::rc::Rc;
 

@@ -238,7 +238,7 @@ impl Camera {
     /// Camera uniforms; non-grid frames offset the model by `-centre`.
     /// Clipping follows the bounds at the current eye, including after final
     /// geometry bounds shrink without refitting the user-controlled view.
-    pub(crate) fn frame_camera(&self, grid: bool) -> FrameCamera {
+    pub fn frame_camera(&self, grid: bool) -> FrameCamera {
         let direction = self.basis();
         let eye = add3(self.target, mul3(direction, self.distance));
         let view = math::look_at(eye, self.target, UP);

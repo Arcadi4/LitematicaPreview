@@ -1,11 +1,11 @@
 pub fn register() -> Result<(), String> {
-    platform::register(crate::EXTENSIONS)
+    platform::register(crate::formats::EXTENSIONS)
 }
 
 pub fn register_extensions(selection: &str) -> Result<(), String> {
     let mut selected = Vec::new();
     for value in selection.split(',') {
-        let extension = crate::EXTENSIONS
+        let extension = crate::formats::EXTENSIONS
             .iter()
             .copied()
             .find(|extension| extension.eq_ignore_ascii_case(value.trim()))
@@ -15,6 +15,14 @@ pub fn register_extensions(selection: &str) -> Result<(), String> {
         }
     }
     platform::register(&selected)
+}
+
+pub fn open_settings() -> Result<(), String> {
+    platform::open_settings()
+}
+
+pub fn unregister() -> Result<(), String> {
+    platform::unregister()
 }
 
 #[cfg(windows)]
@@ -123,7 +131,7 @@ mod platform {
         let owns_registration = value(&user, &format!(r"{PROG_KEY}\shell\open\command"), "")?
             .is_some_and(|owner| owner.eq_ignore_ascii_case(&command));
         if owns_registration {
-            for extension in crate::EXTENSIONS
+            for extension in crate::formats::EXTENSIONS
                 .iter()
                 .filter(|extension| !selected.contains(extension))
             {
@@ -233,7 +241,7 @@ mod platform {
             return Ok(());
         }
 
-        for extension in crate::EXTENSIONS {
+        for extension in crate::formats::EXTENSIONS {
             let extension_key = format!(r"Software\Classes\{extension}");
             if value(&user, &extension_key, "")?.is_some_and(|default| default == PROG_ID) {
                 remove_value(&user, &extension_key, "")?;
@@ -286,5 +294,3 @@ mod platform {
         Err("Default Apps settings are only supported on Windows.".to_string())
     }
 }
-
-pub use platform::{open_settings, unregister};

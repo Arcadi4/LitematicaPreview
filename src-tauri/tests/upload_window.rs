@@ -2,9 +2,7 @@
 //! across real admission, waiting, cancellation, device failure, and GPU
 //! callback release.
 
-#[allow(dead_code)]
-#[path = "../src/render/upload.rs"]
-mod upload;
+use litematica_preview::render::upload;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};

@@ -1,11 +1,33 @@
-#[path = "src/formats.rs"]
-mod formats;
+const EXTENSIONS_SOURCE: &str = "src/formats.rs";
+
+fn extensions() -> Vec<String> {
+    let source = std::fs::read_to_string(EXTENSIONS_SOURCE)
+        .unwrap_or_else(|error| panic!("Unable to read {EXTENSIONS_SOURCE}: {error}"));
+    let body = source
+        .split_once("pub const EXTENSIONS: &[&str] = &[")
+        .and_then(|(_, rest)| rest.split_once("];"))
+        .map(|(body, _)| body)
+        .unwrap_or_else(|| {
+            panic!("{EXTENSIONS_SOURCE} must define `EXTENSIONS` as a string slice")
+        });
+    body.split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            entry
+                .strip_prefix('"')
+                .and_then(|entry| entry.strip_suffix('"'))
+                .unwrap_or_else(|| panic!("`EXTENSIONS` entry is not a string literal: {entry}"))
+                .to_string()
+        })
+        .collect()
+}
 
 fn main() {
-    println!("cargo:rerun-if-changed=src/formats.rs");
+    println!("cargo:rerun-if-changed={EXTENSIONS_SOURCE}");
     let mut include =
         String::from("; Generated from src/formats.rs.\n!macro LP_FOREACH_EXTENSION APPLY\n");
-    for extension in formats::EXTENSIONS {
+    for extension in extensions() {
         include.push_str(&format!(
             "  !insertmacro ${{APPLY}} \"{}\" \"{}\"\n",
             &extension[1..],

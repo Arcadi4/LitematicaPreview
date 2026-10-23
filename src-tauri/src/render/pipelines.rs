@@ -409,7 +409,7 @@ impl Pipelines {
     }
 
     /// Uploads both camera uniforms, including the grid's zero offset.
-    pub(crate) fn write_cameras(&self, queue: &wgpu::Queue, grid: FrameCamera, scene: FrameCamera) {
+    pub fn write_cameras(&self, queue: &wgpu::Queue, grid: FrameCamera, scene: FrameCamera) {
         queue.write_buffer(&self.grid_camera_buffer, 0, &grid.encode());
         queue.write_buffer(&self.scene_camera_buffer, 0, &scene.encode());
     }

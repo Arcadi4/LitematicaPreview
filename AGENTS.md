@@ -3,7 +3,7 @@
 Windows x64 desktop app for offline Minecraft schematic and structure viewing (Tauri 2 + Rust wgpu renderer + React 19 Fluent UI v9 frontend).
 
 - **Architecture**: Host (`src-tauri/`) embeds a Direct3D 12 wgpu renderer drawing directly into the main window beneath a transparent WebView2 overlay (`src/`). The frontend manages UI state and controls; it renders zero canvas pixels.
-- **Shared Core**: Geometry decoding, caching, and meshing logic live in `litematica-preview-core` (consumed from crates.io; override via `LP_CORE_PATH=../litematica-preview-core`).
+- **Shared Core**: Geometry decoding, caching, and meshing logic live in `litematica-preview-core` (consumed from git at a pinned revision; override via `LP_CORE_PATH=../litematica-preview-core`).
 - **Formats**: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, `.mca`, `.nusn` (defined in `src-tauri/src/formats.rs`).
 - **Assets & Fixtures**: Default pack in `Assets/pack.zip`. Test fixtures in `Fixtures/Demos/` and `Fixtures/Formats/`; million-block pressure fixtures in `Fixtures/Pressure/` with pinned decode counts in `baselines.json` (refresh with `pnpm run pressure:host -- --write-baselines`).
 

@@ -2,6 +2,9 @@
 members = ["src-tauri"]
 resolver = "2"
 
+[patch.crates-io]
+schematic-mesher = { git = "https://github.com/Schem-at/Schematic-Mesher.git", rev = "286323e472cd8a5363b66a035a3be02ecdd4f164" }
+
 # Debug info is the most expensive part of an unoptimized build. Line tables
 # keep the host's panic locations readable; dependency debug info is never
 # read, so none of it is generated. The release profile is unaffected.

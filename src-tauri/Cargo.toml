@@ -31,7 +31,7 @@ litematica-preview-core = { git = "https://github.com/Arcadi4/litematica-preview
 nucleation = { version = "=0.11.0", default-features = false, features = ["meshing"] }
 wgpu = "30.0.1"
 pollster = "1.0.1"
-parking_lot = "0.12"
+parking_lot = "0.13"
 uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(windows)'.dependencies]

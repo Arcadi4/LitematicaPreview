@@ -80,7 +80,7 @@ jobs:
             pressure-report/pressure.md
       - name: Comment the report on the pull request
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && hashFiles('pressure-report/pressure.md') != ''
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs')

@@ -1,24 +1,30 @@
-name: Pressure
+name: Pressure Test
 on:
   pull_request:
     paths:
-      - "src-tauri/**"
+      - "src-tauri/src/bin/pressure.rs"
+      - "src-tauri/src/preview.rs"
+      - "src-tauri/src/preview_process.rs"
+      - "src-tauri/src/preview_protocol.rs"
+      - "src-tauri/src/render/**"
+      - "src-tauri/Cargo.toml"
+      - "Cargo.toml"
       - "Cargo.lock"
-      - "scripts/cargo.ts"
       - "Assets/pack.zip"
       - "Fixtures/Pressure/**"
-      - "package.json"
-      - ".github/workflows/pressure.yml"
   push:
     branches: [main]
     paths:
-      - "src-tauri/**"
+      - "src-tauri/src/bin/pressure.rs"
+      - "src-tauri/src/preview.rs"
+      - "src-tauri/src/preview_process.rs"
+      - "src-tauri/src/preview_protocol.rs"
+      - "src-tauri/src/render/**"
+      - "src-tauri/Cargo.toml"
+      - "Cargo.toml"
       - "Cargo.lock"
-      - "scripts/cargo.ts"
       - "Assets/pack.zip"
       - "Fixtures/Pressure/**"
-      - "package.json"
-      - ".github/workflows/pressure.yml"
   workflow_dispatch:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -29,6 +35,7 @@ permissions:
   pull-requests: write
 jobs:
   pressure:
+    name: Pressure Test
     runs-on: windows-latest
     timeout-minutes: 45
     env:
@@ -58,11 +65,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         continue-on-error: true
         run: |
-          $run = gh run list --repo ${{ github.repository }} --workflow Pressure --branch main --status success --limit 1 --json databaseId --jq ".[0].databaseId"
+          $run = gh run list --repo ${{ github.repository }} --workflow pressure.yml --branch main --status success --limit 1 --json databaseId --jq ".[0].databaseId"
           if ([string]::IsNullOrWhiteSpace($run)) { exit 0 }
-          gh run download $run --repo ${{ github.repository }} --name pressure-metrics --dir baseline
+          gh run download $run --repo ${{ github.repository }} --name pressure-test-metrics --dir baseline
+          if (-not (Test-Path baseline/pressure.json)) {
+            gh run download $run --repo ${{ github.repository }} --name pressure-metrics --dir baseline
+          }
           Write-Output " Found main-branch baseline artifact from run $run"
-      - name: Run pressure suite
+      - name: Run pressure test suite
         shell: bash
         run: |
           compare=()
@@ -74,7 +84,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: pressure-metrics
+          name: pressure-test-metrics
           path: |
             pressure-report/pressure.json
             pressure-report/pressure.md

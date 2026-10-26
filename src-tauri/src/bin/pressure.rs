@@ -1,4 +1,4 @@
-//! Pressure suite for the million-block fixtures in `Fixtures/Pressure`.
+//! Pressure test suite for the million-block fixtures in `Fixtures/Pressure`.
 //!
 //! Three phases: the `core` phase decodes in-process with allocator charges
 //! and pins the decode counts to `baselines.json`; the `cold` phase runs one
@@ -6,17 +6,21 @@
 //! scene for timed frames) and reports full-render latency; the `warm` phase
 //! reuses one decoder child across four Atrium loads to detect growth.
 //!
-//! A software adapter still uploads and drains every batch, but frame timings
-//! are skipped: CPU rasterization makes them noise and dominates wall time.
-//! `--no-render` does the same on a hardware adapter.
+//! A software adapter still decodes and consumes every batch, but skips GPU
+//! uploads and frame timings: CPU rasterization makes them noise and dominates
+//! wall time. `--no-render` does the same for frames on a hardware adapter.
 //!
 //! `--preview-worker <port>` plays the decoder child role. The cold pass
 //! spawns this binary through `DecoderProcess`, so the branch must match
 //! `main.rs`.
+//!
+//! `--compare <baseline.json>` reports only representative runtime metrics
+//! that leave their noise band, so incidental jitter does not turn every
+//! comparison into a wall of percentage changes.
 #![allow(dead_code)]
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -513,9 +517,9 @@ struct Rig {
     format: wgpu::TextureFormat,
     adapter: String,
     backend: String,
-    /// Software adapters rasterize whole frames on the CPU, so their frame
-    /// latencies are noise and dominate wall time. Those loads keep the
-    /// upload and memory path but skip every draw.
+    /// Software adapters rasterize on the CPU, so their upload and frame
+    /// latencies are noise and dominate wall time. Those loads keep the decode
+    /// and memory path but skip GPU work.
     hardware: bool,
     target: Offscreen,
 }
@@ -618,7 +622,7 @@ fn request_rig() -> Result<(Rig, Option<String>), String> {
     let target = Offscreen::create(&device, format, samples);
     let notice = (!hardware).then(|| {
         format!(
-            "{} is a software adapter; frame timings are skipped and only load and memory metrics are reported",
+            "{} is a software adapter; GPU uploads and frame timings are skipped, so only decode and memory metrics are reported",
             info.name
         )
     });
@@ -895,15 +899,15 @@ struct Tally {
 impl LoadState {
     fn new(rig: Option<Arc<Rig>>, threads: u8, frames_target: u32, render: bool) -> Self {
         let render_frames = render && rig.as_ref().is_some_and(|rig| rig.hardware);
-        let upload = rig.as_ref().map(|rig| {
+        let device_rig = rig.as_ref().filter(|rig| rig.hardware);
+        let upload = device_rig.map(|rig| {
             Arc::new(render::upload::UploadWindow::with_device(
                 render::upload::DeviceStatus::new(rig.device.clone()),
                 usize::from(threads),
             ))
         });
-        let scene = rig
-            .as_ref()
-            .map(|rig| render::scene::Scene::new(rig.device.clone(), rig.queue.clone()));
+        let scene =
+            device_rig.map(|rig| render::scene::Scene::new(rig.device.clone(), rig.queue.clone()));
         Self {
             rig,
             upload,
@@ -1576,51 +1580,189 @@ struct Report {
     loads: Vec<OutcomeRow>,
 }
 
-fn report_metrics(report: &Report) -> Vec<(String, f64)> {
+/// Shared runners vary by tens of percent from run to run. Only changes that
+/// clear these bands are shown; the bands are advisory and never gate a run.
+const TIMING_TOLERANCE: f64 = 20.0;
+const SHORT_TIMING_TOLERANCE: f64 = 25.0;
+const MEMORY_TOLERANCE: f64 = 10.0;
+
+#[derive(Clone)]
+struct MetricPoint {
+    key: String,
+    phase: &'static str,
+    target: String,
+    metric: &'static str,
+    digits: usize,
+    value: f64,
+    tolerance: f64,
+}
+
+fn push_metric(
+    rows: &mut Vec<MetricPoint>,
+    phase: &'static str,
+    target: &str,
+    metric: &'static str,
+    digits: usize,
+    value: f64,
+    tolerance: f64,
+) {
+    rows.push(MetricPoint {
+        key: format!("{phase}/{target}/{metric}"),
+        phase,
+        target: target.to_string(),
+        metric,
+        digits,
+        value,
+        tolerance,
+    });
+}
+
+/// The runtime metrics worth comparing. Block, batch, and triangle counts are
+/// pinned in `baselines.json`; timing and memory peaks are the values that
+/// move with the code. The warm pass reports its two ends: the first load
+/// fills the child pack cache and the last one is the steady state.
+fn report_metrics(report: &Report) -> Vec<MetricPoint> {
     let mut rows = Vec::new();
     for record in report.core.iter().filter(|record| record.error.is_none()) {
-        let tag = format!("core/{}", record.fixture);
-        for (suffix, value) in [
-            ("decode_ms", record.decode_ms),
-            ("stream_open_ms", record.stream_open_ms),
-            ("stream_ms", record.stream_ms),
-            ("total_ms", record.total_ms),
-            ("first_batch_ms", record.first_batch_ms),
-            ("decoded_peak_mb", mb(record.decode_peak_bytes)),
-            ("streaming_peak_mb", mb(record.streaming_peak_bytes)),
-            ("payload_mb", mb_bytes(record.payload_bytes)),
-            ("batches", record.batches as f64),
-            ("triangles_m", record.triangles as f64 / 1_000_000.0),
-        ] {
-            rows.push((format!("{tag}/{suffix}"), value));
-        }
+        let target = record.fixture.as_str();
+        push_metric(
+            &mut rows,
+            "core",
+            target,
+            "decode (ms)",
+            0,
+            record.decode_ms,
+            TIMING_TOLERANCE,
+        );
+        push_metric(
+            &mut rows,
+            "core",
+            target,
+            "mesh (ms)",
+            0,
+            record.stream_ms,
+            TIMING_TOLERANCE,
+        );
+        push_metric(
+            &mut rows,
+            "core",
+            target,
+            "total (ms)",
+            0,
+            record.total_ms,
+            TIMING_TOLERANCE,
+        );
+        push_metric(
+            &mut rows,
+            "core",
+            target,
+            "peak decode (MB)",
+            1,
+            mb(record.decode_peak_bytes),
+            MEMORY_TOLERANCE,
+        );
+        push_metric(
+            &mut rows,
+            "core",
+            target,
+            "peak mesh (MB)",
+            1,
+            mb(record.streaming_peak_bytes),
+            MEMORY_TOLERANCE,
+        );
     }
-    for row in report.loads.iter().filter(|row| row.error.is_none()) {
-        let tag = format!("{}/load{}/{}", row.mode, row.load, row.fixture);
-        for (suffix, value) in [
-            ("connect_ms", row.connect_ms),
-            ("decode_ms", row.decode_ms),
-            ("stream_open_ms", row.stream_open_ms),
-            ("first_batch_ms", row.first_batch_ms),
-            (
-                "child_peak_mb",
-                row.child_peak.map(|v| v as f64 / 1048576.0).unwrap_or(0.0),
-            ),
-            ("staged_mb", mb_bytes(row.staged_bytes)),
-            ("batches", row.batches as f64),
-            ("triangles_m", row.triangles as f64 / 1_000_000.0),
-        ] {
-            rows.push((format!("{tag}/{suffix}"), value));
+    for row in report
+        .loads
+        .iter()
+        .filter(|row| row.mode == "cold" && row.error.is_none())
+    {
+        let target = row.fixture.as_str();
+        push_metric(
+            &mut rows,
+            "cold",
+            target,
+            "decode (ms)",
+            0,
+            row.decode_ms,
+            TIMING_TOLERANCE,
+        );
+        push_metric(
+            &mut rows,
+            "cold",
+            target,
+            "first frame (ms)",
+            0,
+            row.first_batch_ms,
+            SHORT_TIMING_TOLERANCE,
+        );
+        if row.full_render_ms > 0.0 {
+            push_metric(
+                &mut rows,
+                "cold",
+                target,
+                "full render (ms)",
+                0,
+                row.full_render_ms,
+                TIMING_TOLERANCE,
+            );
+        }
+        if let Some(bytes) = row.child_peak {
+            push_metric(
+                &mut rows,
+                "cold",
+                target,
+                "child peak (MB)",
+                1,
+                mb_bytes(bytes),
+                MEMORY_TOLERANCE,
+            );
         }
         if row.frames_measured > 0 {
-            for (suffix, value) in [
-                ("first_frame_ms", row.first_frame_ms),
-                ("full_render_ms", row.full_render_ms),
-                ("frames_p50_ms", row.frames_p50_ms),
-                ("frames_p95_ms", row.frames_p95_ms),
-            ] {
-                rows.push((format!("{tag}/{suffix}"), value));
-            }
+            push_metric(
+                &mut rows,
+                "cold",
+                target,
+                "frames p95 (ms)",
+                1,
+                row.frames_p95_ms,
+                TIMING_TOLERANCE,
+            );
+        }
+    }
+    for row in report
+        .loads
+        .iter()
+        .filter(|row| row.mode == "warm" && row.error.is_none() && matches!(row.load, 1 | 4))
+    {
+        let target = format!("load {}", row.load);
+        push_metric(
+            &mut rows,
+            "warm",
+            &target,
+            "decode (ms)",
+            0,
+            row.decode_ms,
+            TIMING_TOLERANCE,
+        );
+        push_metric(
+            &mut rows,
+            "warm",
+            &target,
+            "mesh (ms)",
+            0,
+            row.stream_ms,
+            TIMING_TOLERANCE,
+        );
+        if let Some(bytes) = row.child_peak {
+            push_metric(
+                &mut rows,
+                "warm",
+                &target,
+                "child peak (MB)",
+                1,
+                mb_bytes(bytes),
+                MEMORY_TOLERANCE,
+            );
         }
     }
     rows
@@ -1657,13 +1799,10 @@ fn markdown_table(headers: &[&str], layout: impl Fn(usize) -> Vec<String>, rows:
     text
 }
 
-fn rendered_markdown(
-    report: &Report,
-    deltas: Option<&(Report, Vec<(String, f64, f64, f64)>)>,
-) -> String {
+fn rendered_markdown(report: &Report, comparison: Option<&Comparison>) -> String {
     let mut text = String::new();
     let meta = &report.meta;
-    text.push_str("## Million-block pressure report\n\n");
+    text.push_str("## Million-block pressure test report\n\n");
     text.push_str(&format!(
         "- Host: {} with {} logical cores; revision `{}`\n",
         meta.os,
@@ -1747,35 +1886,35 @@ fn rendered_markdown(
         .collect();
     if !cold.is_empty() {
         text.push_str("### Cold pass (fresh decoder child per fixture, full production load)\n\n");
+        let frames_reported = cold.iter().any(|row| row.frames_measured > 0);
+        let mut headers = vec!["fixture", "connect (ms)", "decode (ms)", "stream open (ms)"];
+        if frames_reported {
+            headers.extend(["first frame (ms)", "full render (ms)"]);
+        }
+        headers.extend(["batches", "decoder child peak (MB)", "decoder cap use (%)"]);
+        if frames_reported {
+            headers.extend(["frames p50/p95 (ms)", "frame-loop growth (KB)"]);
+        }
+        headers.extend(["host peak (MB)", "retained (MB)"]);
         text.push_str(&markdown_table(
-            &[
-                "fixture",
-                "connect (ms)",
-                "decode (ms)",
-                "stream open (ms)",
-                "first frame (ms)",
-                "full render (ms)",
-                "batches",
-                "decoder child peak (MB)",
-                "decoder cap use (%)",
-                "frames p50/p95 (ms)",
-                "frame-loop growth (KB)",
-                "host peak (MB)",
-                "retained (MB)",
-            ],
+            &headers,
             |index| {
                 let row = cold[index];
-                vec![
+                let mut cells = vec![
                     row.fixture.clone(),
                     number(row.connect_ms, 0),
                     number(row.decode_ms, 0),
                     number(row.stream_open_ms, 0),
-                    cell_option_time(row.first_frame_ms),
-                    cell_option_time(row.full_render_ms),
-                    count(row.batches),
-                    mb_opt(row.child_peak),
-                    num_opt(row.decoder_cap_percent),
-                    if row.frames_measured == 0 {
+                ];
+                if frames_reported {
+                    cells.push(cell_option_time(row.first_frame_ms));
+                    cells.push(cell_option_time(row.full_render_ms));
+                }
+                cells.push(count(row.batches));
+                cells.push(mb_opt(row.child_peak));
+                cells.push(num_opt(row.decoder_cap_percent));
+                if frames_reported {
+                    cells.push(if row.frames_measured == 0 {
                         String::from("-")
                     } else {
                         format!(
@@ -1783,15 +1922,16 @@ fn rendered_markdown(
                             number(row.frames_p50_ms, 1),
                             number(row.frames_p95_ms, 1)
                         )
-                    },
-                    if row.frames_measured == 0 {
+                    });
+                    cells.push(if row.frames_measured == 0 {
                         String::from("-")
                     } else {
                         number(row.frames_growth_bytes as f64 / 1024.0, 1)
-                    },
-                    mb_opt(row.host_peak),
-                    number(mb(row.retained_bytes), 2),
-                ]
+                    });
+                }
+                cells.push(mb_opt(row.host_peak));
+                cells.push(number(mb(row.retained_bytes), 2));
+                cells
             },
             cold.len(),
         ));
@@ -1837,23 +1977,39 @@ fn rendered_markdown(
         }
         text.push('\n');
     }
-    if let Some((base, deltas)) = deltas {
-        let _ = base;
-        text.push_str("### Change vs main baseline\n\n");
-        text.push_str(&markdown_table(
-            &["metric", "main", "this run", "change"],
-            |index| {
-                let (key, base, current, change) = &deltas[index];
-                vec![
-                    key.clone(),
-                    number(*base, 3),
-                    number(*current, 3),
-                    format!("{}%", grouped(&format!("{change:+.1}"))),
-                ]
-            },
-            deltas.len(),
+    if let Some(comparison) = comparison {
+        text.push_str("### Change vs baseline\n\n");
+        text.push_str(&format!(
+            "- Baseline `{}`; {} representative metrics compared.\n",
+            comparison.baseline_rev.as_deref().unwrap_or("unknown"),
+            comparison.compared,
         ));
-        text.push('\n');
+        text.push_str(&format!(
+            "- Noise bands: timing {TIMING_TOLERANCE}%, short timings {SHORT_TIMING_TOLERANCE}%, \
+             memory {MEMORY_TOLERANCE}%; positive means slower or more memory.\n\n"
+        ));
+        if comparison.deltas.is_empty() {
+            text.push_str("No representative metric moved outside its noise band.\n\n");
+        } else {
+            text.push_str(&markdown_table(
+                &[
+                    "phase", "target", "metric", "baseline", "this run", "change",
+                ],
+                |index| {
+                    let delta = &comparison.deltas[index];
+                    vec![
+                        delta.phase.to_string(),
+                        delta.target.clone(),
+                        delta.metric.to_string(),
+                        number(delta.baseline, delta.digits),
+                        number(delta.current, delta.digits),
+                        format!("{}%", grouped(&format!("{:+.1}", delta.change))),
+                    ]
+                },
+                comparison.deltas.len(),
+            ));
+            text.push('\n');
+        }
     }
     if !report.meta.warnings.is_empty() {
         text.push_str(&format!(
@@ -1872,21 +2028,55 @@ fn cell_option_time(value: f64) -> String {
     }
 }
 
-fn compare_reports(current: &Report, baseline: &Report) -> Vec<(String, f64, f64, f64)> {
-    let base_map: std::collections::HashMap<String, f64> =
-        report_metrics(baseline).into_iter().collect();
-    report_metrics(current)
+struct Comparison {
+    baseline_rev: Option<String>,
+    compared: usize,
+    deltas: Vec<Delta>,
+}
+
+struct Delta {
+    phase: &'static str,
+    target: String,
+    metric: &'static str,
+    digits: usize,
+    baseline: f64,
+    current: f64,
+    change: f64,
+}
+
+fn compare_reports(current: &Report, baseline: &Report) -> Comparison {
+    let baseline_values: HashMap<String, f64> = report_metrics(baseline)
         .into_iter()
-        .filter_map(|(key, value)| {
-            let base = base_map.get(&key)?;
-            let change = if *base > 0.0 {
-                round_at((value - base) / *base * 100.0, 1)
-            } else {
-                0.0
-            };
-            Some((key, *base, value, change))
-        })
-        .collect()
+        .map(|point| (point.key, point.value))
+        .collect();
+    let mut compared = 0;
+    let mut deltas = Vec::new();
+    for point in report_metrics(current) {
+        let Some(&base) = baseline_values.get(&point.key) else {
+            continue;
+        };
+        if base <= 0.0 {
+            continue;
+        }
+        compared += 1;
+        let change = round_at((point.value - base) / base * 100.0, 1);
+        if change.abs() > point.tolerance {
+            deltas.push(Delta {
+                phase: point.phase,
+                target: point.target,
+                metric: point.metric,
+                digits: point.digits,
+                baseline: base,
+                current: point.value,
+                change,
+            });
+        }
+    }
+    Comparison {
+        baseline_rev: baseline.meta.rev.clone(),
+        compared,
+        deltas,
+    }
 }
 
 fn write_report(report: &Report, settings: &Settings) -> Result<(), String> {
@@ -1906,18 +2096,12 @@ fn write_report(report: &Report, settings: &Settings) -> Result<(), String> {
 }
 
 fn markdown_text_for(report: &Report, settings: &Settings) -> String {
-    let deltas = settings
-        .compare
-        .as_ref()
-        .and_then(|path| {
-            let text = std::fs::read_to_string(path).ok()?;
-            serde_json::from_str::<Report>(&text).ok()
-        })
-        .map(|base_report| {
-            let deltas = compare_reports(report, &base_report);
-            (base_report, deltas)
-        });
-    rendered_markdown(report, deltas.as_ref())
+    let comparison = settings.compare.as_ref().and_then(|path| {
+        let text = std::fs::read_to_string(path).ok()?;
+        let baseline = serde_json::from_str::<Report>(&text).ok()?;
+        Some(compare_reports(report, &baseline))
+    });
+    rendered_markdown(report, comparison.as_ref())
 }
 
 fn record_baselines(settings: &Settings) -> Result<(), String> {

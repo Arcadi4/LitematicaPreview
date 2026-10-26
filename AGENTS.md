@@ -5,7 +5,7 @@ Windows x64 desktop app for offline Minecraft schematic and structure viewing (T
 - **Architecture**: Host (`src-tauri/`) embeds a Direct3D 12 wgpu renderer drawing directly into the main window beneath a transparent WebView2 overlay (`src/`). The frontend manages UI state and controls; it renders zero canvas pixels.
 - **Shared Core**: Geometry decoding, caching, and meshing logic live in `litematica-preview-core` (consumed from git at a pinned revision; override via `LP_CORE_PATH=../litematica-preview-core`).
 - **Formats**: `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, `.mca`, `.nusn` (defined in `src-tauri/src/formats.rs`).
-- **Assets & Fixtures**: Default pack in `Assets/pack.zip`. Test fixtures in `Fixtures/Demos/` and `Fixtures/Formats/`; million-block pressure fixtures in `Fixtures/Pressure/` with pinned decode counts in `baselines.json` (refresh with `pnpm run pressure:host -- --write-baselines`).
+- **Assets & Fixtures**: Default pack in `Assets/pack.zip`. Test fixtures in `Fixtures/Demos/` and `Fixtures/Formats/`; million-block pressure test fixtures in `Fixtures/Pressure/` with pinned decode counts in `baselines.json` (refresh with `pnpm run pressure:host -- --write-baselines`).
 
 ## Commands
 
@@ -24,7 +24,7 @@ Package manager is `pnpm` (v12). Vite+ (`vp`) powers the web toolchain; `tsx` ru
 | Rust tests              | `pnpm run test:host`                                                     | `cargo test --locked`                                                                                   |
 | Rust format check       | `pnpm run format:rust`                                                   | `cargo fmt -- --check`                                                                                  |
 | Test against local core | `LP_CORE_PATH=<path> pnpm run test:host`                                 | Run `pnpm run resolve:host` to revert                                                                   |
-| Host pressure suite     | `pnpm run pressure:host`                                                 | Release run; frame metrics need a hardware adapter; breaches exit nonzero; report in `target/pressure/` |
+| Host pressure test      | `pnpm run pressure:host`                                                 | Release run; frame metrics need a hardware adapter; breaches exit nonzero; report in `target/pressure/` |
 | Version check / bump    | `pnpm run version:check` / `pnpm run version:bump [patch\|minor\|major]` | Syncs package.json, Cargo, and tauri configs                                                            |
 | Windows package build   | `pnpm run build:win`                                                     | Creates portable zip & NSIS setup in `artifacts/`                                                       |
 | Release checksums       | `pnpm run checksums`                                                     | Generates `artifacts/SHA256SUMS.txt`                                                                    |

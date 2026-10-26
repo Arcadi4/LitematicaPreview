@@ -1,4 +1,4 @@
-//! Pressure suite for the million-block fixtures in `Fixtures/Pressure`.
+//! Pressure test suite for the million-block fixtures in `Fixtures/Pressure`.
 //!
 //! Three phases: the `core` phase decodes in-process with allocator charges
 //! and pins the decode counts to `baselines.json`; the `cold` phase runs one
@@ -1802,7 +1802,7 @@ fn markdown_table(headers: &[&str], layout: impl Fn(usize) -> Vec<String>, rows:
 fn rendered_markdown(report: &Report, comparison: Option<&Comparison>) -> String {
     let mut text = String::new();
     let meta = &report.meta;
-    text.push_str("## Million-block pressure report\n\n");
+    text.push_str("## Million-block pressure test report\n\n");
     text.push_str(&format!(
         "- Host: {} with {} logical cores; revision `{}`\n",
         meta.os,

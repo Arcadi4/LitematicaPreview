@@ -6,9 +6,9 @@
 //! scene for timed frames) and reports full-render latency; the `warm` phase
 //! reuses one decoder child across four Atrium loads to detect growth.
 //!
-//! A software adapter still uploads and drains every batch, but frame timings
-//! are skipped: CPU rasterization makes them noise and dominates wall time.
-//! `--no-render` does the same on a hardware adapter.
+//! A software adapter still decodes and consumes every batch, but skips GPU
+//! uploads and frame timings: CPU rasterization makes them noise and dominates
+//! wall time. `--no-render` does the same for frames on a hardware adapter.
 //!
 //! `--preview-worker <port>` plays the decoder child role. The cold pass
 //! spawns this binary through `DecoderProcess`, so the branch must match
@@ -517,9 +517,9 @@ struct Rig {
     format: wgpu::TextureFormat,
     adapter: String,
     backend: String,
-    /// Software adapters rasterize whole frames on the CPU, so their frame
-    /// latencies are noise and dominate wall time. Those loads keep the
-    /// upload and memory path but skip every draw.
+    /// Software adapters rasterize on the CPU, so their upload and frame
+    /// latencies are noise and dominate wall time. Those loads keep the decode
+    /// and memory path but skip GPU work.
     hardware: bool,
     target: Offscreen,
 }
@@ -622,7 +622,7 @@ fn request_rig() -> Result<(Rig, Option<String>), String> {
     let target = Offscreen::create(&device, format, samples);
     let notice = (!hardware).then(|| {
         format!(
-            "{} is a software adapter; frame timings are skipped and only load and memory metrics are reported",
+            "{} is a software adapter; GPU uploads and frame timings are skipped, so only decode and memory metrics are reported",
             info.name
         )
     });
@@ -899,15 +899,15 @@ struct Tally {
 impl LoadState {
     fn new(rig: Option<Arc<Rig>>, threads: u8, frames_target: u32, render: bool) -> Self {
         let render_frames = render && rig.as_ref().is_some_and(|rig| rig.hardware);
-        let upload = rig.as_ref().map(|rig| {
+        let device_rig = rig.as_ref().filter(|rig| rig.hardware);
+        let upload = device_rig.map(|rig| {
             Arc::new(render::upload::UploadWindow::with_device(
                 render::upload::DeviceStatus::new(rig.device.clone()),
                 usize::from(threads),
             ))
         });
-        let scene = rig
-            .as_ref()
-            .map(|rig| render::scene::Scene::new(rig.device.clone(), rig.queue.clone()));
+        let scene =
+            device_rig.map(|rig| render::scene::Scene::new(rig.device.clone(), rig.queue.clone()));
         Self {
             rig,
             upload,
@@ -1717,17 +1717,6 @@ fn report_metrics(report: &Report) -> Vec<MetricPoint> {
                 MEMORY_TOLERANCE,
             );
         }
-        if let Some(bytes) = row.host_peak {
-            push_metric(
-                &mut rows,
-                "cold",
-                target,
-                "host peak (MB)",
-                1,
-                mb_bytes(bytes),
-                MEMORY_TOLERANCE,
-            );
-        }
         if row.frames_measured > 0 {
             push_metric(
                 &mut rows,
@@ -1770,17 +1759,6 @@ fn report_metrics(report: &Report) -> Vec<MetricPoint> {
                 "warm",
                 &target,
                 "child peak (MB)",
-                1,
-                mb_bytes(bytes),
-                MEMORY_TOLERANCE,
-            );
-        }
-        if let Some(bytes) = row.host_peak {
-            push_metric(
-                &mut rows,
-                "warm",
-                &target,
-                "host peak (MB)",
                 1,
                 mb_bytes(bytes),
                 MEMORY_TOLERANCE,

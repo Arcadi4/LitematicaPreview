@@ -502,7 +502,9 @@ fn git_rev() -> Option<String> {
 /// The production app negotiates this backend on each platform.
 #[cfg(windows)]
 const RIG_BACKENDS: wgpu::Backends = wgpu::Backends::DX12;
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+const RIG_BACKENDS: wgpu::Backends = wgpu::Backends::VULKAN;
+#[cfg(not(any(windows, target_os = "linux")))]
 const RIG_BACKENDS: wgpu::Backends = wgpu::Backends::METAL;
 
 const FRAME_WIDTH: u32 = 1920;

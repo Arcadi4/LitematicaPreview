@@ -3,11 +3,11 @@ import assert from "node:assert/strict"
 import { act, createElement, type ComponentType } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { FluentProvider, webLightTheme } from "@fluentui/react-components"
-import { getByRole, type ByRoleMatcher } from "@testing-library/dom"
+import { getByRole, queryByRole, type ByRoleMatcher } from "@testing-library/dom"
 import { afterAll, afterEach, beforeAll, test } from "vite-plus/test"
 import { AppDialog, type AppDialogProps } from "./app-dialog"
 import { AppHeader } from "./app-header"
-import type { Bootstrap, DialogKind, ThemePreference } from "./app-model"
+import type { Bootstrap, ThemePreference } from "./app-model"
 import { defaultPreviewSettings, type PreviewSettings } from "./preview-settings"
 
 declare global {
@@ -25,6 +25,7 @@ const bootstrap: Bootstrap = {
   version: "0.3.0",
   requestId: 0,
   maxWorkerThreads: 8,
+  fileAssociationsSupported: true,
   viewportError: null,
   texturePacks: { packs: [] },
   texturePackError: null,
@@ -228,18 +229,28 @@ test("switching settings sections resets content scroll without moving navigatio
   assert.equal(selectedPanel().parentElement?.scrollTop, 0)
 })
 
-test("the application menu has one Settings entry and retains About and file associations", async () => {
-  const dialogs: DialogKind[] = []
-  await mount(AppHeader, {
+test("association actions follow host support and busy state without hiding other commands", async () => {
+  const props = {
     actionBusy: false,
+    fileAssociationsSupported: false,
     onNativeAction: () => {},
-    onOpenDialog: (dialog) => dialogs.push(dialog),
-  })
-  await click(document.querySelector<HTMLButtonElement>('button[aria-label="Application menu"]'))
-  const settings = byRole("menuitem", "Settings")
+    onOpenDialog: () => {},
+  }
+  const update = await mount(AppHeader, props)
+  await click(byRole("button", "Application menu"))
+  assert.equal(queryByRole(document.body, "menuitem", { name: "Set as default app…" }), null)
+  assert.equal(queryByRole(document.body, "menuitem", { name: "Remove file associations" }), null)
+  byRole("menuitem", "Settings")
   byRole("menuitem", "About and licenses")
-  byRole("menuitem", "Set as default app…")
-  byRole("menuitem", "Remove file associations")
-  await click(settings)
-  assert.deepEqual(dialogs, ["settings"])
+
+  await update({ ...props, fileAssociationsSupported: true })
+  assert.notEqual(byRole("menuitem", "Set as default app…").getAttribute("aria-disabled"), "true")
+  assert.notEqual(
+    byRole("menuitem", "Remove file associations").getAttribute("aria-disabled"),
+    "true",
+  )
+
+  await update({ ...props, fileAssociationsSupported: true, actionBusy: true })
+  assert.equal(byRole("menuitem", "Set as default app…").getAttribute("aria-disabled"), "true")
+  assert.equal(byRole("menuitem", "Remove file associations").getAttribute("aria-disabled"), "true")
 })

@@ -2,6 +2,7 @@
 
 ## Features
 
+- Copy the current preview to the clipboard or save it as PNG or JPEG from the toolbar ([#31](https://github.com/Arcadi4/LitematicaPreview/issues/31)).
 - Render previews with a native wgpu (Direct3D 12) pipeline that draws directly into the window surface beneath the Fluent interface. Pointer and keyboard gestures are forwarded to the renderer, and load progress arrives as events instead of streamed geometry ([#17](https://github.com/Arcadi4/LitematicaPreview/issues/17)).
 - Import Minecraft Java resource packs, keep them in the app data folder, and arrange the enabled packs by priority. Missing textures, models, and block states fall back through lower packs to bundled vanilla, and the previous single-pack selection is migrated.
 - Preview Minecraft Anvil region files (`.mca`).

@@ -241,9 +241,9 @@ pub fn copy_image(app: &tauri::AppHandle, image: PreviewImage) -> Result<(), Str
     // EmptyClipboard associates the clipboard with a window, so write from the
     // thread that owns the main window.
     let (sender, receiver) = std::sync::mpsc::channel();
-    let app = app.clone();
+    let main_thread_app = app.clone();
     app.run_on_main_thread(move || {
-        let _ = sender.send(copy_to_clipboard(&app, formats));
+        let _ = sender.send(copy_to_clipboard(&main_thread_app, formats));
     })
     .map_err(|error| format!("The main thread is unavailable for the clipboard: {error}"))?;
     receiver

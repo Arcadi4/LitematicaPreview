@@ -15,6 +15,7 @@ import {
   type NativeCommand,
   type Notice,
   type PreviewFailed,
+  type PreviewImageAction,
   type PreviewLoaded,
   type PreviewProgress,
   type TexturePackState,
@@ -29,13 +30,16 @@ export interface PreviewSession {
   bootstrap: Bootstrap | null
   busy: boolean
   choosing: boolean
+  copyImage: () => void
   dialog: DialogKind
   dialogOpen: boolean
   dragging: boolean
   errorDetails: string
+  exportImage: () => void
   fit: () => void
   grid: boolean
   home: () => void
+  imageAction: PreviewImageAction | null
   importTexturePacks: () => void
   loadDemo: (path: string) => void
   loaded: Loaded | null
@@ -90,6 +94,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const [texturePackBusy, setTexturePackBusy] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
   const [choosing, setChoosing] = useState(false)
+  const [imageAction, setImageAction] = useState<PreviewImageAction | null>(null)
   const viewportRef = useRef<HTMLDivElement>(null)
   const bootstrapRef = useRef<Bootstrap | null>(null)
   const viewportErrorRef = useRef<string | null>(null)
@@ -103,6 +108,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const initialPathConsumed = useRef(Boolean(initialError))
   const choosingRef = useRef(false)
   const actionBusyRef = useRef(false)
+  const imageBusyRef = useRef(false)
   const titleQueue = useRef<Promise<void> | null>(null)
   const memoryRequestRef = useRef<number | null>(null)
   const sampleMemoryRef = useRef<(() => void) | null>(null)
@@ -577,6 +583,48 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     [isCurrent],
   )
 
+  const runImageAction = useCallback(
+    async (action: PreviewImageAction) => {
+      if (imageBusyRef.current) return
+      imageBusyRef.current = true
+      setImageAction(action)
+      const id = generation.current
+      try {
+        if (action === "copy") {
+          await invoke("copy_preview_image")
+          if (isCurrent(id))
+            setStatusNotice({ intent: "success", message: "Preview copied to the clipboard." })
+        } else {
+          // The native command returns false when the save dialog is canceled.
+          const saved = await invoke<boolean>("export_preview_image")
+          if (saved && isCurrent(id))
+            setStatusNotice({ intent: "success", message: "Preview image saved." })
+        }
+      } catch (error) {
+        if (isCurrent(id))
+          setStatusNotice({
+            intent: "error",
+            message:
+              action === "copy"
+                ? `Could not copy the preview image: ${errorMessage(error)}`
+                : `Could not export the preview image: ${errorMessage(error)}`,
+          })
+      } finally {
+        imageBusyRef.current = false
+        if (mounted.current) setImageAction(null)
+      }
+    },
+    [isCurrent],
+  )
+
+  const copyImage = useCallback(() => {
+    if (loaded) void runImageAction("copy")
+  }, [loaded, runImageAction])
+
+  const exportImage = useCallback(() => {
+    if (loaded) void runImageAction("export")
+  }, [loaded, runImageAction])
+
   useEffect(() => {
     mounted.current = true
     let active = true
@@ -721,13 +769,16 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     bootstrap,
     busy: !bootstrap || choosing,
     choosing,
+    copyImage,
     dialog,
     dialogOpen,
     dragging,
     errorDetails,
+    exportImage,
     fit,
     grid,
     home,
+    imageAction,
     importTexturePacks: requestImportTexturePacks,
     loadDemo,
     loaded,

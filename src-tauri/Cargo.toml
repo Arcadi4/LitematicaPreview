@@ -30,6 +30,7 @@ serde_json = "1"
 litematica-preview-core = { git = "https://github.com/Arcadi4/litematica-preview-core", rev = "87838a6dcca60010f2af63dd6c733a5010ec6a27" }
 nucleation = { version = "=0.11.0", default-features = false, features = ["meshing"] }
 wgpu = "30.0.1"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 pollster = "1.0.1"
 parking_lot = "0.13"
 uuid = { version = "1", features = ["v4"] }
@@ -42,11 +43,15 @@ webkit2gtk = "2"
 winreg = "0.56"
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
+  "Win32_Graphics_Gdi",
   "Win32_Security",
   "Win32_Security_Cryptography",
+  "Win32_System_DataExchange",
   "Win32_System_JobObjects",
-  "Win32_UI_Shell",
-  "Win32_UI_WindowsAndMessaging",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
   "Win32_System_ProcessStatus",
   "Win32_System_Threading",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
 ] }

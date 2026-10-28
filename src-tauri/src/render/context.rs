@@ -904,7 +904,7 @@ const _: () = {
 mod tests {
     #[cfg(windows)]
     use super::NativeRenderer;
-    use super::{backing_size, map_stage_viewport};
+    use super::{backing_size, map_stage_viewport, stage_capture_rect, CaptureRect};
     #[cfg(windows)]
     use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow};
 
@@ -977,6 +977,64 @@ mod tests {
                 None,
             );
         }
+    }
+
+    #[test]
+    fn capture_rect_keeps_only_the_stage_and_rounds_fractional_edges() {
+        assert_eq!(
+            stage_capture_rect(
+                Some((100.0, 50.0, 600.0, 400.0)),
+                1.5,
+                (1200, 800),
+                (1200, 800),
+                16384,
+            ),
+            Some(CaptureRect {
+                x: 150,
+                y: 75,
+                width: 900,
+                height: 600,
+            }),
+        );
+        assert_eq!(
+            stage_capture_rect(
+                Some((10.4, 5.6, 100.4, 50.4)),
+                1.0,
+                (200, 100),
+                (200, 100),
+                16384,
+            ),
+            Some(CaptureRect {
+                x: 10,
+                y: 6,
+                width: 101,
+                height: 50,
+            }),
+        );
+        assert_eq!(
+            stage_capture_rect(None, 1.0, (1200, 800), (1200, 800), 16384),
+            Some(CaptureRect {
+                x: 0,
+                y: 0,
+                width: 1200,
+                height: 800,
+            }),
+        );
+        assert_eq!(
+            stage_capture_rect(
+                Some((0.0, 0.0, 20000.0, 1000.0)),
+                1.0,
+                (20000, 1000),
+                (16384, 1000),
+                16384,
+            ),
+            Some(CaptureRect {
+                x: 0,
+                y: 0,
+                width: 16384,
+                height: 1000,
+            }),
+        );
     }
 
     #[cfg(windows)]

@@ -160,3 +160,65 @@ fn image_format(mut path: PathBuf) -> Result<(PathBuf, ImageFormat), String> {
     Ok((path, format))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{save, PreviewImage};
+    use std::path::PathBuf;
+
+    fn test_image() -> PreviewImage {
+        PreviewImage::new(
+            2,
+            2,
+            vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+        )
+        .unwrap()
+    }
+
+    fn scratch_dir() -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("litematica-preview-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn saves_png_and_jpeg_and_defaults_a_missing_extension_to_png() {
+        let directory = scratch_dir();
+        let image = test_image();
+
+        let png = directory.join("shot.png");
+        save(&image, png.clone()).unwrap();
+        let decoded = image::open(&png).unwrap().to_rgba8();
+        assert_eq!(decoded.dimensions(), (2, 2));
+        assert_eq!(decoded.as_raw(), image.rgba());
+
+        let jpeg = directory.join("shot.jpeg");
+        let solid = PreviewImage::new(8, 8, [200, 40, 40, 255].repeat(64)).unwrap();
+        save(&solid, jpeg.clone()).unwrap();
+        let decoded = image::open(&jpeg).unwrap().to_rgb8();
+        assert_eq!(decoded.dimensions(), (8, 8));
+        for pixel in decoded.pixels() {
+            for (actual, expected) in pixel.0.into_iter().zip([200u8, 40, 40]) {
+                assert!(actual.abs_diff(expected) <= 10);
+            }
+        }
+
+        save(&image, directory.join("untitled")).unwrap();
+        assert_eq!(
+            image::open(directory.join("untitled.png"))
+                .unwrap()
+                .to_rgba8()
+                .as_raw(),
+            image.rgba()
+        );
+
+        let unsupported = directory.join("existing.bmp");
+        std::fs::write(&unsupported, b"original").unwrap();
+        assert!(save(&image, unsupported.clone()).is_err());
+        assert_eq!(std::fs::read(unsupported).unwrap(), b"original");
+
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+}

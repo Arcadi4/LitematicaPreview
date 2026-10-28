@@ -12,7 +12,8 @@
 //! [`crate::render::camera::Camera`].
 
 use crate::render::camera::Camera;
-use crate::render::frame::FrameSink;
+use crate::render::capture::CaptureJob;
+use crate::render::frame::{padded_stride, FrameSink};
 use crate::render::offscreen::OffscreenTarget;
 use crate::render::pipelines::{Pipelines, CAMERA_UNIFORM_BYTES};
 use crate::render::scene::Scene;
@@ -34,6 +35,8 @@ pub enum RenderError {
     MalformedBatch(String),
     /// A device error or loss interrupted GPU work.
     Device(String),
+    /// The current scene cannot produce a preview image.
+    Capture(String),
 }
 
 impl RenderError {
@@ -52,6 +55,7 @@ impl std::fmt::Display for RenderError {
             Self::Initialization(message) | Self::MalformedBatch(message) | Self::Device(message) => {
                 write!(formatter, "{message}")
             }
+            Self::Capture(message) => write!(formatter, "{message}"),
         }
     }
 }
@@ -601,6 +605,113 @@ impl NativeRenderer {
         Ok(())
     }
 
+    /// Renders the current camera and scene into a fresh texture and submits a
+    /// copy of the stage rectangle into a CPU-readable buffer. The caller waits
+    /// for [`CaptureJob::finish`] outside the renderer lock.
+    pub fn begin_capture(&mut self) -> Result<CaptureJob, RenderError> {
+        self.device_status.check().map_err(RenderError::Device)?;
+        if self.scene.is_none() {
+            return Err(RenderError::Capture(String::from(
+                "There is no preview image to capture yet.",
+            )));
+        }
+        let rect = stage_capture_rect(
+            self.stage_css,
+            self.scale,
+            self.physical_size,
+            self.backing_size,
+            self.device.limits().max_texture_dimension_2d,
+        )
+        .ok_or_else(|| {
+            RenderError::Capture(String::from(
+                "The preview area is not ready to capture. Try again once it settles.",
+            ))
+        })?;
+        if self.has_visible_batch && self.depth_view.is_none() {
+            self.rebuild_targets();
+        }
+        let (backing_width, backing_height) = self.backing_size;
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("preview capture"),
+            size: wgpu::Extent3d {
+                width: backing_width,
+                height: backing_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let stride = padded_stride(rect.width).ok_or_else(|| {
+            RenderError::Capture(String::from("The preview image row is too wide."))
+        })?;
+        let bytes = u64::from(stride)
+            .checked_mul(u64::from(rect.height))
+            .ok_or_else(|| RenderError::Capture(String::from("The preview image is too large.")))?;
+        if bytes > self.device.limits().max_buffer_size {
+            return Err(RenderError::Capture(String::from(
+                "The preview area is too large to capture on this graphics device.",
+            )));
+        }
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("preview capture readback"),
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        self.pipelines.write_cameras(
+            &self.queue,
+            self.camera.frame_camera(true),
+            self.camera.frame_camera(false),
+        );
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("preview capture"),
+            });
+        self.encode_scene(&mut encoder, &view)?;
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: rect.x,
+                    y: rect.y,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride),
+                    rows_per_image: Some(rect.height),
+                },
+            },
+            wgpu::Extent3d {
+                width: rect.width,
+                height: rect.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let submission = self.queue.submit(Some(encoder.finish()));
+        Ok(CaptureJob::new(
+            self.device.clone(),
+            buffer,
+            submission,
+            rect.width,
+            rect.height,
+            stride,
+            self.format,
+        ))
+    }
+
     /// Encodes the clear and scene into `target`, resolving MSAA when enabled.
     fn encode_scene(
         &self,
@@ -740,6 +851,48 @@ fn map_stage_viewport(
         && left as f64 + width as f64 <= max_dimension as f64
         && top as f64 + height as f64 <= max_dimension as f64)
         .then_some((left, top, width, height))
+}
+
+/// The preview stage in backing pixels after whole-pixel rounding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CaptureRect {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
+/// Rounds each stage edge to the nearest pixel, so the copy keeps exactly the
+/// pixels whose centres lie inside the DOM rectangle.
+fn stage_capture_rect(
+    stage_css: Option<(f32, f32, f32, f32)>,
+    scale: f64,
+    physical_size: (u32, u32),
+    backing_size: (u32, u32),
+    max_dimension: u32,
+) -> Option<CaptureRect> {
+    let (left, top, width, height) =
+        map_stage_viewport(stage_css, scale, physical_size, backing_size, max_dimension)?;
+    let (x0, x1) = rounded_span(left, width, backing_size.0)?;
+    let (y0, y1) = rounded_span(top, height, backing_size.1)?;
+    Some(CaptureRect {
+        x: x0,
+        y: y0,
+        width: x1 - x0,
+        height: y1 - y0,
+    })
+}
+
+fn rounded_span(start: f32, length: f32, limit: u32) -> Option<(u32, u32)> {
+    let end = start + length;
+    let start = start.round();
+    let end = end.round();
+    if !start.is_finite() || !end.is_finite() {
+        return None;
+    }
+    let start = start.clamp(0.0, limit as f32) as u32;
+    let end = end.clamp(0.0, limit as f32) as u32;
+    (end > start).then_some((start, end))
 }
 
 /// Matches the camera buffer size to `FrameCamera::encode`.

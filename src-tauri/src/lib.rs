@@ -1,7 +1,9 @@
 pub mod associations;
 pub mod file_dialog;
 pub mod formats;
+pub mod image_clipboard;
 pub mod preview;
+pub mod preview_image;
 pub mod preview_process;
 pub mod preview_protocol;
 pub mod render;

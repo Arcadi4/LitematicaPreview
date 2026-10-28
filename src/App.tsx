@@ -22,13 +22,16 @@ export default function App({ initialError }: { initialError?: string }) {
     bootstrap,
     busy,
     choosing,
+    copyImage,
     dialog,
     dialogOpen,
     dragging,
     errorDetails,
+    exportImage,
     fit,
     grid,
     home,
+    imageAction,
     importTexturePacks,
     loadDemo,
     loaded,
@@ -139,8 +142,11 @@ export default function App({ initialError }: { initialError?: string }) {
       <PreviewToolbar
         busy={busy}
         grid={grid}
+        imageAction={imageAction}
         loaded={loaded}
         loading={loading}
+        onCopyImage={copyImage}
+        onExportImage={exportImage}
         onFit={fit}
         onHome={home}
         onOpenFile={openFile}

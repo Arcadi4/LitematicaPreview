@@ -49,6 +49,7 @@ export type Loaded = { path: string; metadata: Metadata; seconds: number }
 export type Notice = { intent: "error" | "success" | "info"; message: string }
 export type DialogKind = "about" | "settings" | "error"
 export type NativeCommand = "register_associations" | "unregister_associations" | "show_licenses"
+export type PreviewImageAction = "copy" | "export"
 /** Camera, grid and stage commands applied by the native viewport. */
 export type ViewportCommand =
   | { kind: "orbit"; dx: number; dy: number }

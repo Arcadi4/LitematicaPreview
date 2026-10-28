@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use litematica_preview::associations;
 use litematica_preview::file_dialog;
 use litematica_preview::formats;
+use litematica_preview::image_clipboard;
 use litematica_preview::preview::{self, PreviewWorker};
+use litematica_preview::preview_image::{self, PreviewImage};
 use litematica_preview::preview_process;
 use litematica_preview::render::context::NativeRenderer;
 use litematica_preview::resources::{self, Demo, Resources};
@@ -346,6 +348,52 @@ fn start_preview(
 #[tauri::command]
 fn preview_memory(request_id: u64, state: State<'_, HostState>) -> Option<u64> {
     state.worker.preview_memory(request_id)
+}
+
+fn capture_preview(renderer: &Arc<Mutex<Option<NativeRenderer>>>) -> Result<PreviewImage, String> {
+    let job = with_renderer(renderer, NativeRenderer::begin_capture)?
+        .map_err(|error| error.to_string())?;
+    job.finish().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn copy_preview_image(app: AppHandle, viewer: State<'_, ViewerState>) -> Result<(), String> {
+    let renderer = Arc::clone(&viewer.renderer);
+    tauri::async_runtime::spawn_blocking(move || {
+        let image = capture_preview(&renderer)?;
+        image_clipboard::copy_image(&app, image)
+    })
+    .await
+    .map_err(|error| format!("Unable to copy the preview image: {error}"))?
+}
+
+const PREVIEW_IMAGE_FILTERS: &[(&str, &[&str])] =
+    &[("PNG image", &["png"]), ("JPEG image", &["jpg", "jpeg"])];
+
+#[tauri::command]
+async fn export_preview_image(
+    app: AppHandle,
+    window: WebviewWindow,
+    viewer: State<'_, ViewerState>,
+) -> Result<bool, String> {
+    let renderer = Arc::clone(&viewer.renderer);
+    tauri::async_runtime::spawn_blocking(move || {
+        let image = capture_preview(&renderer)?;
+        let chosen = file_dialog::save_file(
+            &app,
+            window,
+            "Export preview image",
+            PREVIEW_IMAGE_FILTERS,
+            "Preview.png",
+        )?;
+        let Some(path) = chosen else {
+            return Ok(false);
+        };
+        preview_image::save(&image, path)?;
+        Ok(true)
+    })
+    .await
+    .map_err(|error| format!("Unable to export the preview image: {error}"))?
 }
 
 #[tauri::command]
@@ -832,6 +880,8 @@ fn run() -> Result<(), String> {
             choose_file,
             start_preview,
             preview_memory,
+            copy_preview_image,
+            export_preview_image,
             cancel_load,
             viewport_input,
             register_associations,

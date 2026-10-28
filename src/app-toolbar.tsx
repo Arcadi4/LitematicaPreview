@@ -9,7 +9,7 @@ import {
   SplitButton,
   ToggleButton,
   Tooltip,
-} from "@fluentui/react-components";
+} from "@fluentui/react-components"
 import {
   Add20Regular,
   ArrowExpand20Regular,
@@ -19,23 +19,23 @@ import {
   Home20Regular,
   Save20Regular,
   Subtract20Regular,
-} from "@fluentui/react-icons";
-import { fileName, type Loaded, type Loading, type PreviewImageAction } from "./app-model";
+} from "@fluentui/react-icons"
+import { fileName, type Loaded, type Loading, type PreviewImageAction } from "./app-model"
 
 export interface PreviewToolbarProps {
-  busy: boolean;
-  grid: boolean;
-  imageAction: PreviewImageAction | null;
-  loaded: Loaded | null;
-  loading: Loading | null;
-  onCopyImage: () => void;
-  onExportImage: () => void;
-  onFit: () => void;
-  onHome: () => void;
-  onOpenFile: () => void;
-  onToggleGrid: () => void;
-  onZoomIn: () => void;
-  onZoomOut: () => void;
+  busy: boolean
+  grid: boolean
+  imageAction: PreviewImageAction | null
+  loaded: Loaded | null
+  loading: Loading | null
+  onCopyImage: () => void
+  onExportImage: () => void
+  onFit: () => void
+  onHome: () => void
+  onOpenFile: () => void
+  onToggleGrid: () => void
+  onZoomIn: () => void
+  onZoomOut: () => void
 }
 
 export function PreviewToolbar({
@@ -53,9 +53,9 @@ export function PreviewToolbar({
   onZoomIn,
   onZoomOut,
 }: PreviewToolbarProps) {
-  const imageDisabled = !loaded || loading !== null || busy || imageAction !== null;
-  const copying = imageAction === "copy";
-  const exporting = imageAction === "export";
+  const imageDisabled = !loaded || loading !== null || busy || imageAction !== null
+  const copying = imageAction === "copy"
+  const exporting = imageAction === "export"
 
   return (
     <nav
@@ -158,5 +158,5 @@ export function PreviewToolbar({
         {loaded ? fileName(loaded.path) : loading ? fileName(loading.path) : "Ready when you are"}
       </span>
     </nav>
-  );
+  )
 }

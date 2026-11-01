@@ -1,4 +1,11 @@
-import { useEffect, useRef, type KeyboardEvent, type PointerEvent, type RefObject } from "react"
+import {
+  useEffect,
+  useEffectEvent,
+  useRef,
+  type KeyboardEvent,
+  type PointerEvent,
+  type RefObject,
+} from "react"
 import { Button, ProgressBar } from "@fluentui/react-components"
 import { fileName, numbers, type Loaded, type Loading, type ViewportCommand } from "./app-model"
 import { FlyMotion, requestPointerLock } from "./fly-controls"
@@ -191,26 +198,29 @@ export function PreviewStage({
     drag.current = null
   }
 
+  const handleFlyMouseMove = useEffectEvent((event: MouseEvent, element: HTMLElement) => {
+    if (!flyMode || document.pointerLockElement !== element) return
+    if (event.movementX === 0 && event.movementY === 0) return
+    onViewportInput({ kind: "flyLook", dx: event.movementX, dy: event.movementY })
+  })
+  const handleFlyLockChange = useEffectEvent((element: HTMLElement) => {
+    if (flyMode && document.pointerLockElement !== element) onExitFly()
+  })
+
   // Fly mode owns the mouse only while it holds the pointer lock; losing the
   // lock (Esc, window switch) returns to orbit.
   useEffect(() => {
     const element = viewportRef.current
     if (!element) return
-    const onMouseMove = (event: MouseEvent) => {
-      if (!flyMode || document.pointerLockElement !== element) return
-      if (event.movementX === 0 && event.movementY === 0) return
-      onViewportInput({ kind: "flyLook", dx: event.movementX, dy: event.movementY })
-    }
-    const onLockChange = () => {
-      if (flyMode && document.pointerLockElement !== element) onExitFly()
-    }
+    const onMouseMove = (event: MouseEvent) => handleFlyMouseMove(event, element)
+    const onLockChange = () => handleFlyLockChange(element)
     document.addEventListener("mousemove", onMouseMove)
     document.addEventListener("pointerlockchange", onLockChange)
     return () => {
       document.removeEventListener("mousemove", onMouseMove)
       document.removeEventListener("pointerlockchange", onLockChange)
     }
-  }, [flyMode, onExitFly, onViewportInput, viewportRef])
+  }, [viewportRef])
 
   useEffect(() => {
     if (flyMode) return

@@ -219,6 +219,7 @@ impl DecoderProcess {
         pack_path: &Path,
         layers: &[PackLayer],
         options: PreviewOptions,
+        max_texture_side: u32,
         current: impl Fn() -> Result<(), String>,
         prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
         mut consume: impl FnMut(MeshBatch) -> Result<(), String>,
@@ -230,6 +231,7 @@ impl DecoderProcess {
             layers,
             options.chunk_size,
             options.thread_count,
+            max_texture_side,
         ))
         .map_err(|e| format!("Unable to describe the decoder request: {e}"))?;
         let control = &self.control;
@@ -288,6 +290,7 @@ pub fn load(
     pack_path: &Path,
     layers: &[PackLayer],
     options: PreviewOptions,
+    max_texture_side: u32,
     prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
     consume: impl FnMut(MeshBatch) -> Result<(), String>,
     progress: impl FnMut(&'static str, u64, u64),
@@ -313,6 +316,7 @@ pub fn load(
         pack_path,
         layers,
         options,
+        max_texture_side,
         || worker.ensure_current(id),
         prepared,
         consume,
@@ -364,12 +368,13 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
     let mut packs = crate::preview::PackCache::default();
     loop {
         let request = wire::read_frame(&mut input, MAX_REQUEST_BYTES).map_err(|e| e.to_string())?;
-        let (path, pack_path, layers, chunk_size, thread_count): (
+        let (path, pack_path, layers, chunk_size, thread_count, max_texture_side): (
             PathBuf,
             PathBuf,
             Vec<PackLayer>,
             Option<u16>,
             Option<u8>,
+            u32,
         ) = serde_json::from_slice(&request)
             .map_err(|e| format!("Invalid decoder request: {e}"))?;
         let options = PreviewOptions {
@@ -385,6 +390,7 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
             &layers,
             &mut packs,
             options,
+            max_texture_side,
             || match transport_error.borrow().as_ref() {
                 Some(error) => Err(format!("The decoder connection failed: {error}")),
                 None => Ok(()),

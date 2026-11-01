@@ -1153,6 +1153,13 @@ fn run_load(
         settings.frames,
         settings.render,
     )));
+    let max_texture_side = state
+        .lock()
+        .rig
+        .as_ref()
+        .map_or(preview::MAX_ATLAS_SIDE, |rig| {
+            rig.device.limits().max_texture_dimension_2d
+        });
     let (sender, receiver) = mpsc::channel::<OutcomeRow>();
     let mut watch = start_watch(Arc::clone(&worker), id);
     let prepare = {
@@ -1185,6 +1192,7 @@ fn run_load(
                     &packed,
                     &[],
                     options.clone(),
+                    max_texture_side,
                     {
                         let state = Arc::clone(&state);
                         move |min, max| -> Result<(), String> {
@@ -1470,6 +1478,7 @@ fn run_core_pass(
             &[],
             &mut packs,
             settings.options(),
+            preview::MAX_ATLAS_SIDE,
             || Ok(()),
             {
                 let run = Rc::clone(&run);

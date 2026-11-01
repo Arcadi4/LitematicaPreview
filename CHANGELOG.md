@@ -1,8 +1,21 @@
-# Unreleased
+# v0.5.1
 
 ## Fixes
 
+- Fix water inside stained glass washing out at some viewing angles. Stained-glass geometry now culls its far wall instead of blending it through the near wall ([#40](https://github.com/Arcadi4/LitematicaPreview/issues/40)).
 - Grow texture atlases up to the graphics device limit, capped at 8,192 pixels per side, for schematics with many textures ([#42](https://github.com/Arcadi4/LitematicaPreview/issues/42)).
+
+# v0.5.0
+
+## Features
+
+- Add Linux x64 Debian/AppImage packaging and a Vulkan offscreen viewport composited beneath WebKitGTK by GTK, with bounded asynchronous frame readback and parented modal file pickers ([#28](https://github.com/Arcadi4/LitematicaPreview/issues/28)). Windows retains its Direct3D 12 surface; macOS support is unchanged.
+
+## ToDos
+
+- Add recent-files history.
+- Add lighting shader.
+- Multi-file preview ([#13](https://github.com/Arcadi4/LitematicaPreview/issues/13))
 
 # v0.4.0
 
@@ -40,7 +53,6 @@
 
 ## Features
 
-- Add Linux x64 Debian/AppImage packaging and a Vulkan offscreen viewport composited beneath WebKitGTK by GTK, with bounded asynchronous frame readback and parented modal file pickers ([#28](https://github.com/Arcadi4/LitematicaPreview/issues/28)). Windows retains its Direct3D 12 surface; macOS support is unchanged.
 - Extend saved texture packs with enabled priority stacks, fallback through lower packs to vanilla, and migration of the previous selection ([#29](https://github.com/Arcadi4/LitematicaPreview/issues/29)).
 - Gather preview settings, control help, and theme choice in a single settings dialog with Performance, Control, and Appearance sections in a scrollable sidebar layout.
 - Make every preview setting more compact and add an info notice that explains what the setting does without leaving the dialog.

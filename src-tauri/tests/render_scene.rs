@@ -152,6 +152,52 @@ fn material_strips(compact: bool) -> (MeshBatch, FrameCamera) {
     (batch, camera)
 }
 
+/// Swaps the last two indices of every triangle, so the surface winds away from
+/// the camera.
+fn reverse_winding(batch: &mut MeshBatch) {
+    let part = batch.parts[0];
+    for triangle in 0..part.index_count as usize / 3 {
+        let at = part.index_offset + triangle * 6;
+        let (second, third) = (at + 2, at + 4);
+        let swapped = [
+            batch.geometry[third],
+            batch.geometry[third + 1],
+            batch.geometry[second],
+            batch.geometry[second + 1],
+        ];
+        batch.geometry[second..third + 2].copy_from_slice(&swapped);
+    }
+}
+
+/// The blended quad drawn from the shared atlas, which the host cannot tell
+/// apart from a greedy texture.
+fn atlas_blend(compact: bool) -> (MeshBatch, FrameCamera) {
+    let (mut batch, camera) = quad(compact, 2, 128);
+    batch.parts[0].texture_index = 0;
+    batch.textures[0].index = 0;
+    (batch, camera)
+}
+
+/// The atlas quad followed by the same surface wound the other way, the way
+/// the mesher emits a two-sided sprite.
+fn two_sided_blend(compact: bool) -> (MeshBatch, FrameCamera) {
+    let (mut batch, camera) = atlas_blend(compact);
+    let (mut copy, _) = atlas_blend(compact);
+    reverse_winding(&mut copy);
+    let mut part = copy.parts[0];
+    part.vertex_offset = batch.geometry.len();
+    batch
+        .geometry
+        .extend_from_slice(&copy.geometry[..copy.parts[0].index_offset]);
+    part.index_offset = batch.geometry.len();
+    batch
+        .geometry
+        .extend_from_slice(&copy.geometry[copy.parts[0].index_offset..]);
+    batch.parts.push(part);
+    batch.info.part_count = 2;
+    (batch, camera)
+}
+
 fn render_pixels(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -347,6 +393,41 @@ fn dx12_uploaded_meshes_render_with_wgsl_part_layout() {
                 && reused_opaque[2..] == [0, 255],
             "Shared alpha uniforms must preserve each texture: {reused_opaque:?}, compact={compact}",
         );
+    }
+    // A translucent surface blends once. The duplicate the mesher emits for
+    // two-sided sprites must not add a layer at the same depth, and the copy
+    // winding away from the camera must not draw at all.
+    let center = (32 * ROW_BYTES + 32 * 4) as usize;
+    for compact in [true, false] {
+        let (mut reversed, camera) = atlas_blend(compact);
+        reverse_winding(&mut reversed);
+        let (batch, camera_two_sided) = two_sided_blend(compact);
+        for (label, batch, camera) in [
+            ("back-facing", reversed, camera),
+            ("two-sided", batch, camera_two_sided),
+        ] {
+            let permit = uploads.acquire(staged_bytes(&batch), &|| Ok(())).unwrap();
+            let mut scene = Scene::new(device.clone(), queue.clone());
+            scene.attach_batch(&pipelines, &batch, permit).unwrap();
+            drop(batch);
+            uploads.drain(&|| Ok(())).unwrap();
+            let image = render_pixels(&device, &queue, &pipelines, &scene, camera);
+            let pixel = &image[center..center + 4];
+            if label == "back-facing" {
+                assert_eq!(
+                    pixel, &[0; 4],
+                    "A {label} blended surface must not draw: {pixel:?}, compact={compact}",
+                );
+                continue;
+            }
+            assert!(
+                (150..=200).contains(&pixel[0])
+                    && pixel[1..3] == [0, 0]
+                    && (63..=65).contains(&pixel[3]),
+                "A {label} blended surface must blend once: {pixel:?}, compact={compact}",
+            );
+            println!("Rendered {label} blend: compact={compact}");
+        }
     }
     let error = pollster::block_on(errors.pop());
     assert!(error.is_none(), "Scene rendering validation: {error:?}");

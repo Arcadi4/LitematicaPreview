@@ -16,8 +16,6 @@ struct Texture {
 /// One mesh part.
 struct Part {
     alpha_mode: u32,
-    /// Greedy texture index; zero is the shared atlas.
-    texture_index: u32,
     /// `true` draws the 24-byte compact pipeline family with the
     /// origin/extent uniforms; `false` the 28-byte absolute-position family
     /// with 0/1 uniforms. `Pipelines::scene_pipeline` maps this pair.
@@ -182,7 +180,6 @@ impl Scene {
                 });
                 parts.push(Part {
                     alpha_mode: part.alpha_mode,
-                    texture_index: part.texture_index,
                     compact,
                     vertex_offset: part.vertex_offset as u64,
                     vertex_length: part.vertex_count as u64 * batch.vertex_stride as u64,
@@ -320,11 +317,7 @@ impl Scene {
                     if (part.alpha_mode == 2) != blended {
                         continue;
                     }
-                    pass.set_pipeline(pipelines.scene_pipeline(
-                        part.compact,
-                        part.alpha_mode,
-                        part.alpha_mode == 2 && part.texture_index > 0,
-                    ));
+                    pass.set_pipeline(pipelines.scene_pipeline(part.compact, part.alpha_mode));
                     pass.set_bind_group(0, pipelines.scene_camera(), &[]);
                     pass.set_bind_group(1, &part.bind, &[]);
                     pass.set_vertex_buffer(

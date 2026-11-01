@@ -474,6 +474,10 @@ impl NativeRenderer {
         ))
     }
 
+    pub fn max_texture_side(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
+    }
+
     /// Drops the previous model and resets framing before a new stream starts.
     pub fn begin_load(&mut self) {
         self.cancel_load();

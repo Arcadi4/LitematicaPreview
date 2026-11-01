@@ -12,6 +12,8 @@ use nucleation::meshing::ResourcePackSource;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+pub const MAX_ATLAS_SIDE: u32 = 8192;
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LoadOptions {
@@ -370,6 +372,7 @@ pub fn decode(
     layers: &[PackLayer],
     packs: &mut PackCache,
     options: PreviewOptions,
+    max_texture_side: u32,
     current: impl Fn() -> Result<(), String>,
     prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
     mut consume: impl FnMut(MeshBatch) -> Result<(), String>,
@@ -415,13 +418,21 @@ pub fn decode(
             min[2] + dimensions.2 as f32,
         ];
         prepared(min, max)?;
+        let atlas_side = max_texture_side.min(MAX_ATLAS_SIDE);
         let mut stream = MeshStream::new(
             &source,
             pack,
-            &litematica_preview_core::mesh_config(),
+            &litematica_preview_core::mesh_config().with_atlas_max_size(atlas_side),
             usize::from(options.thread_count.unwrap_or(1)),
             &current,
-        )?;
+        )
+        .map_err(|error| {
+            if error.contains("Atlas building error: Failed to pack ") {
+                format!("{error}. The texture atlas limit is {atlas_side} × {atlas_side}; try a lower-resolution texture pack.")
+            } else {
+                error
+            }
+        })?;
         let total = stream.batch_count() as u64;
         progress("mesh", 0, total);
         let mut atlas = Some(stream.take_atlas());
@@ -713,6 +724,7 @@ mod tests {
                 thread_count: Some(2),
                 ..PreviewOptions::default()
             },
+            MAX_ATLAS_SIDE,
             || Ok(()),
             |_, _| Ok(()),
             |_| {

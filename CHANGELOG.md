@@ -1,3 +1,9 @@
+# Unreleased
+
+## Fixes
+
+- Grow texture atlases up to the graphics device limit, capped at 8,192 pixels per side, for schematics with many textures ([#42](https://github.com/Arcadi4/LitematicaPreview/issues/42)).
+
 # v0.4.0
 
 ## Features

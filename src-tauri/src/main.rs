@@ -245,9 +245,12 @@ fn start_preview(
             let current = || job_worker.ensure_current(request_id);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 current()?;
-                let uploads = job_worker.with_current(request_id, || {
+                let (uploads, max_texture_side) = job_worker.with_current(request_id, || {
                     with_renderer(&renderer, |renderer| {
-                        renderer.upload_window(usize::from(options.thread_count.unwrap_or(1)))
+                        (
+                            renderer.upload_window(usize::from(options.thread_count.unwrap_or(1))),
+                            renderer.max_texture_side(),
+                        )
                     })
                 })?;
                 let metadata = preview_process::load(
@@ -258,6 +261,7 @@ fn start_preview(
                     &pack_path,
                     &layers,
                     options,
+                    max_texture_side,
                     |min, max| {
                         job_worker.with_current(request_id, || {
                             with_renderer(&renderer, |renderer| renderer.prepare_load(min, max))

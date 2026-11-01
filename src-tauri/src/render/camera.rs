@@ -654,4 +654,130 @@ mod tests {
         camera.resize(0.0, 0.0);
         assert_eq!(camera.aspect, 1.0);
     }
+
+    fn length3(vector: Vec3) -> f32 {
+        dot3(vector, vector).sqrt()
+    }
+
+    fn assert_vec_near(left: Vec3, right: Vec3) {
+        for axis in 0..3 {
+            assert!(
+                (left[axis] - right[axis]).abs() < 1e-4,
+                "{left:?} != {right:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fly_look_turns_the_view_around_a_fixed_eye() {
+        let mut camera = model_camera();
+        camera.resize(800.0, 600.0);
+        let eye = camera.eye();
+        let centre = add3(camera.target, camera.centre);
+        let forward = mul3(camera.basis(), -1.0);
+        let right = normalize3(cross3(forward, UP));
+        let before = project(&camera, centre);
+        camera.fly_look(120.0, -80.0);
+        assert_vec_near(camera.eye(), eye);
+        let turned = mul3(camera.basis(), -1.0);
+        assert!(dot3(turned, forward) < 0.999, "look must change direction");
+        assert!(dot3(turned, right) > 0.0, "positive dx must look right");
+        assert!(turned[1] > forward[1], "negative dy must look up");
+        assert!((length3(sub3(camera.target, eye)) - camera.distance).abs() < 1e-4);
+        let after = project(&camera, centre);
+        assert!(
+            after[0] < -0.05 && after[1] < -0.05,
+            "the old centre must move left and down on screen: {before:?} -> {after:?}"
+        );
+    }
+
+    #[test]
+    fn fly_move_translates_the_eye_and_target_together() {
+        let mut camera = model_camera();
+        camera.resize(800.0, 600.0);
+        camera.yaw = 0.0;
+        camera.pitch = 0.4;
+        let target = camera.target;
+        let eye = camera.eye();
+        camera.fly_move(1.0, 0.0, 0.0, 0.5);
+        let moved = sub3(camera.target, target);
+        assert_vec_near(sub3(camera.eye(), eye), moved);
+        assert!(moved[0].abs() < 1e-5, "forward stays horizontal: {moved:?}");
+        assert!(moved[1].abs() < 1e-5, "forward stays horizontal: {moved:?}");
+        assert!(
+            (moved[2] + FLY_SPEED * 0.5).abs() < 1e-4,
+            "forward at yaw zero must face -Z: {moved:?}"
+        );
+    }
+
+    #[test]
+    fn fly_move_strafes_right_and_rises_on_world_up() {
+        let mut camera = model_camera();
+        camera.yaw = 0.0;
+        let target = camera.target;
+        camera.fly_move(0.0, 1.0, 0.0, 1.0);
+        assert_vec_near(sub3(camera.target, target), [FLY_SPEED, 0.0, 0.0]);
+        let target = camera.target;
+        camera.fly_move(0.0, 0.0, 1.0, 1.0);
+        assert_vec_near(sub3(camera.target, target), [0.0, FLY_SPEED, 0.0]);
+    }
+
+    #[test]
+    fn fly_move_normalizes_combined_axes() {
+        let mut camera = model_camera();
+        camera.yaw = 0.0;
+        let target = camera.target;
+        camera.fly_move(1.0, 1.0, 0.0, 1.0);
+        assert!((length3(sub3(camera.target, target)) - FLY_SPEED).abs() < 1e-4);
+        let target = camera.target;
+        camera.fly_move(1.0, 0.0, 1.0, 1.0);
+        assert!((length3(sub3(camera.target, target)) - FLY_SPEED).abs() < 1e-4);
+        let target = camera.target;
+        camera.fly_move(1.0, 1.0, 1.0, 1.0);
+        assert!((length3(sub3(camera.target, target)) - FLY_SPEED).abs() < 1e-4);
+    }
+
+    #[test]
+    fn fly_move_scales_with_time_and_ignores_invalid_input() {
+        let mut camera = model_camera();
+        camera.yaw = 0.0;
+        let target = camera.target;
+        camera.fly_move(1.0, 0.0, 0.0, 0.25);
+        assert!(
+            (camera.target[2] - target[2] + FLY_SPEED * 0.25).abs() < 1e-4,
+            "movement must scale with elapsed seconds"
+        );
+        for seconds in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            let target = camera.target;
+            camera.fly_move(1.0, 1.0, 1.0, seconds);
+            assert_eq!(camera.target, target, "seconds {seconds} must be ignored");
+        }
+        for (forward, right, up) in [
+            (f32::NAN, 0.0, 0.0),
+            (0.0, f32::INFINITY, 0.0),
+            (0.0, 0.0, f32::NEG_INFINITY),
+        ] {
+            let target = camera.target;
+            camera.fly_move(forward, right, up, 1.0);
+            assert_eq!(camera.target, target, "non-finite axes must be ignored");
+        }
+        let mut empty = Camera::new();
+        empty.fly_move(1.0, 1.0, 1.0, 1.0);
+        assert_eq!(empty.target, [0.0; 3]);
+    }
+
+    #[test]
+    fn fly_look_clamps_pitch_without_moving_the_eye() {
+        let mut camera = model_camera();
+        let eye = camera.eye();
+        camera.fly_look(0.0, 100_000.0);
+        assert!((camera.pitch - PITCH_LIMIT).abs() < 1e-6);
+        assert_vec_near(camera.eye(), eye);
+        camera.fly_look(0.0, 1.0);
+        assert!((camera.pitch - PITCH_LIMIT).abs() < 1e-6);
+        assert_vec_near(camera.eye(), eye);
+        let target = camera.target;
+        camera.fly_look(f32::NAN, 0.0);
+        assert_eq!(camera.target, target, "non-finite look must be ignored");
+    }
 }

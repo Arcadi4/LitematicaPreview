@@ -1,11 +1,14 @@
 import { useEffect, useRef, type KeyboardEvent, type PointerEvent, type RefObject } from "react"
 import { Button, ProgressBar } from "@fluentui/react-components"
 import { fileName, numbers, type Loaded, type Loading, type ViewportCommand } from "./app-model"
+import { FlyMotion, requestPointerLock } from "./fly-controls"
 
 export interface PreviewStageProps {
+  flyMode: boolean
   loaded: Loaded | null
   loading: Loading | null
   onCancel: () => void
+  onExitFly: () => void
   onViewportInput: (command: ViewportCommand) => void
   stageActive: boolean
   viewportRef: RefObject<HTMLDivElement | null>
@@ -64,9 +67,11 @@ function LoadingProgress({ loading, onCancel }: { loading: Loading; onCancel: ()
 }
 
 export function PreviewStage({
+  flyMode,
   loaded,
   loading,
   onCancel,
+  onExitFly,
   onViewportInput,
   stageActive,
   viewportRef,
@@ -75,6 +80,15 @@ export function PreviewStage({
   // The pointer that owns the current drag, mirroring the native renderer's
   // single-pointer orbit/pan capture.
   const drag = useRef<{ pointerId: number; button: number; x: number; y: number } | null>(null)
+  const motion = useRef<FlyMotion | null>(null)
+
+  const flyMotion = () => {
+    if (motion.current === null)
+      motion.current = new FlyMotion((direction, seconds) =>
+        onViewportInput({ kind: "flyMove", ...direction, seconds }),
+      )
+    return motion.current
+  }
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (drag.current !== null || event.button < 0 || event.button > 2) return
@@ -86,6 +100,8 @@ export function PreviewStage({
       y: event.clientY,
     }
     event.currentTarget.setPointerCapture(event.pointerId)
+    if (flyMode && document.pointerLockElement !== event.currentTarget)
+      requestPointerLock(event.currentTarget)
     event.preventDefault()
   }
 
@@ -97,7 +113,10 @@ export function PreviewStage({
     active.x = event.clientX
     active.y = event.clientY
     if (!stageActive || (dx === 0 && dy === 0)) return
-    if (active.button === 0) onViewportInput({ kind: "orbit", dx, dy })
+    if (flyMode) {
+      if (document.pointerLockElement !== event.currentTarget)
+        onViewportInput({ kind: "flyLook", dx, dy })
+    } else if (active.button === 0) onViewportInput({ kind: "orbit", dx, dy })
     else onViewportInput({ kind: "pan", dx, dy })
   }
 
@@ -110,7 +129,21 @@ export function PreviewStage({
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!stageActive || event.ctrlKey || event.altKey || event.metaKey) return
+    if (!stageActive) return
+    if (flyMode) {
+      if (event.key === "Escape") {
+        event.preventDefault()
+        onExitFly()
+      } else if (event.key === "f" || event.key === "F" || event.key === "Home") {
+        event.preventDefault()
+        onExitFly()
+        onViewportInput({ kind: "fit" })
+      } else if (!event.altKey && !event.metaKey && flyMotion().press(event.code)) {
+        event.preventDefault()
+      }
+      return
+    }
+    if (event.ctrlKey || event.altKey || event.metaKey) return
     let dx = 0
     let dy = 0
     switch (event.key) {
@@ -149,18 +182,75 @@ export function PreviewStage({
     onViewportInput({ kind: "arrow", dx, dy, panning: event.shiftKey })
   }
 
+  const onKeyUp = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (flyMode) motion.current?.release(event.code)
+  }
+
+  const onBlur = () => {
+    motion.current?.stop()
+    drag.current = null
+  }
+
+  // Fly mode owns the mouse only while it holds the pointer lock; losing the
+  // lock (Esc, window switch) returns to orbit.
+  useEffect(() => {
+    const element = viewportRef.current
+    if (!element) return
+    const onMouseMove = (event: MouseEvent) => {
+      if (!flyMode || document.pointerLockElement !== element) return
+      if (event.movementX === 0 && event.movementY === 0) return
+      onViewportInput({ kind: "flyLook", dx: event.movementX, dy: event.movementY })
+    }
+    const onLockChange = () => {
+      if (flyMode && document.pointerLockElement !== element) onExitFly()
+    }
+    document.addEventListener("mousemove", onMouseMove)
+    document.addEventListener("pointerlockchange", onLockChange)
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove)
+      document.removeEventListener("pointerlockchange", onLockChange)
+    }
+  }, [flyMode, onExitFly, onViewportInput, viewportRef])
+
+  useEffect(() => {
+    if (flyMode) return
+    motion.current?.stop()
+    drag.current = null
+  }, [flyMode])
+
+  useEffect(() => () => motion.current?.stop(), [])
+
+  // Leaving the window or hiding the page must not keep moving a camera whose
+  // held keys can no longer receive their keyup.
+  useEffect(() => {
+    if (!flyMode) return
+    const exit = () => {
+      motion.current?.stop()
+      onExitFly()
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") exit()
+    }
+    window.addEventListener("blur", exit)
+    document.addEventListener("visibilitychange", onVisibilityChange)
+    return () => {
+      window.removeEventListener("blur", exit)
+      document.removeEventListener("visibilitychange", onVisibilityChange)
+    }
+  }, [flyMode, onExitFly])
+
   // A native non-passive listener lets zoom prevent the default wheel action.
   useEffect(() => {
     const element = viewportRef.current
     if (!element) return
     const onWheel = (event: WheelEvent) => {
-      if (!stageActive) return
+      if (!stageActive || flyMode) return
       event.preventDefault()
       onViewportInput({ kind: "wheel", deltaY: event.deltaY, deltaMode: event.deltaMode })
     }
     element.addEventListener("wheel", onWheel, { passive: false })
     return () => element.removeEventListener("wheel", onWheel)
-  }, [stageActive, onViewportInput, viewportRef])
+  }, [flyMode, stageActive, onViewportInput, viewportRef])
 
   // ResizeObserver catches chrome layout changes without a Tauri window event.
   useEffect(() => {
@@ -202,18 +292,30 @@ export function PreviewStage({
         onPointerCancel={endPointer}
         onLostPointerCapture={endPointer}
         onKeyDown={onKeyDown}
+        onKeyUp={onKeyUp}
+        onBlur={onBlur}
         onContextMenu={(event) => event.preventDefault()}
       />
       <p id="canvas-controls" className="sr-only">
-        Drag to orbit. Right or middle drag to pan. Scroll to zoom. Arrow keys orbit; Shift and
-        arrow keys pan. Plus and minus zoom. F or Home fits the model.
+        {flyMode
+          ? "Spectator fly mode. W and S move forward and back, A and D move sideways, Space rises, and Control descends. Move the mouse to look around; click the viewport to capture the pointer, or drag to look when capture is unavailable. Press V or Escape to return to orbit."
+          : "Drag to orbit. Right or middle drag to pan. Scroll to zoom. Arrow keys orbit; Shift and arrow keys pan. Plus and minus zoom. F or Home fits the model."}
       </p>
       {stageActive && (
         <div
           className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 sm:gap-2.5 px-3 py-1.5 border border-border rounded-md bg-surface text-muted text-xs whitespace-nowrap pointer-events-none max-w-[calc(100%-2rem)] sm:max-w-none"
           aria-hidden="true"
         >
-          Drag to orbit<span>·</span>Right-drag to pan<span>·</span>Scroll to zoom
+          {flyMode ? (
+            <>
+              WASD move<span>·</span>Space / Ctrl up-down<span>·</span>Mouse looks
+              <span>·</span>V orbits
+            </>
+          ) : (
+            <>
+              Drag to orbit<span>·</span>Right-drag to pan<span>·</span>Scroll to zoom
+            </>
+          )}
         </div>
       )}
       {loading && <LoadingProgress loading={loading} onCancel={onCancel} />}

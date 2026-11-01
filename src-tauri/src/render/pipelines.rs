@@ -97,9 +97,11 @@ pub struct Pipelines {
     compact_back: wgpu::RenderPipeline,
     compact_nocull: wgpu::RenderPipeline,
     compact_blend: wgpu::RenderPipeline,
+    compact_blend_cull: wgpu::RenderPipeline,
     float_back: wgpu::RenderPipeline,
     float_nocull: wgpu::RenderPipeline,
     float_blend: wgpu::RenderPipeline,
+    float_blend_cull: wgpu::RenderPipeline,
 }
 
 impl Pipelines {
@@ -330,6 +332,15 @@ impl Pipelines {
             true,
             multisample,
         );
+        let compact_blend_cull = scene_pipeline(
+            "transparent compact mesh with culling",
+            &scene_layout,
+            "vertex_compact",
+            COMPACT_VERTEX_LAYOUT,
+            Some(wgpu::Face::Back),
+            true,
+            multisample,
+        );
         let float_back = scene_pipeline(
             "opaque float mesh",
             &scene_layout,
@@ -354,6 +365,15 @@ impl Pipelines {
             "vertex_float",
             FLOAT_VERTEX_LAYOUT,
             None,
+            true,
+            multisample,
+        );
+        let float_blend_cull = scene_pipeline(
+            "transparent float mesh with culling",
+            &scene_layout,
+            "vertex_float",
+            FLOAT_VERTEX_LAYOUT,
+            Some(wgpu::Face::Back),
             true,
             multisample,
         );
@@ -402,9 +422,11 @@ impl Pipelines {
             compact_back,
             compact_nocull,
             compact_blend,
+            compact_blend_cull,
             float_back,
             float_nocull,
             float_blend,
+            float_blend_cull,
         }
     }
 
@@ -439,14 +461,23 @@ impl Pipelines {
     }
 
     /// The scene pipeline for a part's vertex stride and alpha mode.
-    pub(crate) fn scene_pipeline(&self, compact: bool, alpha_mode: u32) -> &wgpu::RenderPipeline {
-        match (compact, alpha_mode) {
-            (true, 2) => &self.compact_blend,
-            (true, 0) => &self.compact_back,
-            (true, _) => &self.compact_nocull,
-            (false, 2) => &self.float_blend,
-            (false, 0) => &self.float_back,
-            (false, _) => &self.float_nocull,
+    /// `cull_blend` selects back-face culling for a blended part. Greedy parts
+    /// are translucent blocks. The shared atlas keeps double-sided fluids.
+    pub(crate) fn scene_pipeline(
+        &self,
+        compact: bool,
+        alpha_mode: u32,
+        cull_blend: bool,
+    ) -> &wgpu::RenderPipeline {
+        match (compact, alpha_mode, cull_blend) {
+            (true, 2, true) => &self.compact_blend_cull,
+            (true, 2, false) => &self.compact_blend,
+            (true, 0, _) => &self.compact_back,
+            (true, _, _) => &self.compact_nocull,
+            (false, 2, true) => &self.float_blend_cull,
+            (false, 2, false) => &self.float_blend,
+            (false, 0, _) => &self.float_back,
+            (false, _, _) => &self.float_nocull,
         }
     }
 }

@@ -1,6 +1,7 @@
 import { Button, ToggleButton, Tooltip } from "@fluentui/react-components"
 import {
   Add20Regular,
+  Airplane20Regular,
   ArrowExpand20Regular,
   FolderOpen20Regular,
   Grid20Regular,
@@ -11,12 +12,14 @@ import { fileName, type Loaded, type Loading } from "./app-model"
 
 export interface PreviewToolbarProps {
   busy: boolean
+  flyMode: boolean
   grid: boolean
   loaded: Loaded | null
   loading: Loading | null
   onFit: () => void
   onHome: () => void
   onOpenFile: () => void
+  onToggleFly: () => void
   onToggleGrid: () => void
   onZoomIn: () => void
   onZoomOut: () => void
@@ -24,12 +27,14 @@ export interface PreviewToolbarProps {
 
 export function PreviewToolbar({
   busy,
+  flyMode,
   grid,
   loaded,
   loading,
   onFit,
   onHome,
   onOpenFile,
+  onToggleFly,
   onToggleGrid,
   onZoomIn,
   onZoomOut,
@@ -65,7 +70,7 @@ export function PreviewToolbar({
         <Button
           appearance="subtle"
           icon={<Subtract20Regular />}
-          disabled={!loaded && !loading}
+          disabled={(!loaded && !loading) || flyMode}
           onClick={onZoomOut}
           aria-label="Zoom out"
         />
@@ -74,7 +79,7 @@ export function PreviewToolbar({
         <Button
           appearance="subtle"
           icon={<Add20Regular />}
-          disabled={!loaded && !loading}
+          disabled={(!loaded && !loading) || flyMode}
           onClick={onZoomIn}
           aria-label="Zoom in"
         />
@@ -88,6 +93,20 @@ export function PreviewToolbar({
           onClick={onToggleGrid}
           aria-label="Ground grid"
         />
+      </Tooltip>
+      <span className="self-center h-5 w-px mx-0.5 sm:mx-1 bg-border shrink-0" />
+      <Tooltip content={flyMode ? "Return to orbit (V)" : "Spectator fly (V)"} relationship="label">
+        <ToggleButton
+          appearance="subtle"
+          icon={<Airplane20Regular />}
+          checked={flyMode}
+          disabled={!loaded}
+          onClick={onToggleFly}
+          aria-label="Fly"
+          aria-keyshortcuts="V"
+        >
+          Fly<span className="ml-1 opacity-75 text-xs font-normal hidden sm:inline">V</span>
+        </ToggleButton>
       </Tooltip>
       <span
         className="ml-auto pl-4 max-w-[40%] md:max-w-[30%] hidden sm:block text-muted text-xs whitespace-nowrap overflow-hidden text-ellipsis"

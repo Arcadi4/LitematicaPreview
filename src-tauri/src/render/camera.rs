@@ -1,6 +1,6 @@
-//! Orbit, pan, and zoom camera. Input handling lives outside this module.
-//! Mutating calls mark the camera dirty for the on-demand frame policy in
-//! [`super::context`].
+//! Orbit, pan, zoom, and free-flight camera. Input handling lives outside this
+//! module. Mutating calls mark the camera dirty for the on-demand frame policy
+//! in [`super::context`].
 
 use crate::render::math::{
     self, add3, cross3, dot3, mul3, normalize3, scale_and_add3, sub3, Mat4, Vec3, UP,
@@ -22,6 +22,12 @@ const FIT_FLOOR: f32 = 0.1;
 const DEFAULT_YAW: f32 = std::f32::consts::PI / 4.0;
 /// Initial pitch in radians.
 const DEFAULT_PITCH: f32 = 0.615_479_7;
+/// Free-flight speed in model units (Minecraft blocks) per second, matching
+/// creative flight.
+const FLY_SPEED: f32 = 10.89;
+/// Free-flight look sensitivity in radians per CSS pixel, matching Minecraft's
+/// default mouse sensitivity at roughly 0.15 degrees per pixel.
+const FLY_LOOK_SPEED: f32 = 0.0026;
 
 /// Per-frame camera uniforms. `offset` centres the model; the grid uses zero.
 #[repr(C)]
@@ -47,7 +53,12 @@ impl FrameCamera {
     }
 }
 
-/// Orbit, pan, and zoom camera state.
+/// Orbit, pan, zoom, and free-flight camera state.
+///
+/// The orbit view is stored as a target, a yaw/pitch direction from that target
+/// to the eye, and a distance. Free flight reuses the same state: looking moves
+/// the target around a fixed eye, and moving translates the target (and thus
+/// the eye) through the world.
 pub struct Camera {
     yaw: f32,
     pitch: f32,
@@ -204,6 +215,51 @@ impl Camera {
         }
     }
 
+    /// Apply a free-flight mouse-look delta in pixels. The view turns around
+    /// the current eye: the eye and distance stay fixed while the target moves.
+    pub fn fly_look(&mut self, dx: f32, dy: f32) {
+        if !dx.is_finite() || !dy.is_finite() {
+            return;
+        }
+        let eye = self.eye();
+        self.yaw = (self.yaw - dx * FLY_LOOK_SPEED) % (std::f32::consts::PI * 2.0);
+        self.pitch = (self.pitch + dy * FLY_LOOK_SPEED).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+        self.target = sub3(eye, mul3(self.basis(), self.distance));
+        self.dirty = true;
+    }
+
+    /// Apply free-flight movement for `seconds`. `forward` and `right` are
+    /// horizontal; `up` is world vertical. The combined direction is normalized
+    /// so diagonal input is not faster, and the resulting world-space delta
+    /// translates the eye and target together.
+    pub fn fly_move(&mut self, forward: f32, right: f32, up: f32, seconds: f32) {
+        if !self.has_model
+            || !forward.is_finite()
+            || !right.is_finite()
+            || !up.is_finite()
+            || !seconds.is_finite()
+            || seconds <= 0.0
+        {
+            return;
+        }
+        let forward = forward.clamp(-1.0, 1.0);
+        let right = right.clamp(-1.0, 1.0);
+        let up = up.clamp(-1.0, 1.0);
+        let sin_yaw = self.yaw.sin();
+        let cos_yaw = self.yaw.cos();
+        let direction = [
+            -sin_yaw * forward + cos_yaw * right,
+            up,
+            -cos_yaw * forward - sin_yaw * right,
+        ];
+        let length = dot3(direction, direction).sqrt();
+        if length <= f32::EPSILON {
+            return;
+        }
+        self.target = add3(self.target, mul3(direction, FLY_SPEED * seconds / length));
+        self.dirty = true;
+    }
+
     /// Reset the orientation and refit.
     pub fn fit(&mut self) {
         self.yaw = DEFAULT_YAW;
@@ -240,7 +296,7 @@ impl Camera {
     /// geometry bounds shrink without refitting the user-controlled view.
     pub fn frame_camera(&self, grid: bool) -> FrameCamera {
         let direction = self.basis();
-        let eye = add3(self.target, mul3(direction, self.distance));
+        let eye = self.eye();
         let view = math::look_at(eye, self.target, UP);
         let mut nearest = self.distance;
         let mut farthest = self.distance;
@@ -277,6 +333,11 @@ impl Camera {
     fn basis(&self) -> Vec3 {
         let cp = self.pitch.cos();
         [cp * self.yaw.sin(), self.pitch.sin(), cp * self.yaw.cos()]
+    }
+
+    /// World-space eye position.
+    fn eye(&self) -> Vec3 {
+        add3(self.target, mul3(self.basis(), self.distance))
     }
 
     /// The camera's right and up basis vectors.

@@ -56,6 +56,10 @@ export type ViewportCommand =
   | { kind: "wheel"; deltaY: number; deltaMode: number }
   | { kind: "zoom"; factor: number }
   | { kind: "arrow"; dx: number; dy: number; panning: boolean }
+  /** Camera-relative held axes in [-1, 1]; the native viewport normalizes speed over `seconds`. */
+  | { kind: "flyMove"; forward: number; right: number; up: number; seconds: number }
+  /** Pointer-look delta in CSS pixels while spectator fly mode owns the mouse. */
+  | { kind: "flyLook"; dx: number; dy: number }
   | { kind: "fit" }
   | { kind: "grid"; visible: boolean }
   /** Visible preview rectangle in CSS pixels; the native viewport clips geometry to it. */

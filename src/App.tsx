@@ -26,7 +26,9 @@ export default function App({ initialError }: { initialError?: string }) {
     dialogOpen,
     dragging,
     errorDetails,
+    exitFly,
     fit,
+    flyMode,
     grid,
     home,
     importTexturePacks,
@@ -46,6 +48,7 @@ export default function App({ initialError }: { initialError?: string }) {
     setTexturePackOrder,
     texturePackBusy,
     texturePacks,
+    toggleFly,
     toggleGrid,
     updatePreviewSettings,
     viewportInput,
@@ -100,9 +103,15 @@ export default function App({ initialError }: { initialError?: string }) {
           target.closest('input, textarea, select, [role="menu"], [role="dialog"]'))
       )
         return
-      if (event.key === "Escape" && loading) {
+      if (event.key === "Escape" && flyMode) {
+        event.preventDefault()
+        exitFly()
+      } else if (event.key === "Escape" && loading) {
         event.preventDefault()
         returnHome()
+      } else if (event.key.toLowerCase() === "v" && loaded && !event.repeat) {
+        event.preventDefault()
+        toggleFly()
       } else if (
         event.key.toLowerCase() === "f" &&
         (loaded || loading) &&
@@ -114,7 +123,7 @@ export default function App({ initialError }: { initialError?: string }) {
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [dialogOpen, fit, loaded, loading, viewportRef])
+  }, [dialogOpen, exitFly, fit, flyMode, loaded, loading, toggleFly, viewportRef])
 
   const onThemeChange = (value: unknown) => {
     if (isTheme(value)) setTheme(value)
@@ -138,12 +147,14 @@ export default function App({ initialError }: { initialError?: string }) {
 
       <PreviewToolbar
         busy={busy}
+        flyMode={flyMode}
         grid={grid}
         loaded={loaded}
         loading={loading}
         onFit={fit}
         onHome={home}
         onOpenFile={openFile}
+        onToggleFly={toggleFly}
         onToggleGrid={toggleGrid}
         onZoomIn={zoomIn}
         onZoomOut={zoomOut}
@@ -164,9 +175,11 @@ export default function App({ initialError }: { initialError?: string }) {
         />
 
         <PreviewStage
+          flyMode={flyMode}
           loaded={loaded}
           loading={loading}
           onCancel={home}
+          onExitFly={exitFly}
           onViewportInput={viewportInput}
           stageActive={stageActive}
           viewportRef={viewportRef}

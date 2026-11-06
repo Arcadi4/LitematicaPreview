@@ -2234,7 +2234,7 @@ dependencies = [
 [[package]]
 name = "litematica-preview-core"
 version = "0.1.5"
-source = "git+https://github.com/Arcadi4/litematica-preview-core?rev=87838a6dcca60010f2af63dd6c733a5010ec6a27#87838a6dcca60010f2af63dd6c733a5010ec6a27"
+source = "git+https://github.com/Arcadi4/litematica-preview-core?rev=0e43f7b213302e5b93312b439dcd000982ac678d#0e43f7b213302e5b93312b439dcd000982ac678d"
 dependencies = [
  "flate2",
  "image",

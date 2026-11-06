@@ -52,6 +52,10 @@ Linux releases target Ubuntu 24.04 and require GTK 3, WebKitGTK 4.1, a Vulkan lo
 
 The Debian package installs a desktop entry and MIME declarations without changing your default applications. Choose file associations through your desktop's file manager; the Windows registration commands are not shown on Linux.
 
+## Camera Controls
+
+Select **Fly** in the preview toolbar or press `V` to switch between orbit and spectator flight. In fly mode, move with `W`, `A`, `S`, and `D`, ascend with `Space`, and descend with `Ctrl`. Move the mouse to look around; click the viewport to capture the pointer, or drag to look when capture is unavailable. Press `Escape` or `V` to leave fly mode. Flight has no collision or gravity.
+
 ## Texture Packs
 
 Open **Settings → Texture packs** to import Minecraft Java resource-pack ZIPs. Enable packs with the switches and arrange them with the arrow buttons, highest priority first. New imports start at the lowest custom priority.

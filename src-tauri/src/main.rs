@@ -390,6 +390,19 @@ enum ViewportInput {
         dy: f32,
         panning: bool,
     },
+    /// Held-key free flight. The frontend supplies normalized axes and the
+    /// elapsed seconds; the host owns the world-space speed.
+    FlyMove {
+        forward: f32,
+        right: f32,
+        up: f32,
+        seconds: f32,
+    },
+    /// Mouse-look delta in CSS pixels while free flight is active.
+    FlyLook {
+        dx: f32,
+        dy: f32,
+    },
     Fit {},
     Grid {
         visible: bool,
@@ -430,6 +443,13 @@ fn viewport_input(
             } => renderer.camera().zoom_wheel(delta_y, delta_mode),
             ViewportInput::Zoom { factor } => renderer.camera().zoom(factor),
             ViewportInput::Arrow { dx, dy, panning } => renderer.camera().arrow(dx, dy, panning),
+            ViewportInput::FlyMove {
+                forward,
+                right,
+                up,
+                seconds,
+            } => renderer.camera().fly_move(forward, right, up, seconds),
+            ViewportInput::FlyLook { dx, dy } => renderer.camera().fly_look(dx, dy),
             ViewportInput::Fit {} => renderer.camera().fit(),
             ViewportInput::Grid { visible } => renderer.camera().set_grid(visible),
             ViewportInput::Stage {

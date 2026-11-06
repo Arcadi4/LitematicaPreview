@@ -21,6 +21,7 @@ Litematica Preview 是一款适用于 Windows 和 Linux 桌面的 Minecraft 投�
 ## 亮点
 
 - 使用原生 wgpu（Windows 下使用 Direct3D 12，Linux 下使用 Vulkan）和 Nucleation，在本地以带纹理的 3D 视图预览八种 Minecraft 投影与结构格式。
+- 将当前预览复制到剪贴板，或通过旁边的下拉菜单保存为 PNG 或 JPEG；文件扩展名决定保存格式。
 - 可导入 Minecraft Java 资源包并保存在本地，按优先级排列已启用的资源包；缺失的资源依次从下方资源包及内置原版资源中获取。
 - 通过紧凑解码和分块预览加载大型 `.litematic` 文件，避免常驻完整解压后的文件内容。
 - 并行生成与上传几何数据，默认使用 32 方块分块，可调整分块大小和工作线程数，并显示渐进预览与可取消的加载进度。

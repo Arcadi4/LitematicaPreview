@@ -1,5 +1,6 @@
 // Native on-demand rendering and bounded per-session GPU upload staging.
 pub mod camera;
+pub mod capture;
 pub mod context;
 pub mod frame;
 pub mod math;

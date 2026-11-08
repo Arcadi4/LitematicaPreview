@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "apt:publish": "tsx scripts/apt-publish.ts",
     "build:linux": "pnpm install --frozen-lockfile && tsx scripts/build-linux.ts",
+    "build:linux:apt": "pnpm install --frozen-lockfile && tsx scripts/build-linux.ts --apt",
     "build:win": "pnpm install --frozen-lockfile && tsx scripts/build.ts",
     "build": "tsc --noEmit && vp build",
     "bump": "tsx scripts/bump-version.ts",

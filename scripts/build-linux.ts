@@ -1,22 +1,36 @@
 // Builds the Linux x64 release artifacts: a Debian package and an AppImage.
-// Run it through the package script: `pnpm run build:linux`.
+// Pass `--apt` to embed the signed apt repository source and public key in the
+// Debian package. Run it through the package scripts: `pnpm run build:linux` or
+// `pnpm run build:linux:apt`.
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
+import {
+  APT_ARCHITECTURE,
+  APT_KEYRING_PATH,
+  APT_PACKAGE,
+  APT_SOURCE_PATH,
+  normalizeAptBaseUrl,
+  renderAptSource,
+} from "./apt"
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const TARGET = "x86_64-unknown-linux-gnu"
 const TAURI_ROOT = path.join(ROOT, "src-tauri")
 const ARTIFACTS_ROOT = path.join(ROOT, "artifacts")
 const LOGS_ROOT = path.join(ARTIFACTS_ROOT, "logs")
+const APT_GENERATED_ROOT = path.join(TAURI_ROOT, "apt", "generated")
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
 const MISSING_TOOL: Record<string, string> = {
   pnpm: "pnpm is not on PATH. Install Node.js 24 and the pnpm version declared in package.json, then open a new terminal.",
   cargo:
     "cargo is not on PATH. Install Rust from https://rustup.rs, reopen the terminal, then run: rustup target add x86_64-unknown-linux-gnu.",
+  gpg: "gpg is not on PATH. Install GnuPG (package: gnupg) to embed the apt repository key.",
+  "dpkg-deb": "dpkg-deb is not on PATH. Install dpkg to verify the generated Debian package.",
 }
 
 interface TauriConfig {
@@ -213,7 +227,233 @@ function describePackage(target: string): string {
   return `${target}\n  ${(size / 1024 / 1024).toFixed(2)} MiB (${size.toLocaleString("en-US")} bytes)`
 }
 
+interface AptMaterials {
+  baseUrl: string
+  source: string
+  configPath: string
+  keyringPath: string
+  fingerprints: string[]
+}
+
+function environment(name: string): string | undefined {
+  const value = process.env[name]?.trim()
+  return value ? value : undefined
+}
+
+function requireEnvironment(name: string, describe: string): string {
+  const value = environment(name)
+  if (!value) {
+    throw new Error(`${name} is not set. It provides ${describe}.`)
+  }
+  return value
+}
+
+function execute(tool: string, args: string[], input?: Buffer): void {
+  const result = spawnSync(tool, args, { cwd: ROOT, input, encoding: "utf8" })
+  if (result.error) {
+    throw new Error(MISSING_TOOL[tool] ?? result.error.message)
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `${tool} ${args.join(" ")} failed: ${result.stderr.trim() || `exit code ${result.status}`}`,
+    )
+  }
+}
+
+function readAptPublicKey(): Buffer {
+  const file = environment("LP_APT_PUBLIC_KEY_FILE")
+  const inline = environment("LP_APT_PUBLIC_KEY")
+  if (file && inline) {
+    throw new Error("Set only one of LP_APT_PUBLIC_KEY_FILE and LP_APT_PUBLIC_KEY.")
+  }
+  if (file) {
+    requireFile(file, "Apt repository public key")
+    return fs.readFileSync(file)
+  }
+  if (inline) {
+    return Buffer.from(inline.endsWith("\n") ? inline : `${inline}\n`)
+  }
+  throw new Error(
+    "The apt repository public key is missing. Set LP_APT_PUBLIC_KEY_FILE or LP_APT_PUBLIC_KEY.",
+  )
+}
+
+function writeAptKeyring(contents: Buffer, target: string): void {
+  if (contents.length === 0) {
+    throw new Error("The apt repository public key is empty.")
+  }
+  const text = contents.toString("utf8")
+  if (text.includes("-----BEGIN PGP PRIVATE KEY BLOCK-----")) {
+    throw new Error("The apt repository key must be a public key, not a private key.")
+  }
+  if (text.includes("-----BEGIN PGP PUBLIC KEY BLOCK-----")) {
+    execute("gpg", ["--batch", "--yes", "--dearmor", "--output", target], contents)
+    return
+  }
+  fs.writeFileSync(target, contents)
+}
+
+function inspectPublicKey(keyringPath: string): string[] {
+  const colon = capture("gpg", ["--batch", "--with-colons", "--show-keys", keyringPath])
+  const fingerprints: string[] = []
+  let expectsFingerprint = false
+  for (const line of colon.split("\n")) {
+    const fields = line.split(":")
+    if (fields[0] === "sec" || fields[0] === "ssb") {
+      throw new Error("The apt repository key must be a public key, not a private key.")
+    }
+    if (fields[0] === "pub") {
+      const validity = fields[1]
+      if (validity === "e" || validity === "r" || validity === "i" || validity === "d") {
+        throw new Error(`The apt repository public key is not usable (GnuPG status: ${validity}).`)
+      }
+      expectsFingerprint = true
+    } else if (fields[0] === "fpr" && expectsFingerprint) {
+      const fingerprint = fields[9]
+      if (!fingerprint) {
+        throw new Error("GnuPG did not report a fingerprint for the apt repository public key.")
+      }
+      fingerprints.push(fingerprint)
+      expectsFingerprint = false
+    } else if (fields[0] === "sub" || fields[0] === "uid") {
+      expectsFingerprint = false
+    }
+  }
+  if (fingerprints.length === 0) {
+    throw new Error("The apt repository public key contains no key.")
+  }
+  return fingerprints
+}
+
+function readLinuxDebFiles(): Record<string, string> {
+  const parsed: unknown = JSON.parse(
+    fs.readFileSync(path.join(TAURI_ROOT, "tauri.linux.conf.json"), "utf8"),
+  )
+  const files: Record<string, string> = {}
+  if (typeof parsed !== "object" || parsed === null) {
+    return files
+  }
+  const bundle = (parsed as Record<string, unknown>).bundle
+  if (typeof bundle !== "object" || bundle === null) {
+    return files
+  }
+  const linux = (bundle as Record<string, unknown>).linux
+  if (typeof linux !== "object" || linux === null) {
+    return files
+  }
+  const deb = (linux as Record<string, unknown>).deb
+  if (typeof deb !== "object" || deb === null) {
+    return files
+  }
+  const declared = (deb as Record<string, unknown>).files
+  if (typeof declared !== "object" || declared === null || Array.isArray(declared)) {
+    return files
+  }
+  for (const [target, source] of Object.entries(declared)) {
+    if (typeof source !== "string" || source.trim() === "") {
+      throw new Error(`tauri.linux.conf.json maps ${target} to an invalid source path.`)
+    }
+    files[target] = source
+  }
+  return files
+}
+
+function prepareAptFiles(): AptMaterials {
+  const baseUrl = normalizeAptBaseUrl(
+    requireEnvironment("LP_APT_BASE_URL", "the public apt repository URL"),
+  )
+  fs.rmSync(APT_GENERATED_ROOT, { force: true, recursive: true })
+  fs.mkdirSync(APT_GENERATED_ROOT, { recursive: true })
+
+  const keyringPath = path.join(APT_GENERATED_ROOT, "litematica-preview-archive-keyring.gpg")
+  writeAptKeyring(readAptPublicKey(), keyringPath)
+  fs.chmodSync(keyringPath, 0o644)
+  const fingerprints = inspectPublicKey(keyringPath)
+
+  const source = renderAptSource(baseUrl)
+  const sourcePath = path.join(APT_GENERATED_ROOT, "litematica-preview.list")
+  fs.writeFileSync(sourcePath, source, { mode: 0o644 })
+  fs.chmodSync(sourcePath, 0o644)
+
+  const files = readLinuxDebFiles()
+  for (const target of [APT_SOURCE_PATH, APT_KEYRING_PATH]) {
+    if (target in files) {
+      throw new Error(`tauri.linux.conf.json already declares bundle file ${target}.`)
+    }
+  }
+  const bundle = {
+    bundle: {
+      linux: {
+        deb: {
+          files: {
+            ...files,
+            [APT_SOURCE_PATH]: "apt/generated/litematica-preview.list",
+            [APT_KEYRING_PATH]: "apt/generated/litematica-preview-archive-keyring.gpg",
+          },
+        },
+      },
+    },
+  }
+  const configPath = path.join(TAURI_ROOT, "apt-bundle.json")
+  fs.writeFileSync(configPath, `${JSON.stringify(bundle, null, 2)}\n`)
+  return { baseUrl, source, configPath, keyringPath, fingerprints }
+}
+
+function verifyAptPackage(debPath: string, apt: AptMaterials): void {
+  const control = ["Package", "Architecture"].map((field) =>
+    capture("dpkg-deb", ["-f", debPath, field]).trim(),
+  )
+  if (control[0] !== APT_PACKAGE) {
+    throw new Error(`Expected Debian package ${APT_PACKAGE}; found ${control[0] ?? "none"}.`)
+  }
+  if (control[1] !== APT_ARCHITECTURE) {
+    throw new Error(
+      `Expected Debian architecture ${APT_ARCHITECTURE}; found ${control[1] ?? "none"}.`,
+    )
+  }
+
+  const extractRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lp-apt-deb-"))
+  try {
+    execute("dpkg-deb", ["-x", debPath, extractRoot])
+    const sourcePath = path.join(extractRoot, `.${APT_SOURCE_PATH}`)
+    const keyringPath = path.join(extractRoot, `.${APT_KEYRING_PATH}`)
+    for (const embedded of [sourcePath, keyringPath]) {
+      if (!fs.existsSync(embedded)) {
+        throw new Error(
+          `The Debian package does not contain ${embedded.slice(extractRoot.length)}.`,
+        )
+      }
+    }
+    if (fs.readFileSync(sourcePath, "utf8") !== apt.source) {
+      throw new Error(
+        `The Debian package contains a different apt source than ${apt.source.trim()}.`,
+      )
+    }
+    if (!fs.readFileSync(keyringPath).equals(fs.readFileSync(apt.keyringPath))) {
+      throw new Error("The Debian package contains a different apt repository keyring.")
+    }
+    for (const embedded of [sourcePath, keyringPath]) {
+      if ((fs.statSync(embedded).mode & 0o444) !== 0o444) {
+        throw new Error(
+          `The Debian package makes ${embedded.slice(extractRoot.length)} unreadable to apt.`,
+        )
+      }
+    }
+  } finally {
+    fs.rmSync(extractRoot, { force: true, recursive: true })
+  }
+}
+
 async function main(): Promise<void> {
+  const buildArguments = process.argv.slice(2).filter((argument) => argument !== "--")
+  const unsupported = buildArguments.filter((argument) => argument !== "--apt")
+  if (unsupported.length) {
+    throw new Error(
+      `Unsupported argument: ${unsupported[0]}. Use --apt to embed the apt repository.`,
+    )
+  }
+  const aptEnabled = buildArguments.includes("--apt")
+
   if (process.platform !== "linux" || process.arch !== "x64") {
     throw new Error(
       `Linux x64 packages can only be produced on Linux x64, but this host is ${process.platform} ${process.arch}. ` +
@@ -239,6 +479,14 @@ async function main(): Promise<void> {
 
   const config = readConfig()
   verifyResourceInputs(config.resources)
+  let apt: AptMaterials | undefined
+  if (aptEnabled) {
+    stage = "Preparing the apt repository files"
+    apt = prepareAptFiles()
+    log(`Apt repository: ${apt.baseUrl}`)
+    log(`Apt signing key: ${apt.fingerprints.join(", ")}`)
+    stage = "Checking prerequisites"
+  }
   const packageName = `LitematicaPreview-${config.version}-x86_64`
   const targetDir = path.resolve(ROOT, process.env.CARGO_TARGET_DIR ?? "target")
   const releaseRoot = path.join(targetDir, TARGET, "release")
@@ -255,22 +503,21 @@ async function main(): Promise<void> {
   for (const stale of [debPath, appImagePath]) {
     fs.rmSync(stale, { force: true })
   }
-  const tauri = await run(
-    "pnpm",
-    [
-      "exec",
-      "tauri",
-      "build",
-      "--target",
-      TARGET,
-      "--ci",
-      "--bundles",
-      "deb,appimage",
-      "--",
-      "--locked",
-    ],
-    { ...process.env, CARGO_TARGET_DIR: targetDir },
-  )
+  const tauriArgs = [
+    "exec",
+    "tauri",
+    "build",
+    "--target",
+    TARGET,
+    "--ci",
+    "--bundles",
+    "deb,appimage",
+  ]
+  if (apt) {
+    tauriArgs.push("--config", apt.configPath)
+  }
+  tauriArgs.push("--", "--locked")
+  const tauri = await run("pnpm", tauriArgs, { ...process.env, CARGO_TARGET_DIR: targetDir })
   if (tauri !== 0) {
     throw new Error(
       "Tauri release build failed. Check the compiler and bundler output in the log; confirm libwebkit2gtk-4.1-dev, libgtk-3-dev, libxdo-dev, librsvg2-dev, patchelf, and the Rust target are installed.",
@@ -295,12 +542,19 @@ async function main(): Promise<void> {
   for (const generated of [debPath, appImagePath]) {
     requireFile(generated, "Generated package")
   }
+  if (apt) {
+    verifyAptPackage(debPath, apt)
+    log(`Verified the embedded apt source and keyring in ${path.basename(debPath)}`)
+  }
   log(`\nBuild completed in ${elapsed()}.`)
   for (const generated of [debPath, appImagePath]) {
     log(describePackage(generated))
   }
   log(`Build log: ${logPath}`)
   log(`Install the Debian package: sudo apt install ./${path.basename(debPath)}`)
+  if (apt) {
+    log(`The Debian package enrolls ${apt.baseUrl}; later releases arrive through apt upgrade.`)
+  }
   log(
     `Run the AppImage: chmod +x ${path.basename(appImagePath)} && ./${path.basename(appImagePath)}`,
   )

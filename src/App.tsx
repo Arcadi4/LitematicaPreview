@@ -155,7 +155,11 @@ export default function App({ initialError }: { initialError?: string }) {
         onZoomOut={zoomOut}
       />
 
-      {notice && !stageActive && <NoticeBar notice={notice} onDismiss={() => setNotice(null)} />}
+      <NoticeBar
+        notice={stageActive ? null : notice}
+        onDismiss={() => setNotice(null)}
+        className="flex-none"
+      />
 
       <main
         className="relative flex-auto min-h-0 overflow-hidden"
@@ -179,11 +183,11 @@ export default function App({ initialError }: { initialError?: string }) {
         />
 
         {/* Floating keeps the stage size, and with it the camera projection, unchanged. */}
-        {notice && stageActive && (
-          <div className="absolute inset-x-0 top-0 z-10">
-            <NoticeBar notice={notice} onDismiss={() => setNotice(null)} />
-          </div>
-        )}
+        <NoticeBar
+          notice={stageActive ? notice : null}
+          onDismiss={() => setNotice(null)}
+          className="absolute inset-x-0 top-0 z-10"
+        />
 
         {dragging && <DropOverlay />}
       </main>

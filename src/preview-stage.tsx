@@ -8,7 +8,7 @@ import {
 } from "react"
 import { Button, ProgressBar } from "@fluentui/react-components"
 import { fileName, numbers, type Loaded, type Loading, type ViewportCommand } from "./app-model"
-import { FlyMotion, requestPointerLock } from "./fly-controls"
+import { FlyMotion, capturePointer, requestPointerLock } from "./fly-controls"
 
 export interface PreviewStageProps {
   flyMode: boolean
@@ -106,7 +106,7 @@ export function PreviewStage({
       x: event.clientX,
       y: event.clientY,
     }
-    event.currentTarget.setPointerCapture(event.pointerId)
+    capturePointer(event.currentTarget, event.pointerId)
     if (flyMode && document.pointerLockElement !== event.currentTarget)
       requestPointerLock(event.currentTarget)
     event.preventDefault()

@@ -111,6 +111,11 @@ export function requestPointerLock(element: HTMLElement | null): void {
   }
 }
 
+/** Skips capture under a pointer lock: `setPointerCapture` then throws `InvalidStateError`, and the lock already confines the pointer. */
+export function capturePointer(element: Element, pointerId: number): void {
+  if (document.pointerLockElement === null) element.setPointerCapture(pointerId)
+}
+
 export function releasePointerLock(): void {
   if (document.pointerLockElement) document.exitPointerLock()
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { afterEach, beforeEach, test, vi } from "vite-plus/test"
 import {
   FlyMotion,
+  capturePointer,
   flyDirection,
   flySeconds,
   isFlyKey,
@@ -36,6 +37,25 @@ function flyMotion(clock: { now: number }) {
   )
   return { motion, moves }
 }
+
+test("pointer capture is skipped while the document holds a pointer lock", () => {
+  const lock = { pointerLockElement: null as Element | null }
+  vi.stubGlobal("document", lock)
+  const captured: number[] = []
+  const element = {
+    setPointerCapture(pointerId: number) {
+      if (lock.pointerLockElement !== null)
+        throw new DOMException("Failed to execute 'setPointerCapture'", "InvalidStateError")
+      captured.push(pointerId)
+    },
+  } as unknown as Element
+
+  capturePointer(element, 1)
+  lock.pointerLockElement = element
+  capturePointer(element, 2)
+
+  assert.deepEqual(captured, [1])
+})
 
 test("fly keys map to camera-relative axes with inverses cancelling", () => {
   assert.deepEqual(flyDirection(new Set()), { forward: 0, right: 0, up: 0 })

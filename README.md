@@ -137,6 +137,8 @@ pnpm run build:win
 
 Release builds must be signed. Set `LITEMATICA_WINDOWS_SIGN_PARAMS` for `signtool` arguments or `LITEMATICA_WINDOWS_AZURE_SIGN_FILE` for Azure Artifact Signing metadata. Local unsigned test builds only: `pnpm run build:win -- --allow-unsigned`.
 
+CI accepts `LITEMATICA_WINDOWS_SIGN_PARAMS`, or `LITEMATICA_WINDOWS_AZURE_SIGN_METADATA` with `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_CLIENT_SECRET` as GitHub Actions secrets. Supply the signing provider's certificate or Azure Artifact Signing configuration before a release.
+
 Build outputs are written to `artifacts/`: `*-setup.exe`, `*-portable.zip`, and a `velopack/` directory holding `releases.win.json` plus the full (and optional delta) `.nupkg` files for `https://update.tanh.moe/litematica-preview/windows/`. The runnable staging directory remains `x86_64/`.
 Cargo output uses the workspace `target/` directory by default; set `CARGO_TARGET_DIR` to use another directory. The release workflow shares this directory and the Windows MSVC target between tests and packaging.
 The Cargo package keeps `LitematicaPreview` as `default-run` so Tauri can select the application alongside the `pressure` binary. Run the pressure tool explicitly with `pnpm run pressure:host -- ...`.

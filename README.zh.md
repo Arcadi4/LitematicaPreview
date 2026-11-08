@@ -134,6 +134,8 @@ pnpm run build:win
 
 发布构建必须签名。设置 `LITEMATICA_WINDOWS_SIGN_PARAMS` 提供 `signtool` 参数，或设置 `LITEMATICA_WINDOWS_AZURE_SIGN_FILE` 提供 Azure Artifact Signing 元数据。仅限本地未签名测试构建：`pnpm run build:win -- --allow-unsigned`。
 
+CI 使用 GitHub Actions secrets 中的 `LITEMATICA_WINDOWS_SIGN_PARAMS`，或 `LITEMATICA_WINDOWS_AZURE_SIGN_METADATA` 以及 `AZURE_CLIENT_ID`、`AZURE_TENANT_ID`、`AZURE_CLIENT_SECRET`。发布前请配置签名服务所需的证书或 Azure Artifact Signing 信息。
+
 构建产物写入 `artifacts/`：`*-setup.exe`、`*-portable.zip`，以及 `velopack/` 目录中的 `releases.win.json` 与完整（可选增量）`.nupkg` 文件，用于 `https://update.tanh.moe/litematica-preview/windows/`。可直接运行的暂存目录仍为 `x86_64/`。
 Cargo 默认使用工作区的 `target/` 目录；可通过 `CARGO_TARGET_DIR` 指定其他目录。发布工作流在测试与打包时共用此目录及 Windows MSVC 目标平台。
 Cargo 包通过 `default-run` 指定 `LitematicaPreview`，确保同时存在 `pressure` 可执行程序时 Tauri 仍能选中主程序。压力工具需通过 `pnpm run pressure:host -- ...` 显式运行。

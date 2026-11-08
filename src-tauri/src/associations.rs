@@ -25,6 +25,11 @@ pub fn unregister() -> Result<(), String> {
     platform::unregister()
 }
 
+/// Reports whether this executable owns the per-user association registration.
+pub fn registered() -> bool {
+    platform::registered()
+}
+
 #[cfg(windows)]
 mod platform {
     use std::{borrow::Cow, io, ptr};
@@ -221,6 +226,19 @@ mod platform {
         Ok(())
     }
 
+    pub fn registered() -> bool {
+        let Ok(executable) = executable() else {
+            return false;
+        };
+        let expected = format!("\"{executable}\" \"%1\"");
+        let user = RegKey::predef(HKEY_CURRENT_USER);
+        value(&user, &format!(r"{PROG_KEY}\shell\open\command"), "")
+            .is_ok_and(|owner| owner.is_some_and(|owner| owner.eq_ignore_ascii_case(&expected)))
+            && value(&user, REGISTERED_APPLICATIONS, APPLICATION_NAME).is_ok_and(|path| {
+                path.is_some_and(|path| path.eq_ignore_ascii_case(CAPABILITIES_KEY))
+            })
+    }
+
     pub fn unregister() -> Result<(), String> {
         let expected = format!("\"{}\" \"%1\"", executable()?);
         let user = RegKey::predef(HKEY_CURRENT_USER);
@@ -288,6 +306,10 @@ mod platform {
 
     pub fn unregister() -> Result<(), String> {
         Err("File associations are only supported on Windows.".to_string())
+    }
+
+    pub fn registered() -> bool {
+        false
     }
 
     pub fn open_settings() -> Result<(), String> {

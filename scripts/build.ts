@@ -1,5 +1,6 @@
-// Builds the Windows x64 release artifacts: an NSIS setup executable and a
-// portable ZIP. Run it through the package script: `pnpm run build:win`.
+// Builds the Windows x64 release artifacts with Velopack: a one-click setup
+// executable, a portable ZIP, and the update feed uploaded to R2. Run it
+// through the package script: `pnpm run build:win`.
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process"
 import fs from "node:fs"
@@ -7,13 +8,14 @@ import path from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
 
-import { zipSync } from "fflate"
-
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const TARGET = "x86_64-pc-windows-msvc"
 const TAURI_ROOT = path.join(ROOT, "src-tauri")
 const ARTIFACTS_ROOT = path.join(ROOT, "artifacts")
 const LOGS_ROOT = path.join(ARTIFACTS_ROOT, "logs")
+const VELOPACK_ROOT = path.join(ARTIFACTS_ROOT, "velopack")
+const PACK_ID = "LitematicaPreview"
+const CHANNEL = "win"
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
 const REQUIRED_FILES = [
   "LitematicaPreview.exe",
@@ -26,11 +28,17 @@ const MISSING_TOOL: Record<string, string> = {
   pnpm: "pnpm is not on PATH. Install Node.js 24, run: npm install --global pnpm@12.5.1, then open a new terminal.",
   cargo:
     "cargo is not on PATH. Install Rust from https://rustup.rs, reopen the terminal, then run: rustup target add x86_64-pc-windows-msvc.",
+  vpk: "vpk is not on PATH. Install the .NET 10 SDK, then run: dotnet tool install --global vpk --version 1.2.161, and open a new terminal.",
 }
 
 interface TauriConfig {
   version: string
   bundle: { resources: Record<string, string> }
+}
+
+interface Signing {
+  args: string[]
+  describe: string
 }
 
 let logPath = ""
@@ -226,19 +234,77 @@ function stageResources(resources: Record<string, string>, portableRoot: string)
   }
 }
 
-function collectArchiveEntries(root: string, current = root): Record<string, Uint8Array> {
-  const entries: Record<string, Uint8Array> = {}
-  for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-    const full = path.join(current, entry.name)
-    if (entry.isDirectory()) {
-      Object.assign(entries, collectArchiveEntries(root, full))
-    } else if (entry.isFile()) {
-      entries[path.relative(root, full).split(path.sep).join("/")] = new Uint8Array(
-        fs.readFileSync(full),
-      )
+function seedPreviousReleases(): void {
+  const previous = process.env.VELOPACK_PREVIOUS_RELEASES?.trim()
+  if (!previous) {
+    return
+  }
+  if (!fs.existsSync(previous) || !fs.statSync(previous).isDirectory()) {
+    throw new Error(`VELOPACK_PREVIOUS_RELEASES is not a directory: ${previous}`)
+  }
+  for (const entry of fs.readdirSync(previous, { withFileTypes: true })) {
+    if (entry.isFile()) {
+      fs.copyFileSync(path.join(previous, entry.name), path.join(VELOPACK_ROOT, entry.name))
     }
   }
-  return entries
+  log(`Copied previous release assets from ${previous} for delta generation.`)
+}
+
+function requiredSigning(): Signing | null {
+  const params = process.env.LITEMATICA_WINDOWS_SIGN_PARAMS?.trim()
+  const azure = process.env.LITEMATICA_WINDOWS_AZURE_SIGN_FILE?.trim()
+  if (params && azure) {
+    throw new Error(
+      "Set only one of LITEMATICA_WINDOWS_SIGN_PARAMS and LITEMATICA_WINDOWS_AZURE_SIGN_FILE.",
+    )
+  }
+  if (params) {
+    return { args: ["--signParams", params], describe: "signtool parameters" }
+  }
+  if (azure) {
+    requireFile(azure, "Azure Artifact Signing metadata")
+    return {
+      args: ["--azureTrustedSignFile", azure],
+      describe: "Azure Artifact Signing",
+    }
+  }
+  const allowed =
+    process.env.LITEMATICA_ALLOW_UNSIGNED === "1" || process.argv.includes("--allow-unsigned")
+  if (allowed) {
+    return null
+  }
+  throw new Error(
+    "Windows packages must be code-signed before Velopack distributes Setup.exe and Update.exe. " +
+      "Set LITEMATICA_WINDOWS_SIGN_PARAMS or LITEMATICA_WINDOWS_AZURE_SIGN_FILE. " +
+      "For a local unsigned test build only, pass --allow-unsigned or set LITEMATICA_ALLOW_UNSIGNED=1.",
+  )
+}
+
+function verifySignature(target: string): void {
+  const script = [
+    `$signature = Get-AuthenticodeSignature -LiteralPath '${target.replaceAll("'", "''")}'`,
+    "if ($signature.Status -ne 'Valid') { Write-Error \"Unsigned package: $($signature.Status)\"; exit 1 }",
+  ].join("; ")
+  const result = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    encoding: "utf8",
+    windowsHide: true,
+  })
+  if (result.error || result.status !== 0) {
+    throw new Error(
+      `The package is not validly signed: ${target}\n${result.stderr.trim() || result.error?.message || ""}`,
+    )
+  }
+}
+
+function findPackaged(directory: string, suffix: string, describe: string): string {
+  const matches = fs
+    .readdirSync(directory)
+    .filter((name) => name.endsWith(suffix))
+    .map((name) => path.join(directory, name))
+  if (matches.length !== 1) {
+    throw new Error(`Expected one ${describe} in ${directory}; found ${matches.length}.`)
+  }
+  return matches[0]
 }
 
 function describePackage(target: string): string {
@@ -265,11 +331,11 @@ async function main(): Promise<void> {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-")
   logPath = path.join(LOGS_ROOT, `build-${stamp}.log`)
   logStream = fs.createWriteStream(logPath, { flags: "a" })
-  log("Litematica Preview - Windows x64 release build")
+  log("Litematica Preview - Windows x64 Velopack release build")
   log(`Build log: ${logPath}`)
 
   stage = "Checking prerequisites"
-  log(`\n[1/5] ${stage}`)
+  log(`\n[1/6] ${stage}`)
   if (process.platform !== "win32") {
     throw new Error(
       `Windows x64 packages can only be produced on Windows, but this host is ${process.platform}. ` +
@@ -280,14 +346,20 @@ async function main(): Promise<void> {
   log(`Node.js ${process.version}`)
   log(`pnpm ${capture("pnpm", ["--version"])}`)
   log(capture("cargo", ["--version"]))
+  log(capture("vpk", ["--version"]))
   log(`Requires Visual Studio C++ Build Tools, Windows SDK, and: rustup target add ${TARGET}`)
+  const signing = requiredSigning()
+  if (signing) {
+    log(`Code signing: ${signing.describe}`)
+  } else {
+    logError("WARNING: building unsigned packages. SmartScreen and antivirus will flag them.")
+  }
 
   const config = readConfig()
   const packageName = `LitematicaPreview-${config.version}-x86_64`
   const portableRoot = path.join(ARTIFACTS_ROOT, "x86_64")
   const targetDir = path.resolve(process.env.CARGO_TARGET_DIR ?? path.join(ROOT, "target"))
   const releaseRoot = path.join(targetDir, TARGET, "release")
-  const installerRoot = path.join(releaseRoot, "bundle", "nsis")
   const setupPath = path.join(ARTIFACTS_ROOT, `${packageName}-setup.exe`)
   const portableZip = path.join(ARTIFACTS_ROOT, `${packageName}-portable.zip`)
   assertPortableIsUnlocked(portableRoot)
@@ -302,15 +374,15 @@ async function main(): Promise<void> {
     env.RUSTFLAGS = `${rustflags} -C target-feature=+crt-static`.trim()
   }
 
-  stage = "Building the application and NSIS setup"
-  log(`\n[2/5] ${stage}`)
-  fs.rmSync(installerRoot, { force: true, recursive: true })
+  stage = "Building the application"
+  log(`\n[2/6] ${stage}`)
   for (const stale of [setupPath, portableZip]) {
     fs.rmSync(stale, { force: true })
   }
+  fs.rmSync(VELOPACK_ROOT, { force: true, recursive: true })
   const tauri = await run(
     "pnpm",
-    ["exec", "tauri", "build", "--target", TARGET, "--ci", "--bundles", "nsis", "--", "--locked"],
+    ["exec", "tauri", "build", "--target", TARGET, "--ci", "--no-bundle", "--", "--locked"],
     env,
   )
   if (tauri !== 0) {
@@ -319,51 +391,91 @@ async function main(): Promise<void> {
     )
   }
 
-  stage = "Staging the portable application and setup"
-  log(`\n[3/5] ${stage}`)
+  stage = "Staging the application for Velopack"
+  log(`\n[3/6] ${stage}`)
   const executable = path.join(releaseRoot, "LitematicaPreview.exe")
   if (!fs.existsSync(executable)) {
     throw new Error(`The release executable is missing: ${executable}`)
   }
-  const setups = fs.existsSync(installerRoot)
-    ? fs
-        .readdirSync(installerRoot)
-        .filter((name) => name.endsWith("-setup.exe"))
-        .map((name) => path.join(installerRoot, name))
-    : []
-  if (setups.length !== 1) {
-    throw new Error(
-      `Expected one fresh x64 NSIS setup in ${installerRoot}; found ${setups.length}.`,
-    )
-  }
   fs.rmSync(portableRoot, { force: true, recursive: true })
   fs.mkdirSync(portableRoot, { recursive: true })
-  fs.copyFileSync(executable, path.join(portableRoot, path.basename(executable)))
+  fs.copyFileSync(executable, path.join(portableRoot, "LitematicaPreview.exe"))
   stageResources(config.bundle.resources, portableRoot)
-  fs.copyFileSync(setups[0], setupPath)
-
-  stage = "Creating the portable ZIP"
-  log(`\n[4/5] ${stage}`)
   for (const file of REQUIRED_FILES) {
-    requireFile(path.join(portableRoot, file), "Required portable file")
+    requireFile(path.join(portableRoot, file), "Required package file")
   }
   for (const directory of REQUIRED_DIRECTORIES) {
     const required = path.join(portableRoot, directory)
     if (!fs.existsSync(required) || !fs.statSync(required).isDirectory()) {
-      throw new Error(`Required portable directory is missing: ${required}`)
+      throw new Error(`Required package directory is missing: ${required}`)
     }
     if (
       !fs
         .readdirSync(required, { recursive: true, withFileTypes: true })
         .some((entry) => entry.isFile())
     ) {
-      throw new Error(`Required portable directory is empty: ${required}`)
+      throw new Error(`Required package directory is empty: ${required}`)
     }
   }
-  fs.writeFileSync(portableZip, Buffer.from(zipSync(collectArchiveEntries(portableRoot))))
+
+  stage = "Packing the Velopack setup, portable ZIP, and update feed"
+  log(`\n[4/6] ${stage}`)
+  fs.mkdirSync(VELOPACK_ROOT, { recursive: true })
+  seedPreviousReleases()
+  const packed = await run(
+    "vpk",
+    [
+      "pack",
+      "--packId",
+      PACK_ID,
+      "--packVersion",
+      config.version,
+      "--packDir",
+      portableRoot,
+      "--mainExe",
+      "LitematicaPreview.exe",
+      "--packTitle",
+      "Litematica Preview",
+      "--packAuthors",
+      "Arcadi4",
+      "--icon",
+      path.join(ROOT, "Assets", "app.ico"),
+      "--channel",
+      CHANNEL,
+      "--framework",
+      "webview2",
+      "--outputDir",
+      VELOPACK_ROOT,
+      ...(signing?.args ?? []),
+    ],
+    env,
+  )
+  if (packed !== 0) {
+    throw new Error(
+      "Velopack packing failed. Confirm vpk is 1.2.161 and the .NET 10 SDK is installed.",
+    )
+  }
 
   stage = "Verifying the generated packages"
-  log(`\n[5/5] ${stage}`)
+  log(`\n[5/6] ${stage}`)
+  const setup = findPackaged(VELOPACK_ROOT, "-Setup.exe", "Velopack setup executable")
+  const portable = findPackaged(VELOPACK_ROOT, "-Portable.zip", "Velopack portable archive")
+  const feed = path.join(VELOPACK_ROOT, `releases.${CHANNEL}.json`)
+  requireFile(feed, "Velopack release feed")
+  const fullPackage = fs
+    .readdirSync(VELOPACK_ROOT)
+    .find((name) => name.includes(`-${config.version}-`) && name.endsWith("-full.nupkg"))
+  if (!fullPackage) {
+    throw new Error(`Velopack did not produce a full update package for ${config.version}.`)
+  }
+  if (signing) {
+    verifySignature(setup)
+  }
+  fs.copyFileSync(setup, setupPath)
+  fs.copyFileSync(portable, portableZip)
+
+  stage = "Reporting the release artifacts"
+  log(`\n[6/6] ${stage}`)
   for (const generated of [setupPath, portableZip]) {
     requireFile(generated, "Generated package")
   }
@@ -371,15 +483,19 @@ async function main(): Promise<void> {
   for (const generated of [setupPath, portableZip]) {
     log(describePackage(generated))
   }
+  log(`Velopack feed: ${VELOPACK_ROOT}`)
+  log(`Upload the feed files to the R2 prefix litematica-preview/windows/.`)
   log(`Portable staging: ${portableRoot}`)
   log(`Build log: ${logPath}`)
-  log("Install: run the setup executable. File associations are optional in setup.")
+  log("Install: run the setup executable; it installs per-user and updates automatically.")
   log(
-    "Portable: extract the ZIP, then run LitematicaPreview.exe; keep Assets, Demos, and Licenses beside it.",
+    "File associations are not part of the one-click setup; the app prompts after the first launch.",
   )
-  log(
-    "Portable copies require Microsoft Edge WebView2 Evergreen Runtime. Setup installs it if needed.",
-  )
+  if (!signing) {
+    logError(
+      "WARNING: these packages are unsigned. Do not publish them; configure code signing first.",
+    )
+  }
   if (interactive) {
     try {
       if (/^y(es)?$/i.test((await prompt("Open the artifacts folder? [y/N] ")).trim())) {

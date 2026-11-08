@@ -14,6 +14,7 @@ use litematica_preview::preview_process;
 use litematica_preview::render::context::NativeRenderer;
 use litematica_preview::resources::{self, Demo, Resources};
 use litematica_preview::texture_packs::{TexturePackLibrary, TexturePackState};
+use litematica_preview::update::{self, UpdateState};
 use litematica_preview_core::resource_pack_overlay;
 use nucleation::meshing::ResourcePackSource;
 use serde::{Deserialize, Serialize};
@@ -96,6 +97,10 @@ struct Bootstrap {
     request_id: u64,
     max_worker_threads: u8,
     file_associations_supported: bool,
+    file_associations_registered: bool,
+    updates_supported: bool,
+    update_pending_version: Option<String>,
+    legacy_install: Option<String>,
     viewport_error: Option<String>,
     texture_packs: TexturePackState,
     texture_pack_error: Option<String>,
@@ -105,11 +110,18 @@ struct Bootstrap {
 async fn bootstrap(
     state: State<'_, HostState>,
     viewer: State<'_, ViewerState>,
+    updater: State<'_, UpdateState>,
 ) -> Result<Bootstrap, String> {
     let resources = state.resources.clone();
     let texture_packs = state.texture_packs.clone();
     let initial_path = state.initial_path.clone();
     let request_id = state.worker.begin_session();
+    let updates_supported = updater.supported();
+    let update_pending_version = updater.pending_version();
+    let legacy_install = updates_supported
+        .then(update::legacy_install_path)
+        .flatten();
+    let file_associations_registered = associations::registered();
     let viewport_error = startup_viewport_error(&viewer);
     tauri::async_runtime::spawn_blocking(move || {
         let (texture_packs, texture_pack_error) = match texture_packs.state() {
@@ -124,6 +136,10 @@ async fn bootstrap(
             request_id,
             max_worker_threads: litematica_preview_core::max_worker_threads(),
             file_associations_supported: cfg!(windows),
+            file_associations_registered,
+            updates_supported,
+            update_pending_version,
+            legacy_install,
             viewport_error,
             texture_packs,
             texture_pack_error,
@@ -891,6 +907,7 @@ fn run() -> Result<(), String> {
                 initial_path,
             });
             app.manage(create_viewer(app.handle()));
+            app.manage(UpdateState::new());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -933,6 +950,9 @@ fn run() -> Result<(), String> {
             viewport_input,
             register_associations,
             unregister_associations,
+            update::check_for_update,
+            update::download_update,
+            update::install_update,
             show_licenses,
             import_texture_packs,
             set_texture_pack_enabled,
@@ -946,6 +966,22 @@ fn run() -> Result<(), String> {
 fn main() {
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
+    // Host commands run before Tauri and must not consume or apply a pending update.
+    // Velopack's own install and update hooks are other argument values.
+    let host_command = matches!(
+        first.as_deref().and_then(std::ffi::OsStr::to_str),
+        Some(
+            "--preview-worker"
+                | "--register"
+                | "--unregister"
+                | "--default-apps"
+                | "--register-extensions"
+        )
+    );
+    if !host_command {
+        update::run_startup_hooks();
+    }
+
     if first.as_deref() == Some(std::ffi::OsStr::new("--preview-worker")) {
         let result = match (args.next(), args.next()) {
             (Some(port), None) => preview_process::run(&port),

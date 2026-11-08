@@ -1,3 +1,9 @@
+# Unreleased
+
+## Features
+
+- Add Velopack updates for signed Windows installers and portable packages, and an optional signed apt repository for Debian packages.
+
 # v0.6.2
 
 ## Fixes

@@ -103,7 +103,14 @@ jobs:
 
       # `tauri build` runs `beforeBuildCommand` (`pnpm run build`), so the
       # frontend is type-checked and bundled before the Rust release build.
-      - name: Build Debian package and AppImage
+      - name: Build signed-repository Debian package and AppImage
+        if: needs.check.outputs.prerelease != 'true'
+        env:
+          LP_APT_BASE_URL: ${{ vars.APT_BASE_URL }}
+          LP_APT_PUBLIC_KEY: ${{ secrets.APT_GPG_PUBLIC_KEY }}
+        run: pnpm exec tsx scripts/build-linux.ts --apt
+      - name: Build prerelease Debian package and AppImage
+        if: needs.check.outputs.prerelease == 'true'
         run: pnpm exec tsx scripts/build-linux.ts
 
       - uses: actions/upload-artifact@v7
@@ -147,7 +154,25 @@ jobs:
 
       # `tauri build` runs `beforeBuildCommand` (`pnpm run build`), so the
       # frontend is type-checked and bundled before the Rust release build.
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+      - name: Install Velopack
+        run: dotnet tool install --global vpk --version 1.2.161
+      - name: Prepare Azure signing metadata
+        shell: pwsh
+        env:
+          SIGNING_METADATA: ${{ secrets.LITEMATICA_WINDOWS_AZURE_SIGN_METADATA }}
+        run: |
+          if ($env:SIGNING_METADATA) {
+            $path = Join-Path $env:RUNNER_TEMP "azure-signing.json"
+            [System.IO.File]::WriteAllText($path, $env:SIGNING_METADATA)
+            "LITEMATICA_WINDOWS_AZURE_SIGN_FILE=$path" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
       - name: Build setup and portable packages
+        env:
+          LITEMATICA_WINDOWS_SIGN_PARAMS: ${{ secrets.LITEMATICA_WINDOWS_SIGN_PARAMS }}
         run: pnpm exec tsx scripts/build.ts
 
       - uses: actions/upload-artifact@v7
@@ -156,6 +181,7 @@ jobs:
           path: |
             artifacts/*-setup.exe
             artifacts/*-portable.zip
+            artifacts/velopack/
           if-no-files-found: error
 
       - name: Upload build logs
@@ -196,6 +222,47 @@ jobs:
           name: LitematicaPreview-${{ github.ref_name }}-checksums
           path: artifacts/SHA256SUMS.txt
           if-no-files-found: error
+
+      - name: Install Cloudflare CLI
+        run: npm install --global cf@1.0.0-beta.28
+      - name: Install apt repository tools
+        if: needs.check.outputs.prerelease != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends reprepro gnupg
+      - name: Publish apt repository
+        if: needs.check.outputs.prerelease != 'true'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          LP_APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+          LP_APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+          LP_APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
+          LP_APT_BASE_URL: ${{ vars.APT_BASE_URL }}
+          LP_APT_R2_BUCKET: apt-repo
+        run: |
+          version="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
+          pnpm exec tsx scripts/apt-publish.ts --deb "artifacts/LitematicaPreview-${version}-x86_64.deb"
+      - name: Publish downloads and update feed
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          IS_PRERELEASE: ${{ needs.check.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in artifacts/*-setup.exe artifacts/*-portable.zip artifacts/*.AppImage artifacts/SHA256SUMS.txt; do
+            test -f "$file"
+            cf r2 objects put "litematica-preview/releases/${GITHUB_REF_NAME}/${file##*/}" --bucket-name apps-download --file "$file"
+          done
+          if [[ "$IS_PRERELEASE" != "true" ]]; then
+            for file in artifacts/velopack/*; do
+              test -f "$file"
+              [[ "${file##*/}" == "releases.win.json" ]] && continue
+              cf r2 objects put "litematica-preview/windows/${file##*/}" --bucket-name apps-download --file "$file"
+            done
+            cf r2 objects put "litematica-preview/windows/releases.win.json" --bucket-name apps-download --content-type application/json --file artifacts/velopack/releases.win.json
+          fi
 
       - name: Prepare release notes
         shell: bash

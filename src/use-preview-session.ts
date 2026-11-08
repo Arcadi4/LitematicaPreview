@@ -20,6 +20,9 @@ import {
   type PreviewLoaded,
   type PreviewProgress,
   type TexturePackState,
+  type UpdateProgress,
+  type UpdateRelease,
+  type UpdateStatus,
   type ViewportCommand,
   type ViewportFailed,
 } from "./app-model"
@@ -31,6 +34,7 @@ export interface PreviewSession {
   actionBusy: boolean
   bootstrap: Bootstrap | null
   busy: boolean
+  checkForUpdate: () => void
   copyImage: () => void
   dialog: DialogKind
   dialogOpen: boolean
@@ -62,6 +66,9 @@ export interface PreviewSession {
   texturePacks: TexturePackState
   toggleGrid: () => void
   toggleFly: () => void
+  update: UpdateStatus
+  downloadUpdate: () => void
+  installUpdate: () => void
   updatePreviewSettings: (patch: Partial<PreviewSettings>) => void
   viewportInput: (command: ViewportCommand) => void
   viewportRef: RefObject<HTMLDivElement | null>
@@ -100,6 +107,13 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const [actionBusy, setActionBusy] = useState(false)
   const [choosing, setChoosing] = useState(false)
   const [imageAction, setImageAction] = useState<PreviewImageAction | null>(null)
+  const [update, setUpdate] = useState<UpdateStatus>({
+    phase: "idle",
+    version: null,
+    notes: "",
+    percent: 0,
+    message: null,
+  })
   const viewportRef = useRef<HTMLDivElement>(null)
   const bootstrapRef = useRef<Bootstrap | null>(null)
   const viewportErrorRef = useRef<string | null>(null)
@@ -250,6 +264,68 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     viewportInput({ kind: "grid", visible })
   }, [viewportInput])
 
+  const checkForUpdate = useCallback(async () => {
+    if (!bootstrapRef.current?.updatesSupported || bootstrapRef.current.updatePendingVersion) return
+    setUpdate((previous) => ({ ...previous, phase: "checking", message: null }))
+    try {
+      const release = await invoke<UpdateRelease | null>("check_for_update")
+      setUpdate((previous) => {
+        if (!release) {
+          return previous.phase === "ready"
+            ? previous
+            : { phase: "current", version: null, notes: "", percent: 0, message: null }
+        }
+        if (previous.phase === "ready" && previous.version === release.version) return previous
+        return {
+          phase: "available",
+          version: release.version,
+          notes: release.notes,
+          percent: 0,
+          message: null,
+        }
+      })
+    } catch (error) {
+      setUpdate({
+        phase: "error",
+        version: null,
+        notes: "",
+        percent: 0,
+        message: errorMessage(error),
+      })
+    }
+  }, [])
+
+  const downloadUpdate = useCallback(async () => {
+    if (update.phase !== "available") return
+    setUpdate({ ...update, phase: "downloading", percent: 0, message: null })
+    try {
+      await invoke("download_update")
+      setUpdate((previous) =>
+        previous.phase === "downloading" ? { ...previous, phase: "ready", percent: 100 } : previous,
+      )
+    } catch (error) {
+      setUpdate((previous) => ({
+        ...previous,
+        phase: "error",
+        message: errorMessage(error),
+      }))
+    }
+  }, [update])
+
+  const installUpdate = useCallback(async () => {
+    if (update.phase !== "ready") return
+    setUpdate({ ...update, phase: "applying", message: null })
+    try {
+      await invoke("install_update")
+    } catch (error) {
+      setUpdate((previous) => ({
+        ...previous,
+        phase: "error",
+        message: errorMessage(error),
+      }))
+    }
+  }, [update])
+
   // Raw errors open recovery; durable viewport failures stay in the notice bar.
   useEffect(() => {
     if (rawNotice?.intent !== "error") return
@@ -364,6 +440,20 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       }).then(track),
       listen<ViewportFailed>("viewport-failed", ({ payload }) => {
         if (active) failViewport(payload.message)
+      }).then(track),
+      listen<UpdateProgress>("update-progress", ({ payload }) => {
+        if (
+          !active ||
+          !Number.isSafeInteger(payload.percent) ||
+          payload.percent < 0 ||
+          payload.percent > 100
+        )
+          return
+        setUpdate((previous) =>
+          previous.phase === "downloading"
+            ? { ...previous, percent: Math.max(previous.percent, payload.percent) }
+            : previous,
+        )
       }).then(track),
     ]).then(() => {})
     listenersReady.current = ready
@@ -672,10 +762,32 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         generation.current = Math.max(generation.current, result.requestId)
         bootstrapRef.current = result
         setBootstrap(result)
+        if (result.updatePendingVersion)
+          setUpdate({
+            phase: "ready",
+            version: result.updatePendingVersion,
+            notes: "",
+            percent: 100,
+            message: null,
+          })
+        if (result.legacyInstall)
+          setStatusNotice({
+            intent: "info",
+            message: `An older Litematica Preview installation is still present at ${result.legacyInstall}. Uninstall it from Windows Settings, but do not select its option to delete app data; both versions share that data.`,
+          })
+        if (result.updatesSupported && !result.updatePendingVersion) void checkForUpdate()
         texturePacksRef.current = result.texturePacks
         setTexturePacks(result.texturePacks)
-        if (result.texturePackError)
-          setStatusNotice({ intent: "info", message: result.texturePackError })
+        const texturePackError = result.texturePackError
+        if (texturePackError)
+          setStatusNotice((previous) =>
+            previous
+              ? {
+                  intent: "info",
+                  message: `${previous.message}\n\n${texturePackError}`,
+                }
+              : { intent: "info", message: texturePackError },
+          )
         // Bootstrap replays viewport failures that occurred before listeners were installed.
         if (result.viewportError) failViewport(result.viewportError)
         viewportQueue.push({ kind: "grid", visible: gridRef.current })
@@ -747,7 +859,15 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       unlisten?.()
       pendingRequest.current = null
     }
-  }, [cancelNative, failViewport, isCurrent, loadPath, updatePreviewSettings, viewportQueue])
+  }, [
+    cancelNative,
+    checkForUpdate,
+    failViewport,
+    isCurrent,
+    loadPath,
+    updatePreviewSettings,
+    viewportQueue,
+  ])
 
   // One session-long subscription reads the active request id from a ref.
   useEffect(() => {
@@ -811,9 +931,11 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     actionBusy,
     bootstrap,
     busy: !bootstrap || choosing,
+    checkForUpdate: () => void checkForUpdate(),
     copyImage,
     dialog,
     dialogOpen,
+    downloadUpdate: () => void downloadUpdate(),
     dragging,
     errorDetails,
     exitFly: stopFlying,
@@ -824,6 +946,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     home,
     imageAction,
     importTexturePacks: requestImportTexturePacks,
+    installUpdate: () => void installUpdate(),
     loadDemo,
     loaded,
     loading,
@@ -842,6 +965,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     texturePacks,
     toggleGrid,
     toggleFly,
+    update,
     updatePreviewSettings,
     viewportInput,
     viewportRef,

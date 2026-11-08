@@ -36,18 +36,29 @@ Download the latest release from the [release page](https://github.com/Arcadi4/L
 
 ### Windows x64
 
-- **Installer (`LitematicaPreview-<version>-x86_64-setup.exe`)**: Installs per-user without administrator privileges and registers selected file associations.
-- **Portable (`LitematicaPreview-<version>-x86_64-portable.zip`)**: Extract the archive and run `LitematicaPreview.exe`. Keep `Assets`, `Demos`, and `Licenses` next to the executable.
+- **Installer (`LitematicaPreview-<version>-x86_64-setup.exe`)**: A one-click Velopack installer. It installs per-user without administrator privileges, starts the app, and installs later releases from the update controls in the About dialog.
+- **Portable (`LitematicaPreview-<version>-x86_64-portable.zip`)**: Extract the archive and run `LitematicaPreview.exe` in the extracted directory. Keep its contents together; portable copies also update in place.
 
-Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (pre-installed on Windows 11 and current Windows 10 builds; the setup installer downloads it automatically if missing).
+Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (pre-installed on Windows 11 and current Windows 10 builds; the setup installer installs it automatically if missing).
+
+The one-click setup has no file-association page. Litematica Preview asks once after the first launch; choose **Register file types** to add it to Open with without changing your Windows defaults.
 
 > [!NOTE]
-> To change file associations after installation, open the top-right menu and select **Set as default app…** or **Remove file associations**. Portable copies can also register or unregister from PowerShell with `.\LitematicaPreview.exe --register` and `.\LitematicaPreview.exe --unregister`.
+> To change file associations later, open the top-right menu and select **Set as default app…** or **Remove file associations**. From the extracted portable directory, use `.\current\LitematicaPreview.exe --register` or `.\current\LitematicaPreview.exe --unregister` in PowerShell.
 
 ### Linux x64
 
 - **Debian package (`LitematicaPreview-<version>-x86_64.deb`)**: Install with `sudo apt install ./LitematicaPreview-<version>-x86_64.deb`.
 - **AppImage (`LitematicaPreview-<version>-x86_64.AppImage`)**: Make it executable with `chmod +x`, then run it.
+
+Debian packages built with the apt repository enroll the signed source `/etc/apt/sources.list.d/litematica-preview.list` and the keyring `/usr/share/keyrings/litematica-preview-archive-keyring.gpg`. Install such a package once and later releases arrive through apt:
+
+```bash
+sudo apt update
+sudo apt install litematica-preview
+```
+
+The repository serves the newest version only. Its pool keeps earlier package files so clients still holding an older index can finish updating. Removing the package also removes the source and keyring, so no separate cleanup is needed.
 
 Linux releases target Ubuntu 22.04 and require GTK 3, WebKitGTK 4.1, a Vulkan loader and compatible driver, and `xdg-utils`. The Debian package declares these dependencies. Without a Vulkan device the application opens but cannot preview schematics. Older distributions are not guaranteed to run binaries built on the release runner.
 
@@ -114,6 +125,7 @@ before committing.
 - Node.js 24 LTS and pnpm
 - Rust stable toolchain (`x86_64-pc-windows-msvc`)
 - Visual Studio C++ Build Tools (Desktop development with C++, x64 MSVC, Windows SDK)
+- .NET 10 SDK with Velopack: `dotnet tool install --global vpk --version 1.2.161`
 
 ```bash
 git clone https://github.com/Arcadi4/LitematicaPreview.git
@@ -123,7 +135,9 @@ rustup target add x86_64-pc-windows-msvc
 pnpm run build:win
 ```
 
-Build outputs (`*-setup.exe`, `*-portable.zip`, and the runnable `x86_64/` directory) are written to `artifacts/`.
+Release builds must be signed. Set `LITEMATICA_WINDOWS_SIGN_PARAMS` for `signtool` arguments or `LITEMATICA_WINDOWS_AZURE_SIGN_FILE` for Azure Artifact Signing metadata. Local unsigned test builds only: `pnpm run build:win -- --allow-unsigned`.
+
+Build outputs are written to `artifacts/`: `*-setup.exe`, `*-portable.zip`, and a `velopack/` directory holding `releases.win.json` plus the full (and optional delta) `.nupkg` files for `https://update.tanh.moe/litematica-preview/windows/`. The runnable staging directory remains `x86_64/`.
 Cargo output uses the workspace `target/` directory by default; set `CARGO_TARGET_DIR` to use another directory. The release workflow shares this directory and the Windows MSVC target between tests and packaging.
 The Cargo package keeps `LitematicaPreview` as `default-run` so Tauri can select the application alongside the `pressure` binary. Run the pressure tool explicitly with `pnpm run pressure:host -- ...`.
 
@@ -145,6 +159,32 @@ pnpm run build:linux
 ```
 
 The Tauri build prepares the frontend and bundles resources. Versioned `.deb` and `.AppImage` files are written to `artifacts/`; `CARGO_TARGET_DIR` overrides the Cargo output directory. Run `pnpm run checksums --linux` for Linux packages, or pass both `--win --linux` for a combined release.
+
+#### Publish the apt repository
+
+A release build enrolls the signed apt repository in the Debian package with `--apt`:
+
+```bash
+LP_APT_BASE_URL=https://apt.example.com \
+LP_APT_PUBLIC_KEY_FILE=archive-public-key.asc \
+pnpm run build:linux:apt
+```
+
+`build:linux:apt` fails when the base URL or a usable public key is missing, and it verifies that the generated `.deb` contains the rendered source and keyring bytes. The base URL must use `https`; it is the public custom domain that serves the bucket.
+
+Publishing needs `reprepro`, GnuPG, the Cloudflare CLI (`cf`), and the released `.deb`:
+
+```bash
+pnpm run apt:publish -- --deb artifacts/LitematicaPreview-<version>-x86_64.deb
+```
+
+The publisher rebuilds a latest-only `stable`/`main`/`amd64` reprepro distribution, verifies `InRelease` with the keyring embedded in the package, then writes the pool package, the `Packages` indexes and their immutable by-hash copies, `Release` and `Release.gpg`, and `InRelease` last. It retains old pool and by-hash objects for clients using an earlier index. Publishing fails when private key material is missing, the package does not embed the expected source and key, the embedded key does not match the signer, or an upload fails.
+
+Environment: `LP_APT_BASE_URL`, `LP_APT_GPG_PRIVATE_KEY` (or `LP_APT_GPG_PRIVATE_KEY_FILE`), optional `LP_APT_GPG_PASSPHRASE` and `LP_APT_GPG_FINGERPRINT`, `LP_APT_R2_BUCKET`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and optional `LP_APT_R2_JURISDICTION`. `--dry-run` builds, signs, and verifies the repository without uploading. `--no-verify` skips fetching the published `InRelease` and `Packages` back through the custom domain; keep verification enabled in CI.
+
+Configure the custom domain so `dists/stable/InRelease` and the `Packages` indexes are not cached, or bypass the cache for `dists/`. A stale cached index can leave clients requesting objects from a different repository generation.
+
+Rotating the signing key needs a transitional release: apt verifies `InRelease` with the keyring installed by the client's current Debian package, so ship the new key before signing with it.
 
 Before treating a Linux release as stable, verify live composition on both X11 and Wayland: first load, Home/cancellation, resize/maximize/fullscreen, HiDPI, pointer and keyboard input, native dialog modality, minimize/restore, and translucent overlays during prolonged rendering. Container or offscreen checks do not establish physical-desktop or driver compatibility.
 

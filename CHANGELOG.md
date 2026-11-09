@@ -2,13 +2,14 @@
 
 ## Features
 
+- Copy or export the current preview to the clipboard or as PNG or JPEG from the toolbar ([#41](https://github.com/Arcadi4/LitematicaPreview/issues/41)).
 - Add spectator flight with WASD movement, vertical controls, and mouse look while retaining orbit mode ([#30](https://github.com/Arcadi4/LitematicaPreview/issues/30)).
 
 # v0.5.2
 
 ## Fixes
 
-- Blend every translucent surface once. Back faces are now culled for all transparent parts, not only greedy ones, so water and ice stop washing out behind stained glass and enclosed water stays visible at grazing angles ([#4a](https://github.com/Arcadi4/LitematicaPreview/issues/40)).
+- Blend every translucent surface once. Back faces are now culled for all transparent parts, not only greedy ones, so water and ice stop washing out behind stained glass and enclosed water stays visible at grazing angles ([#40](https://github.com/Arcadi4/LitematicaPreview/issues/40)).
 
 # v0.5.1
 

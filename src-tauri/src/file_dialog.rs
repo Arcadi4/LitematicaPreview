@@ -83,3 +83,77 @@ pub fn pick_files(
             .transpose()
     }
 }
+
+/// Must run on a blocking worker, not the native event-loop thread.
+pub fn save_file(
+    app: &AppHandle,
+    window: WebviewWindow,
+    title: &'static str,
+    filters: &'static [(&'static str, &'static [&'static str])],
+    default_name: &'static str,
+) -> Result<Option<PathBuf>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        app.run_on_main_thread(move || {
+            let parent = match window.gtk_window() {
+                Ok(parent) => parent,
+                Err(error) => {
+                    let _ = sender.send(Err(format!("Unable to parent the save dialog: {error}")));
+                    return;
+                }
+            };
+            let dialog = gtk::FileChooserNative::builder()
+                .title(title)
+                .transient_for(&parent)
+                .modal(true)
+                .action(gtk::FileChooserAction::Save)
+                .build();
+            dialog.set_current_name(default_name);
+            dialog.set_do_overwrite_confirmation(true);
+            for (name, extensions) in filters {
+                let filter = gtk::FileFilter::new();
+                filter.set_name(Some(*name));
+                for extension in *extensions {
+                    filter.add_pattern(&format!("*.{extension}"));
+                }
+                dialog.add_filter(filter);
+            }
+            gtk::glib::MainContext::default().spawn_local(async move {
+                let response = dialog.run_future().await;
+                let file = (response == gtk::ResponseType::Accept)
+                    .then(|| dialog.filename())
+                    .flatten();
+                dialog.destroy();
+                let _ = sender.send(Ok(file));
+            });
+        })
+        .map_err(|error| format!("Unable to show the save dialog: {error}"))?;
+        receiver
+            .recv()
+            .map_err(|error| format!("The save dialog closed unexpectedly: {error}"))?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        use tauri_plugin_dialog::DialogExt;
+
+        let mut dialog = app
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .set_title(title)
+            .set_file_name(default_name);
+        for (name, extensions) in filters {
+            dialog = dialog.add_filter(*name, *extensions);
+        }
+        dialog
+            .blocking_save_file()
+            .map(|file| {
+                file.into_path()
+                    .map_err(|error| format!("Unable to use the selected file: {error}"))
+            })
+            .transpose()
+    }
+}

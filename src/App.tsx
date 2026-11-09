@@ -22,13 +22,16 @@ export default function App({ initialError }: { initialError?: string }) {
     bootstrap,
     busy,
     choosing,
+    copyImage,
     dialog,
     dialogOpen,
     dragging,
     errorDetails,
+    exportImage,
     fit,
     grid,
     home,
+    imageAction,
     importTexturePacks,
     loadDemo,
     loaded,
@@ -139,8 +142,11 @@ export default function App({ initialError }: { initialError?: string }) {
       <PreviewToolbar
         busy={busy}
         grid={grid}
+        imageAction={imageAction}
         loaded={loaded}
         loading={loading}
+        onCopyImage={copyImage}
+        onExportImage={exportImage}
         onFit={fit}
         onHome={home}
         onOpenFile={openFile}
@@ -149,7 +155,11 @@ export default function App({ initialError }: { initialError?: string }) {
         onZoomOut={zoomOut}
       />
 
-      {notice && <NoticeBar notice={notice} onDismiss={() => setNotice(null)} />}
+      <NoticeBar
+        notice={stageActive ? null : notice}
+        onDismiss={() => setNotice(null)}
+        className="flex-none"
+      />
 
       <main
         className="relative flex-auto min-h-0 overflow-hidden"
@@ -170,6 +180,13 @@ export default function App({ initialError }: { initialError?: string }) {
           onViewportInput={viewportInput}
           stageActive={stageActive}
           viewportRef={viewportRef}
+        />
+
+        {/* Floating keeps the stage size, and with it the camera projection, unchanged. */}
+        <NoticeBar
+          notice={stageActive ? notice : null}
+          onDismiss={() => setNotice(null)}
+          className="absolute inset-x-0 top-0 z-10"
         />
 
         {dragging && <DropOverlay />}

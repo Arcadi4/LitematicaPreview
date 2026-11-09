@@ -23,6 +23,7 @@ If you are on macOS, check out the sister project [LitematicaQL](https://github.
 ## Highlights
 
 - Preview eight Minecraft schematic and structure formats offline in textured 3D with native wgpu (Direct3D 12 on Windows, Vulkan on Linux) and Nucleation.
+- Copy the current preview to the clipboard, or use the adjacent dropdown to save it as PNG or JPEG. The file extension selects the format.
 - Import Minecraft Java resource packs, keep them locally, and arrange an enabled stack by priority. Missing resources fall back to lower packs, then bundled vanilla.
 - Load large `.litematic` files with compact decoding and chunked previews that avoid retaining the full decompressed file.
 - Generate and upload geometry concurrently with 32-block chunks by default, configurable chunk sizes and worker counts, progressive rendering, and cancellable loading progress.

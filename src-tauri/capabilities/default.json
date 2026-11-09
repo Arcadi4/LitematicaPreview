@@ -14,6 +14,8 @@
     "allow-start-preview",
     "allow-preview-memory",
     "allow-cancel-load",
+    "allow-copy-preview-image",
+    "allow-export-preview-image",
     "allow-viewport-input",
     "allow-register-associations",
     "allow-unregister-associations",

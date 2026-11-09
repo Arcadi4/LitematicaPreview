@@ -87955,6 +87955,14 @@ Apache License
    See the License for the specific language governing permissions and
    limitations under the License.
 
+zune-core 0.5.3 (MIT OR Apache-2.0 OR Zlib)
+https://github.com/etemesi254/zune-image
+See zune-image-LICENSE.txt in this directory.
+
+zune-jpeg 0.5.15 (MIT OR Apache-2.0 OR Zlib)
+https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg
+See zune-image-LICENSE.txt in this directory.
+
 slotmap 1.1.1 (Zlib)
 https://github.com/orlp/slotmap
 LICENSE

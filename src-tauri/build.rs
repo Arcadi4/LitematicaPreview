@@ -49,6 +49,8 @@ fn main() {
                 "start_preview",
                 "preview_memory",
                 "cancel_load",
+                "copy_preview_image",
+                "export_preview_image",
                 "viewport_input",
                 "register_associations",
                 "unregister_associations",

@@ -82,6 +82,12 @@ function ControlsHelp() {
           </dd>
         </div>
         <div>
+          <dt>Fly</dt>
+          <dd>
+            <kbd>V</kbd> toggles spectator fly: WASD, Space / Ctrl, mouse look
+          </dd>
+        </div>
+        <div>
           <dt>Open schematic</dt>
           <dd>
             <kbd>Ctrl</kbd> + <kbd>O</kbd>

@@ -23,6 +23,7 @@ import {
   type ViewportFailed,
 } from "./app-model"
 import { savedPreviewSettings, type PreviewSettings } from "./preview-settings"
+import { releasePointerLock, requestPointerLock } from "./fly-controls"
 import { ViewportInputQueue } from "./viewport-input"
 
 export interface PreviewSession {
@@ -35,8 +36,10 @@ export interface PreviewSession {
   dialogOpen: boolean
   dragging: boolean
   errorDetails: string
+  exitFly: () => void
   exportImage: () => void
   fit: () => void
+  flyMode: boolean
   grid: boolean
   home: () => void
   imageAction: PreviewImageAction | null
@@ -58,6 +61,7 @@ export interface PreviewSession {
   texturePackBusy: boolean
   texturePacks: TexturePackState
   toggleGrid: () => void
+  toggleFly: () => void
   updatePreviewSettings: (patch: Partial<PreviewSettings>) => void
   viewportInput: (command: ViewportCommand) => void
   viewportRef: RefObject<HTMLDivElement | null>
@@ -87,6 +91,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const [viewportError, setViewportError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const [grid, setGrid] = useState(true)
+  const [flyMode, setFlyMode] = useState(false)
   const [previewSettings, setPreviewSettings] = useState<PreviewSettings>(savedPreviewSettings)
   const [texturePacks, setTexturePacks] = useState<TexturePackState>({
     packs: [],
@@ -99,6 +104,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const bootstrapRef = useRef<Bootstrap | null>(null)
   const viewportErrorRef = useRef<string | null>(null)
   const gridRef = useRef(true)
+  const flyModeRef = useRef(false)
   const previewSettingsRef = useRef(previewSettings)
   const texturePacksRef = useRef(texturePacks)
   const texturePackBusyRef = useRef(false)
@@ -193,14 +199,33 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     [viewportQueue],
   )
 
+  const stopFlying = useCallback(() => {
+    flyModeRef.current = false
+    setFlyMode(false)
+    releasePointerLock()
+  }, [])
+
+  const toggleFly = useCallback(() => {
+    if (flyModeRef.current) {
+      stopFlying()
+      return
+    }
+    if (!loaded) return
+    flyModeRef.current = true
+    setFlyMode(true)
+    viewportRef.current?.focus({ preventScroll: true })
+    requestPointerLock(viewportRef.current)
+  }, [loaded, stopFlying])
+
   const clearView = useCallback(() => {
+    stopFlying()
     viewportQueue.resetScene()
     pendingRequest.current = null
     setLoaded(null)
     setLoading(null)
     setPreviewMemory(null)
     setDragging(false)
-  }, [viewportQueue])
+  }, [stopFlying, viewportQueue])
 
   const home = useCallback(() => {
     const id = ++generation.current
@@ -211,7 +236,10 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     updateTitle(null, id)
   }, [cancelNative, clearView, updateTitle])
 
-  const fit = useCallback(() => viewportInput({ kind: "fit" }), [viewportInput])
+  const fit = useCallback(() => {
+    stopFlying()
+    viewportInput({ kind: "fit" })
+  }, [stopFlying, viewportInput])
   const zoomIn = useCallback(() => viewportInput({ kind: "zoom", factor: 0.88 }), [viewportInput])
   const zoomOut = useCallback(() => viewportInput({ kind: "zoom", factor: 1.12 }), [viewportInput])
 
@@ -225,6 +253,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   // Raw errors open recovery; durable viewport failures stay in the notice bar.
   useEffect(() => {
     if (rawNotice?.intent !== "error") return
+    stopFlying()
     setErrorDetails(rawNotice.message)
     setDialog("error")
     setDialogOpen(true)
@@ -241,7 +270,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     }
     void invoke("cancel_load", { requestId: id }).catch(recoveryFailed)
     void getCurrentWindow().setTitle(appName).catch(recoveryFailed)
-  }, [rawNotice, isCurrent])
+  }, [rawNotice, isCurrent, stopFlying])
 
   // Route uncaught failures through the notice bar.
   useEffect(() => {
@@ -420,6 +449,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
 
   const importTexturePacks = useCallback(async () => {
     if (!beginTexturePackAction()) return
+    stopFlying()
     try {
       const result = await invoke<ImportedTexturePacks | null>("import_texture_packs")
       if (!mounted.current || !result) return
@@ -443,7 +473,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     } finally {
       endTexturePackAction()
     }
-  }, [beginTexturePackAction, endTexturePackAction, reloadActivePreview])
+  }, [beginTexturePackAction, endTexturePackAction, reloadActivePreview, stopFlying])
 
   const setTexturePackEnabled = useCallback(
     async (id: string, enabled: boolean) => {
@@ -528,6 +558,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
 
   const chooseFile = useCallback(async () => {
     if (!mounted.current || !bootstrapRef.current || choosingRef.current) return
+    stopFlying()
     choosingRef.current = true
     setChoosing(true)
     const id = generation.current
@@ -541,7 +572,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
       choosingRef.current = false
       if (mounted.current) setChoosing(false)
     }
-  }, [isCurrent, loadPath])
+  }, [isCurrent, loadPath, stopFlying])
 
   const loadDemo = useCallback(
     (path: string) => {
@@ -754,10 +785,22 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     [nativeAction],
   )
 
-  const openDialog = useCallback((next: DialogKind) => {
-    setDialog(next)
-    setDialogOpen(true)
-  }, [])
+  const openDialog = useCallback(
+    (next: DialogKind) => {
+      stopFlying()
+      setDialog(next)
+      setDialogOpen(true)
+    },
+    [stopFlying],
+  )
+
+  const requestDialogOpen = useCallback(
+    (open: boolean) => {
+      if (open) stopFlying()
+      setDialogOpen(open)
+    },
+    [stopFlying],
+  )
 
   const clearNotice = useCallback((_notice: Notice | null) => {
     setRawNotice(null)
@@ -774,8 +817,10 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     dialogOpen,
     dragging,
     errorDetails,
+    exitFly: stopFlying,
     exportImage,
     fit,
+    flyMode,
     grid,
     home,
     imageAction,
@@ -790,13 +835,14 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     previewMemory,
     previewSettings,
     removeTexturePack: requestRemoveTexturePack,
-    setDialogOpen,
+    setDialogOpen: requestDialogOpen,
     setNotice: clearNotice,
     setTexturePackEnabled: requestSetTexturePackEnabled,
     setTexturePackOrder: requestSetTexturePackOrder,
     texturePackBusy,
     texturePacks,
     toggleGrid,
+    toggleFly,
     updatePreviewSettings,
     viewportInput,
     viewportRef,

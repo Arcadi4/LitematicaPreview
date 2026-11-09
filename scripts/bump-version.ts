@@ -265,15 +265,27 @@ function bumpVersions(level: string = "patch", options: BumpOptions = {}): boole
   }
 
   if (porcelain.length > 0) {
-    if (dryRun) {
-      console.warn("[dry-run] Warning: workspace has uncommitted changes:")
-      const shortStatus = execSync("git status --short", { cwd: ROOT_DIR, encoding: "utf8" })
-      process.stderr.write(shortStatus)
-    } else {
-      bumpError("workspace has uncommitted changes:")
-      const shortStatus = execSync("git status --short", { cwd: ROOT_DIR, encoding: "utf8" })
-      process.stderr.write(shortStatus)
-      return false
+    // Allow CHANGELOG.md modifications - filter them out of the check
+    const filteredPorcelain = porcelain
+      .split("\\n")
+      .filter(
+        (line) =>
+          !line.includes("CHANGELOG.md") &&
+          !line.includes("changelog.md") &&
+          !line.toLowerCase().includes("changelog"),
+      )
+      .join("\\n")
+    if (filteredPorcelain.length > 0) {
+      if (dryRun) {
+        console.warn("[dry-run] Warning: workspace has uncommitted changes:")
+        const shortStatus = execSync("git status --short", { cwd: ROOT_DIR, encoding: "utf8" })
+        process.stderr.write(shortStatus)
+      } else {
+        bumpError("workspace has uncommitted changes:")
+        const shortStatus = execSync("git status --short", { cwd: ROOT_DIR, encoding: "utf8" })
+        process.stderr.write(shortStatus)
+        return false
+      }
     }
   }
 
@@ -334,6 +346,21 @@ function bumpVersions(level: string = "patch", options: BumpOptions = {}): boole
     }
   }
   expectedFiles.sort()
+  expectedFiles.push("CHANGELOG.md")
+  expectedFiles.sort()
+
+  if (dryRun) {
+    console.log(`[dry-run] Would bump version: ${current} -> ${next}`)
+    for (const v of versions) {
+      console.log(`[dry-run]   ${v.id}: ${v.version || current} -> ${next}`)
+    }
+    console.log(`[dry-run] Would stage: ${expectedFiles.join(" ")}`)
+    console.log(`[dry-run] Would commit: chore: bump to v${next}`)
+    console.log(`[dry-run] Would tag: v${next}`)
+    console.log(`bumped ${current} to ${next}, committed and tagged v${next}`)
+    console.log(`publish with: git push origin main v${next}`)
+    return true
+  }
 
   if (dryRun) {
     console.log(`[dry-run] Would bump version: ${current} -> ${next}`)
@@ -419,6 +446,7 @@ Locations updated:
   - src-tauri/tauri.conf.json
   - src-tauri/Cargo.toml
   - Cargo.lock (litematica-preview)
+  - CHANGELOG.md
 `)
 }
 

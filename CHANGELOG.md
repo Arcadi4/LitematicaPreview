@@ -1,3 +1,9 @@
+# v0.6.2
+
+## Fixes
+
+- Ignore viewport inputs when there are no available rendering devices.
+
 # v0.6.1
 
 ## Fixes

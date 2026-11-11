@@ -50,6 +50,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
+          # The release packages restore this cache. A run triggered by a tag
+          # cannot restore a cache saved by another tag, so the default branch
+          # is the only place the optimized dependency graph can stay warm.
+          shared-key: release-windows
           # A breach keeps the job red; the release artifacts are still worth
           # restoring on the next run.
           cache-on-failure: true

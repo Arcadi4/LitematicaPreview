@@ -168,6 +168,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
+          shared-key: release-windows
 
       # `tauri build` runs `beforeBuildCommand` (`pnpm run build`), so the
       # frontend is type-checked and bundled before the Rust release build.

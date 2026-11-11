@@ -428,6 +428,14 @@ fn cancel_load(
     state: State<'_, HostState>,
     viewer: State<'_, ViewerState>,
 ) -> Result<(), String> {
+    if !viewer
+        .renderer
+        .lock()
+        .map(|renderer| renderer.is_some())
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
     state.worker.cancel(request_id, || {
         with_renderer(&viewer.renderer, |renderer| {
             renderer.cancel_load();
@@ -494,9 +502,9 @@ fn viewport_input(
     state: State<'_, ViewerState>,
 ) -> Result<(), String> {
     let mut locked = lock_renderer(&state.renderer)?;
-    let renderer = locked
-        .as_mut()
-        .ok_or_else(|| VIEWPORT_UNAVAILABLE.to_string())?;
+    let Some(renderer) = locked.as_mut() else {
+        return Ok(());
+    };
     for command in commands {
         if !matches!(
             command,

@@ -1,3 +1,11 @@
+# v0.6.1
+
+## Fixes
+
+- Lazy load previewer to prevent start up failure on GPU-less machines.
+- Rename release files.
+- Lower compatibility requirement to Ubuntu 22.04.
+
 # v0.6.0
 
 ## Features

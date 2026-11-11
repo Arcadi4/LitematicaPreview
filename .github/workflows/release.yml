@@ -16,7 +16,7 @@ permissions:
 jobs:
   # `check` gates the whole workflow. When the GitHub release already exists
   # (a re-run of a published tag) it reports `exists=true` and every downstream
-  # job skips, so no tests or builds run against an already-published release.
+  # job skips, so no build runs against an already-published release.
   check:
     name: Validate release tag
     runs-on: ubuntu-latest
@@ -69,63 +69,13 @@ jobs:
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
-  # The frontend checks run on Ubuntu, where pnpm and the Vite+ toolchain are
-  # much faster than on the Windows image, in parallel with the Rust tests.
-  frontend:
-    name: Test frontend
-    runs-on: ubuntu-latest
-    needs: check
-    if: needs.check.outputs.exists != 'true'
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 12
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Check frontend formatting
-        run: pnpm run format:check
-      - name: Lint frontend
-        run: pnpm run lint
-      - name: Test frontend
-        run: pnpm run test
-
-  host:
-    name: Test the Tauri host
-    runs-on: windows-latest
-    needs: check
-    if: needs.check.outputs.exists != 'true'
-    env:
-      RUSTFLAGS: "-C target-feature=+crt-static"
-      CARGO_TARGET_DIR: target
-      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: . -> target
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-      # `tauri::generate_context!` embeds `frontendDist` at compile time, so the
-      # directory must exist even though the host tests never load the frontend.
-      - name: Create placeholder frontend directory
-        shell: bash
-        run: mkdir -p dist
-      - name: Test host
-        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
-
+  # The two package builds are independent and run in parallel; publishing only
+  # collects their artifacts. Lint, format, and tests gate the default branch in
+  # `ci.yml`, so a tag does not repeat them.
   linux:
     name: Build Linux packages
     runs-on: ubuntu-22.04 # build on the oldest LTS for maximum compatibility
-    needs: [check, frontend, host]
+    needs: check
     if: needs.check.outputs.exists != 'true'
     env:
       CARGO_TARGET_DIR: target
@@ -164,6 +114,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
+          shared-key: release-linux
+          save-if: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -189,18 +141,17 @@ jobs:
           path: artifacts/logs/
           if-no-files-found: ignore
 
-  publish:
-    name: Build and publish release
+  windows:
+    name: Build Windows packages
     runs-on: windows-latest
-    needs: [check, frontend, host, linux]
+    needs: check
+    if: needs.check.outputs.exists != 'true'
     env:
       RUSTFLAGS: "-C target-feature=+crt-static"
       CARGO_TARGET_DIR: target
       CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - uses: pnpm/action-setup@v6
         with:
@@ -219,20 +170,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
+          shared-key: release-windows
+          save-if: false
 
       # `tauri build` runs `beforeBuildCommand` (`pnpm run build`), so the
       # frontend is type-checked and bundled before the Rust release build.
       - name: Build setup and portable packages
         run: pnpm exec tsx scripts/build.ts
-
-      - name: Download Linux packages
-        uses: actions/download-artifact@v8
-        with:
-          name: LitematicaPreview-${{ github.ref_name }}-linux
-          path: artifacts
-
-      - name: Generate package checksums
-        run: pnpm run checksums --win --linux
 
       - uses: actions/upload-artifact@v7
         with:
@@ -240,16 +184,55 @@ jobs:
           path: |
             artifacts/*-setup.exe
             artifacts/*-portable.zip
-            artifacts/SHA256SUMS.txt
           if-no-files-found: error
 
       - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: LitematicaPreview-${{ github.ref_name }}-build-logs
+          name: LitematicaPreview-${{ github.ref_name }}-windows-build-logs
           path: artifacts/logs/
           if-no-files-found: ignore
+
+  publish:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: [check, linux, windows]
+    if: needs.check.outputs.exists != 'true'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download Linux packages
+        uses: actions/download-artifact@v8
+        with:
+          name: LitematicaPreview-${{ github.ref_name }}-linux
+          path: artifacts
+
+      - name: Download Windows packages
+        uses: actions/download-artifact@v8
+        with:
+          name: LitematicaPreview-${{ github.ref_name }}-windows
+          path: artifacts
+
+      - name: Generate package checksums
+        run: pnpm run checksums --win --linux
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: LitematicaPreview-${{ github.ref_name }}-checksums
+          path: artifacts/SHA256SUMS.txt
+          if-no-files-found: error
 
       - name: Prepare release notes
         shell: bash

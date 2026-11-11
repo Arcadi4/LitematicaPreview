@@ -47,7 +47,7 @@ Litematica Preview 是一款适用于 Windows 和 Linux 桌面的 Minecraft 投�
 - **Debian 安装包 (`LitematicaPreview-<version>-linux-x64.deb`)**：通过 `sudo apt install ./LitematicaPreview-<version>-linux-x64.deb` 安装。
 - **AppImage (`LitematicaPreview-<version>-linux-x64.AppImage`)**：通过 `chmod +x` 添加执行权限后运行。
 
-Linux 发布包以 Ubuntu 24.04 为目标，需要 GTK 3、WebKitGTK 4.1、Vulkan 加载器及兼容驱动，以及 `xdg-utils`。Debian 安装包会声明这些依赖。不保证较旧的发行版能够运行由发布工作流构建的二进制文件。
+Linux 发布包以 Ubuntu 22.04 为目标，需要 GTK 3、WebKitGTK 4.1、Vulkan 加载器及兼容驱动，以及 `xdg-utils`。Debian 安装包会声明这些依赖。不保证较旧的发行版能够运行由发布工作流构建的二进制文件。
 
 Debian 安装包会安装桌面入口与 MIME 声明，但不会修改默认应用。请通过桌面文件管理器选择文件关联；Linux 下不显示 Windows 的文件关联注册命令。
 
@@ -126,7 +126,7 @@ Cargo 包通过 `default-run` 指定 `LitematicaPreview`，确保同时存在 `p
 
 ### 构建 Linux 版本
 
-使用安装了 Node.js 24、pnpm 12 与 Rust 稳定版的 Linux x64 主机。在 Ubuntu 24.04 上安装原生构建依赖：
+使用安装了 Node.js 24、pnpm 12 与 Rust 稳定版的 Linux x64 主机。在 Ubuntu 22.04 上安装原生构建依赖：
 
 ```bash
 sudo apt-get update

@@ -124,7 +124,7 @@ jobs:
 
   linux:
     name: Build Linux packages
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04 # build on the oldest LTS for maximum compatibility
     needs: [check, frontend, host]
     if: needs.check.outputs.exists != 'true'
     env:
@@ -175,10 +175,10 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: LitematicaPreview-${{ github.ref_name }}-linux-x64
+          name: LitematicaPreview-${{ github.ref_name }}-x86_64
           path: |
-            artifacts/*-linux-x64.deb
-            artifacts/*-linux-x64.AppImage
+            artifacts/*-x86_64.deb
+            artifacts/*-x86_64.AppImage
           if-no-files-found: error
 
       - name: Upload build logs
@@ -228,7 +228,7 @@ jobs:
       - name: Download Linux packages
         uses: actions/download-artifact@v8
         with:
-          name: LitematicaPreview-${{ github.ref_name }}-linux-x64
+          name: LitematicaPreview-${{ github.ref_name }}-x86_64
           path: artifacts
 
       - name: Generate package checksums
@@ -295,10 +295,10 @@ jobs:
 
           ## Linux x64
 
-          - A Debian package (\`LitematicaPreview-<version>-linux-x64.deb\`): Install with \`sudo apt install ./LitematicaPreview-<version>-linux-x64.deb\`.
-          - An AppImage (\`LitematicaPreview-<version>-linux-x64.AppImage\`): Run \`chmod +x\` on the file, then launch it.
+          - A Debian package (\`LitematicaPreview-<version>-x86_64.deb\`): Install with \`sudo apt install ./LitematicaPreview-<version>-x86_64.deb\`.
+          - An AppImage (\`LitematicaPreview-<version>-x86_64.AppImage\`): Run \`chmod +x\` on the file, then launch it.
 
-          Linux releases target Ubuntu 24.04 and need GTK 3, WebKitGTK 4.1, Vulkan with a compatible driver, and xdg-utils.`
+          Linux releases target Ubuntu 22.04 and need GTK 3, WebKitGTK 4.1, Vulkan with a compatible driver, and xdg-utils.`
 
           writeFileSync(output, `${notes ? `${notes}\n\n` : ''}${install}\n`)
           NODE
@@ -314,8 +314,8 @@ jobs:
           version="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
           setup_file="artifacts/LitematicaPreview-${version}-win-x64-setup.exe"
           zip_file="artifacts/LitematicaPreview-${version}-win-x64-portable.zip"
-          deb_file="artifacts/LitematicaPreview-${version}-linux-x64.deb"
-          appimage_file="artifacts/LitematicaPreview-${version}-linux-x64.AppImage"
+          deb_file="artifacts/LitematicaPreview-${version}-x86_64.deb"
+          appimage_file="artifacts/LitematicaPreview-${version}-x86_64.AppImage"
           checksum_file="artifacts/SHA256SUMS.txt"
 
           if [[ ! -f "$setup_file" ]]; then

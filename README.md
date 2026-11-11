@@ -49,7 +49,7 @@ Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https:
 - **Debian package (`LitematicaPreview-<version>-linux-x64.deb`)**: Install with `sudo apt install ./LitematicaPreview-<version>-linux-x64.deb`.
 - **AppImage (`LitematicaPreview-<version>-linux-x64.AppImage`)**: Make it executable with `chmod +x`, then run it.
 
-Linux releases target Ubuntu 24.04 and require GTK 3, WebKitGTK 4.1, a Vulkan loader and compatible driver, and `xdg-utils`. The Debian package declares these dependencies. Older distributions are not guaranteed to run binaries built on the release runner.
+Linux releases target Ubuntu 22.04 and require GTK 3, WebKitGTK 4.1, a Vulkan loader and compatible driver, and `xdg-utils`. The Debian package declares these dependencies. Older distributions are not guaranteed to run binaries built on the release runner.
 
 The Debian package installs a desktop entry and MIME declarations without changing your default applications. Choose file associations through your desktop's file manager; the Windows registration commands are not shown on Linux.
 
@@ -129,7 +129,7 @@ The Cargo package keeps `LitematicaPreview` as `default-run` so Tauri can select
 
 ### Build Linux
 
-Use a Linux x64 host with Node.js 24, pnpm 12, and Rust stable. On Ubuntu 24.04, install the native build dependencies:
+Use a Linux x64 host with Node.js 24, pnpm 12, and Rust stable. On Ubuntu 22.04, install the native build dependencies:
 
 ```bash
 sudo apt-get update

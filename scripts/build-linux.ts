@@ -217,7 +217,7 @@ async function main(): Promise<void> {
   if (process.platform !== "linux" || process.arch !== "x64") {
     throw new Error(
       `Linux x64 packages can only be produced on Linux x64, but this host is ${process.platform} ${process.arch}. ` +
-        "Use Ubuntu 24.04 or another Debian-based distribution with GTK 3, WebKitGTK 4.1, and the Rust target.",
+        "Use Ubuntu 22.04 or another Debian-based distribution with GTK 3, WebKitGTK 4.1, and the Rust target.",
     )
   }
 

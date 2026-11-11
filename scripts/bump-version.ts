@@ -267,14 +267,14 @@ function bumpVersions(level: string = "patch", options: BumpOptions = {}): boole
   if (porcelain.length > 0) {
     // Allow CHANGELOG.md modifications - filter them out of the check
     const filteredPorcelain = porcelain
-      .split("\\n")
+      .split("\n")
       .filter(
         (line) =>
           !line.includes("CHANGELOG.md") &&
           !line.includes("changelog.md") &&
           !line.toLowerCase().includes("changelog"),
       )
-      .join("\\n")
+      .join("\n")
     if (filteredPorcelain.length > 0) {
       if (dryRun) {
         console.warn("[dry-run] Warning: workspace has uncommitted changes:")
@@ -346,21 +346,6 @@ function bumpVersions(level: string = "patch", options: BumpOptions = {}): boole
     }
   }
   expectedFiles.sort()
-  expectedFiles.push("CHANGELOG.md")
-  expectedFiles.sort()
-
-  if (dryRun) {
-    console.log(`[dry-run] Would bump version: ${current} -> ${next}`)
-    for (const v of versions) {
-      console.log(`[dry-run]   ${v.id}: ${v.version || current} -> ${next}`)
-    }
-    console.log(`[dry-run] Would stage: ${expectedFiles.join(" ")}`)
-    console.log(`[dry-run] Would commit: chore: bump to v${next}`)
-    console.log(`[dry-run] Would tag: v${next}`)
-    console.log(`bumped ${current} to ${next}, committed and tagged v${next}`)
-    console.log(`publish with: git push origin main v${next}`)
-    return true
-  }
 
   if (dryRun) {
     console.log(`[dry-run] Would bump version: ${current} -> ${next}`)
@@ -392,11 +377,12 @@ function bumpVersions(level: string = "patch", options: BumpOptions = {}): boole
     .filter(Boolean)
     .sort()
 
-  const matches =
-    changed.length === expectedFiles.length &&
-    changed.every((file, index) => file === expectedFiles[index])
+  const unexpected = changed.filter(
+    (file) => file !== "CHANGELOG.md" && !expectedFiles.includes(file),
+  )
+  const missing = expectedFiles.filter((file) => !changed.includes(file))
 
-  if (!matches) {
+  if (unexpected.length > 0 || missing.length > 0) {
     bumpError("refusing to commit changes beyond the version bump:")
     const shortStatus = execSync("git status --short", { cwd: ROOT_DIR, encoding: "utf8" })
     process.stderr.write(shortStatus)
@@ -404,7 +390,11 @@ function bumpVersions(level: string = "patch", options: BumpOptions = {}): boole
   }
 
   try {
-    execSync(`git add ${expectedFiles.map((f) => `"${f}"`).join(" ")}`, {
+    const filesToAdd = [
+      ...expectedFiles,
+      ...(fs.existsSync(path.join(ROOT_DIR, "CHANGELOG.md")) ? ["CHANGELOG.md"] : []),
+    ]
+    execSync(`git add ${filesToAdd.map((f) => `"${f}"`).join(" ")}`, {
       cwd: ROOT_DIR,
       stdio: "inherit",
     })
@@ -446,7 +436,8 @@ Locations updated:
   - src-tauri/tauri.conf.json
   - src-tauri/Cargo.toml
   - Cargo.lock (litematica-preview)
-  - CHANGELOG.md
+
+CHANGELOG.md may be edited ahead of the bump; it is committed alongside the version files when present, but never required.
 `)
 }
 

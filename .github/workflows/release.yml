@@ -122,6 +122,8 @@ jobs:
       - name: Test host
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
 
+  # The two package builds are independent and run in parallel; publishing only
+  # collects their artifacts.
   linux:
     name: Build Linux packages
     runs-on: ubuntu-22.04 # build on the oldest LTS for maximum compatibility
@@ -189,18 +191,17 @@ jobs:
           path: artifacts/logs/
           if-no-files-found: ignore
 
-  publish:
-    name: Build and publish release
+  windows:
+    name: Build Windows packages
     runs-on: windows-latest
-    needs: [check, frontend, host, linux]
+    needs: [check, frontend, host]
+    if: needs.check.outputs.exists != 'true'
     env:
       RUSTFLAGS: "-C target-feature=+crt-static"
       CARGO_TARGET_DIR: target
       CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - uses: pnpm/action-setup@v6
         with:
@@ -225,10 +226,51 @@ jobs:
       - name: Build setup and portable packages
         run: pnpm exec tsx scripts/build.ts
 
+      - uses: actions/upload-artifact@v7
+        with:
+          name: LitematicaPreview-${{ github.ref_name }}-windows
+          path: |
+            artifacts/*-setup.exe
+            artifacts/*-portable.zip
+          if-no-files-found: error
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: LitematicaPreview-${{ github.ref_name }}-windows-build-logs
+          path: artifacts/logs/
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: [check, frontend, host, linux, windows]
+    if: needs.check.outputs.exists != 'true'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
       - name: Download Linux packages
         uses: actions/download-artifact@v8
         with:
           name: LitematicaPreview-${{ github.ref_name }}-linux
+          path: artifacts
+
+      - name: Download Windows packages
+        uses: actions/download-artifact@v8
+        with:
+          name: LitematicaPreview-${{ github.ref_name }}-windows
           path: artifacts
 
       - name: Generate package checksums
@@ -236,20 +278,9 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: LitematicaPreview-${{ github.ref_name }}-windows
-          path: |
-            artifacts/*-setup.exe
-            artifacts/*-portable.zip
-            artifacts/SHA256SUMS.txt
+          name: LitematicaPreview-${{ github.ref_name }}-checksums
+          path: artifacts/SHA256SUMS.txt
           if-no-files-found: error
-
-      - name: Upload build logs
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: LitematicaPreview-${{ github.ref_name }}-build-logs
-          path: artifacts/logs/
-          if-no-files-found: ignore
 
       - name: Prepare release notes
         shell: bash

@@ -175,7 +175,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: LitematicaPreview-${{ github.ref_name }}-x86_64
+          name: LitematicaPreview-${{ github.ref_name }}-linux
           path: |
             artifacts/*-x86_64.deb
             artifacts/*-x86_64.AppImage
@@ -228,7 +228,7 @@ jobs:
       - name: Download Linux packages
         uses: actions/download-artifact@v8
         with:
-          name: LitematicaPreview-${{ github.ref_name }}-x86_64
+          name: LitematicaPreview-${{ github.ref_name }}-linux
           path: artifacts
 
       - name: Generate package checksums
@@ -236,7 +236,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: LitematicaPreview-${{ github.ref_name }}-win-x64
+          name: LitematicaPreview-${{ github.ref_name }}-windows
           path: |
             artifacts/*-setup.exe
             artifacts/*-portable.zip
@@ -290,8 +290,8 @@ jobs:
 
           ## Windows x64
 
-          - A one-click installer (\`LitematicaPreview-<version>-win-x64-setup.exe\`): Installs per-user without requiring administrator privileges.
-          - A portable .zip package (\`LitematicaPreview-<version>-win-x64-portable.zip\`): Download and extract the portable archive and run LitematicaPreview.exe.
+          - A one-click installer (\`LitematicaPreview-<version>-x86_64-setup.exe\`): Installs per-user without requiring administrator privileges.
+          - A portable .zip package (\`LitematicaPreview-<version>-x86_64-portable.zip\`): Download and extract the portable archive and run LitematicaPreview.exe.
 
           ## Linux x64
 
@@ -312,8 +312,8 @@ jobs:
           tag="$GITHUB_REF_NAME"
 
           version="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
-          setup_file="artifacts/LitematicaPreview-${version}-win-x64-setup.exe"
-          zip_file="artifacts/LitematicaPreview-${version}-win-x64-portable.zip"
+          setup_file="artifacts/LitematicaPreview-${version}-x86_64-setup.exe"
+          zip_file="artifacts/LitematicaPreview-${version}-x86_64-portable.zip"
           deb_file="artifacts/LitematicaPreview-${version}-x86_64.deb"
           appimage_file="artifacts/LitematicaPreview-${version}-x86_64.AppImage"
           checksum_file="artifacts/SHA256SUMS.txt"

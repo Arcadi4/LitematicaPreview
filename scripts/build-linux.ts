@@ -239,7 +239,7 @@ async function main(): Promise<void> {
 
   const config = readConfig()
   verifyResourceInputs(config.resources)
-  const packageName = `LitematicaPreview-${config.version}-linux-x64`
+  const packageName = `LitematicaPreview-${config.version}-x86_64`
   const targetDir = path.resolve(ROOT, process.env.CARGO_TARGET_DIR ?? "target")
   const releaseRoot = path.join(targetDir, TARGET, "release")
   const debRoot = path.join(releaseRoot, "bundle", "deb")

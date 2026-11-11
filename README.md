@@ -36,8 +36,8 @@ Download the latest release from the [release page](https://github.com/Arcadi4/L
 
 ### Windows x64
 
-- **Installer (`LitematicaPreview-<version>-win-x64-setup.exe`)**: Installs per-user without administrator privileges and registers selected file associations.
-- **Portable (`LitematicaPreview-<version>-win-x64-portable.zip`)**: Extract the archive and run `LitematicaPreview.exe`. Keep `Assets`, `Demos`, and `Licenses` next to the executable.
+- **Installer (`LitematicaPreview-<version>-x86_64-setup.exe`)**: Installs per-user without administrator privileges and registers selected file associations.
+- **Portable (`LitematicaPreview-<version>-x86_64-portable.zip`)**: Extract the archive and run `LitematicaPreview.exe`. Keep `Assets`, `Demos`, and `Licenses` next to the executable.
 
 Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (pre-installed on Windows 11 and current Windows 10 builds; the setup installer downloads it automatically if missing).
 
@@ -46,8 +46,8 @@ Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https:
 
 ### Linux x64
 
-- **Debian package (`LitematicaPreview-<version>-linux-x64.deb`)**: Install with `sudo apt install ./LitematicaPreview-<version>-linux-x64.deb`.
-- **AppImage (`LitematicaPreview-<version>-linux-x64.AppImage`)**: Make it executable with `chmod +x`, then run it.
+- **Debian package (`LitematicaPreview-<version>-x86_64.deb`)**: Install with `sudo apt install ./LitematicaPreview-<version>-x86_64.deb`.
+- **AppImage (`LitematicaPreview-<version>-x86_64.AppImage`)**: Make it executable with `chmod +x`, then run it.
 
 Linux releases target Ubuntu 22.04 and require GTK 3, WebKitGTK 4.1, a Vulkan loader and compatible driver, and `xdg-utils`. The Debian package declares these dependencies. Older distributions are not guaranteed to run binaries built on the release runner.
 
@@ -123,7 +123,7 @@ rustup target add x86_64-pc-windows-msvc
 pnpm run build:win
 ```
 
-Build outputs (`*-setup.exe`, `*-portable.zip`, and the runnable `win-x64/` directory) are written to `artifacts/`.
+Build outputs (`*-setup.exe`, `*-portable.zip`, and the runnable `x86_64/` directory) are written to `artifacts/`.
 Cargo output uses the workspace `target/` directory by default; set `CARGO_TARGET_DIR` to use another directory. The release workflow shares this directory and the Windows MSVC target between tests and packaging.
 The Cargo package keeps `LitematicaPreview` as `default-run` so Tauri can select the application alongside the `pressure` binary. Run the pressure tool explicitly with `pnpm run pressure:host -- ...`.
 

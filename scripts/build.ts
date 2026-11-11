@@ -282,8 +282,8 @@ async function main(): Promise<void> {
   log(`Requires Visual Studio C++ Build Tools, Windows SDK, and: rustup target add ${TARGET}`)
 
   const config = readConfig()
-  const packageName = `LitematicaPreview-${config.version}-win-x64`
-  const portableRoot = path.join(ARTIFACTS_ROOT, "win-x64")
+  const packageName = `LitematicaPreview-${config.version}-x86_64`
+  const portableRoot = path.join(ARTIFACTS_ROOT, "x86_64")
   const targetDir = path.resolve(process.env.CARGO_TARGET_DIR ?? path.join(ROOT, "target"))
   const releaseRoot = path.join(targetDir, TARGET, "release")
   const installerRoot = path.join(releaseRoot, "bundle", "nsis")

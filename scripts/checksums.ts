@@ -43,11 +43,11 @@ function platforms(): string[] {
 function artifactNames(version: string, selected: readonly string[]): string[] {
   const names: string[] = []
   if (selected.includes("--win")) {
-    const packageName = `LitematicaPreview-${version}-win-x64`
+    const packageName = `LitematicaPreview-${version}-x86_64`
     names.push(`${packageName}-setup.exe`, `${packageName}-portable.zip`)
   }
   if (selected.includes("--linux")) {
-    const packageName = `LitematicaPreview-${version}-linux-x64`
+    const packageName = `LitematicaPreview-${version}-x86_64`
     names.push(`${packageName}.deb`, `${packageName}.AppImage`)
   }
   return names

@@ -34,8 +34,8 @@ Litematica Preview 是一款适用于 Windows 和 Linux 桌面的 Minecraft 投�
 
 ### Windows x64
 
-- **安装包 (`LitematicaPreview-<version>-win-x64-setup.exe`)**：按当前用户安装，无需管理员权限，并可注册所选的文件关联。
-- **便携版 (`LitematicaPreview-<version>-win-x64-portable.zip`)**：解压压缩包并运行 `LitematicaPreview.exe`。请将 `Assets`、`Demos` 和 `Licenses` 目录保留在可执行文件同级目录下。
+- **安装包 (`LitematicaPreview-<version>-x86_64-setup.exe`)**：按当前用户安装，无需管理员权限，并可注册所选的文件关联。
+- **便携版 (`LitematicaPreview-<version>-x86_64-portable.zip`)**：解压压缩包并运行 `LitematicaPreview.exe`。请将 `Assets`、`Demos` 和 `Licenses` 目录保留在可执行文件同级目录下。
 
 需要 Windows 10 或 11 (x64) 以及 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)（Windows 11 和当前版本的 Windows 10 已预装；若缺失，安装程序会自动下载）。
 
@@ -44,8 +44,8 @@ Litematica Preview 是一款适用于 Windows 和 Linux 桌面的 Minecraft 投�
 
 ### Linux x64
 
-- **Debian 安装包 (`LitematicaPreview-<version>-linux-x64.deb`)**：通过 `sudo apt install ./LitematicaPreview-<version>-linux-x64.deb` 安装。
-- **AppImage (`LitematicaPreview-<version>-linux-x64.AppImage`)**：通过 `chmod +x` 添加执行权限后运行。
+- **Debian 安装包 (`LitematicaPreview-<version>-x86_64.deb`)**：通过 `sudo apt install ./LitematicaPreview-<version>-x86_64.deb` 安装。
+- **AppImage (`LitematicaPreview-<version>-x86_64.AppImage`)**：通过 `chmod +x` 添加执行权限后运行。
 
 Linux 发布包以 Ubuntu 22.04 为目标，需要 GTK 3、WebKitGTK 4.1、Vulkan 加载器及兼容驱动，以及 `xdg-utils`。Debian 安装包会声明这些依赖。不保证较旧的发行版能够运行由发布工作流构建的二进制文件。
 
@@ -120,7 +120,7 @@ rustup target add x86_64-pc-windows-msvc
 pnpm run build:win
 ```
 
-构建产物（`*-setup.exe`、`*-portable.zip` 以及可直接运行的 `win-x64/` 目录）会输出到 `artifacts/`。
+构建产物（`*-setup.exe`、`*-portable.zip` 以及可直接运行的 `x86_64/` 目录）会输出到 `artifacts/`。
 Cargo 默认使用工作区的 `target/` 目录；可通过 `CARGO_TARGET_DIR` 指定其他目录。发布工作流在测试与打包时共用此目录及 Windows MSVC 目标平台。
 Cargo 包通过 `default-run` 指定 `LitematicaPreview`，确保同时存在 `pressure` 可执行程序时 Tauri 仍能选中主程序。压力工具需通过 `pnpm run pressure:host -- ...` 显式运行。
 

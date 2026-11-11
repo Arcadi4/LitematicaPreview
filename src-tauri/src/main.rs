@@ -29,7 +29,7 @@ struct HostState {
     initial_path: Option<String>,
 }
 
-/// A failed viewport remains unavailable; its error is retained for bootstrap.
+/// A failed viewport remains unavailable; its error is retained for later reporting.
 struct ViewerState {
     renderer: Arc<Mutex<Option<NativeRenderer>>>,
     init_error: Arc<Mutex<Option<String>>>,
@@ -42,6 +42,19 @@ impl ViewerState {
             init_error: Arc::new(Mutex::new(initial_error)),
         }
     }
+}
+
+/// The Linux Home screen needs no graphics device, so a failed viewport is
+/// reported when a preview starts instead of at launch.
+fn startup_viewport_error(viewer: &ViewerState) -> Option<String> {
+    if cfg!(target_os = "linux") {
+        return None;
+    }
+    viewer
+        .init_error
+        .lock()
+        .ok()
+        .and_then(|error| error.clone())
 }
 
 /// A poisoned lock makes the viewport unavailable; callers must not hold it
@@ -97,11 +110,7 @@ async fn bootstrap(
     let texture_packs = state.texture_packs.clone();
     let initial_path = state.initial_path.clone();
     let request_id = state.worker.begin_session();
-    let viewport_error = viewer
-        .init_error
-        .lock()
-        .ok()
-        .and_then(|error| error.clone());
+    let viewport_error = startup_viewport_error(&viewer);
     tauri::async_runtime::spawn_blocking(move || {
         let (texture_packs, texture_pack_error) = match texture_packs.state() {
             Ok(texture_packs) => (texture_packs, None),
@@ -227,6 +236,19 @@ fn start_preview(
     state: State<'_, HostState>,
     viewer: State<'_, ViewerState>,
 ) -> Result<(), String> {
+    if viewer
+        .renderer
+        .lock()
+        .map(|renderer| renderer.is_none())
+        .unwrap_or(true)
+    {
+        return Err(viewer
+            .init_error
+            .lock()
+            .ok()
+            .and_then(|error| error.clone())
+            .unwrap_or_else(|| VIEWPORT_UNAVAILABLE.to_string()));
+    }
     let options = options.validate()?;
     let path = preview_path(path)?;
     let pack_path = state.resources.pack()?;
@@ -836,15 +858,8 @@ fn create_viewer(handle: &AppHandle) -> ViewerState {
             renderer,
             init_error,
         },
-        Err(message) => {
-            let _ = handle.emit(
-                "viewport-failed",
-                ViewportFailed {
-                    message: message.clone(),
-                },
-            );
-            ViewerState::unavailable(Some(message))
-        }
+        // The Home screen works without a graphics device; report this when a preview starts.
+        Err(message) => ViewerState::unavailable(Some(message)),
     }
 }
 

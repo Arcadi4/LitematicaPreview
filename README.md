@@ -49,7 +49,7 @@ Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https:
 - **Debian package (`LitematicaPreview-<version>-x86_64.deb`)**: Install with `sudo apt install ./LitematicaPreview-<version>-x86_64.deb`.
 - **AppImage (`LitematicaPreview-<version>-x86_64.AppImage`)**: Make it executable with `chmod +x`, then run it.
 
-Linux releases target Ubuntu 22.04 and require GTK 3, WebKitGTK 4.1, a Vulkan loader and compatible driver, and `xdg-utils`. The Debian package declares these dependencies. Older distributions are not guaranteed to run binaries built on the release runner.
+Linux releases target Ubuntu 22.04 and require GTK 3, WebKitGTK 4.1, a Vulkan loader and compatible driver, and `xdg-utils`. The Debian package declares these dependencies. Without a Vulkan device the application opens but cannot preview schematics. Older distributions are not guaranteed to run binaries built on the release runner.
 
 The Debian package installs a desktop entry and MIME declarations without changing your default applications. Choose file associations through your desktop's file manager; the Windows registration commands are not shown on Linux.
 

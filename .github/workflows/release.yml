@@ -114,6 +114,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
+          shared-key: release-linux
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

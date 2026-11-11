@@ -26,7 +26,7 @@ function percent(completed: number, total: number) {
 }
 
 function progressSummary(loading: Loading) {
-  if (loading.phase === "decode") return "Reading blocks locally."
+  if (loading.phase === "decode") return "Reading blocks."
   if (loading.phase === "upload") return "Finishing GPU uploads."
   if (loading.total <= 0) return "Generating geometry."
   return `Source chunks processed: ${numbers.format(loading.completed)} / ${numbers.format(loading.total)} (${percent(loading.completed, loading.total)}%).`

@@ -174,7 +174,7 @@ export function PreviewToolbar({
         className="ml-auto pl-4 max-w-[40%] md:max-w-[30%] hidden sm:block text-muted text-xs whitespace-nowrap overflow-hidden text-ellipsis"
         title={loaded?.path || loading?.path}
       >
-        {loaded ? fileName(loaded.path) : loading ? fileName(loading.path) : "Ready when you are"}
+        {loaded ? fileName(loaded.path) : loading ? fileName(loading.path) : null}
       </span>
     </nav>
   )

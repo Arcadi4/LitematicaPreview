@@ -9,7 +9,6 @@ export function DropOverlay() {
       <div className="[&>svg]:w-10 [&>svg]:h-10 [&>svg]:mb-4 [&>svg]:text-accent">
         <FolderOpen20Regular />
         <h2 className="mt-0 mb-2 text-2xl font-semibold">Drop to preview</h2>
-        <p className="mt-0 px-4 text-muted text-sm">The first supported schematic will open.</p>
       </div>
     </div>
   )

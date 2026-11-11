@@ -30,7 +30,6 @@ export interface PreviewSession {
   actionBusy: boolean
   bootstrap: Bootstrap | null
   busy: boolean
-  choosing: boolean
   copyImage: () => void
   dialog: DialogKind
   dialogOpen: boolean
@@ -811,7 +810,6 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     actionBusy,
     bootstrap,
     busy: !bootstrap || choosing,
-    choosing,
     copyImage,
     dialog,
     dialogOpen,

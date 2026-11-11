@@ -1,5 +1,4 @@
 import {
-  Badge,
   Button,
   Menu,
   MenuDivider,
@@ -32,12 +31,6 @@ export function AppHeader({
       <div className="flex items-center gap-2.5 sm:gap-3 text-sm sm:text-base font-semibold tracking-tight">
         <img className="object-contain flex-none" src={icon} width="30" height="30" alt="" />
         <span>{appName}</span>
-        <Badge
-          appearance="outline"
-          className="ml-1.5! font-normal! text-muted! hidden! sm:inline-flex!"
-        >
-          Desktop
-        </Badge>
       </div>
       <Menu>
         <MenuTrigger disableButtonEnhancement>

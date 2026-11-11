@@ -123,7 +123,6 @@ export function TexturePacksPanel({
         )}
         <div className="rounded-md border border-border bg-surface-secondary px-3 py-2 text-sm">
           <p className="m-0 font-semibold">Bundled vanilla resources</p>
-          <p className="m-0 text-muted">Always enabled. Lowest priority fallback.</p>
         </div>
       </div>
     </div>

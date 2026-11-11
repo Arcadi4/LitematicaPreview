@@ -1,4 +1,3 @@
-import { ShieldCheckmark20Regular } from "@fluentui/react-icons"
 import {
   dimensions,
   formatMB,
@@ -10,7 +9,6 @@ import {
 
 export interface PreviewFooterProps {
   bootstrap: Bootstrap | null
-  choosing: boolean
   loaded: Loaded | null
   loading: Loading | null
   previewMemory: number | null
@@ -40,32 +38,22 @@ function LoadedSummary({ loaded }: { loaded: Loaded }) {
   )
 }
 
-function IdleSummary({
-  bootstrap,
-  choosing,
-  loading,
-  previewMemory,
-}: Omit<PreviewFooterProps, "loaded">) {
+function IdleSummary({ bootstrap, loading, previewMemory }: Omit<PreviewFooterProps, "loaded">) {
   return (
     <>
-      <span role="status" className="flex items-center gap-2">
-        {!loading && !choosing && <ShieldCheckmark20Regular className="shrink-0" />}
-        {loading
-          ? phaseStatus(loading)
-          : choosing
-            ? "Choose a schematic in the file dialog"
-            : "Everything works offline."}
-      </span>
       {loading && (
-        <div className="ml-auto flex max-w-full flex-wrap justify-end gap-x-3 gap-y-1 text-right">
-          {previewMemory === null ? (
-            <span>Sampling memory…</span>
-          ) : (
-            <span title="Host process private working set (resident private pages only). WebView2 and GPU memory are excluded.">
-              Host memory {formatMB(previewMemory)}
-            </span>
-          )}
-        </div>
+        <>
+          <span role="status">{phaseStatus(loading)}</span>
+          <div className="ml-auto flex max-w-full flex-wrap justify-end gap-x-3 gap-y-1 text-right">
+            {previewMemory === null ? (
+              <span>Sampling memory…</span>
+            ) : (
+              <span title="Host process private working set (resident private pages only). WebView2 and GPU memory are excluded.">
+                Host memory {formatMB(previewMemory)}
+              </span>
+            )}
+          </div>
+        </>
       )}
       {!loading && bootstrap && <span className="ml-auto">v{bootstrap.version}</span>}
     </>

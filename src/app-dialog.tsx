@@ -224,9 +224,6 @@ function SettingsSections({
           {section === "appearance" && (
             <div className="flex flex-col gap-4">
               <h2 className="m-0 mb-1 text-lg font-semibold">Appearance</h2>
-              <p className="m-0 leading-relaxed">
-                Theme changes apply immediately and are saved automatically.
-              </p>
               <Field label="Theme">
                 <RadioGroup
                   value={theme}
@@ -265,9 +262,6 @@ function AboutLicenses({ version }: { version: string | undefined }) {
       <p>
         Distributed under the GNU Affero General Public License v3. This program comes with no
         warranty. Redistribution is permitted under the terms of the bundled license.
-      </p>
-      <p className="text-muted">
-        The application license and third-party notices are included with your installation.
       </p>
     </div>
   )

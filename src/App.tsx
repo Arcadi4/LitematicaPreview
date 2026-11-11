@@ -21,7 +21,6 @@ export default function App({ initialError }: { initialError?: string }) {
     actionBusy,
     bootstrap,
     busy,
-    choosing,
     copyImage,
     dialog,
     dialogOpen,
@@ -207,7 +206,6 @@ export default function App({ initialError }: { initialError?: string }) {
 
       <PreviewFooter
         bootstrap={bootstrap}
-        choosing={choosing}
         loaded={loaded}
         loading={loading}
         previewMemory={previewMemory}

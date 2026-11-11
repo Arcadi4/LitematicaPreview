@@ -29,7 +29,6 @@ export function WelcomePanel({
           </div>
           <div className="flex flex-1 flex-col gap-1">
             <strong className="text-sm font-semibold">Drop a schematic here</strong>
-            <span className="text-muted text-xs">or choose a file from your computer</span>
           </div>
           <Button
             appearance="primary"
@@ -42,26 +41,17 @@ export function WelcomePanel({
           </Button>
         </div>
         <div className="flex items-center flex-wrap gap-2 mt-4" aria-label="Supported formats">
-          {bootstrap ? (
-            bootstrap.extensions.map((extension) => (
-              <Badge key={extension} appearance="outline" shape="rounded">
-                {extension}
-              </Badge>
-            ))
-          ) : (
-            <span className="font-normal text-muted" role="status">
-              Preparing the schematic viewer…
-            </span>
-          )}
+          {bootstrap?.extensions.map((extension) => (
+            <Badge key={extension} appearance="outline" shape="rounded">
+              {extension}
+            </Badge>
+          ))}
         </div>
         {bootstrap && bootstrap.demos.length > 0 && (
           <section className="mt-8" aria-labelledby="demos-heading">
-            <div className="flex items-baseline justify-between flex-wrap gap-x-5 gap-y-1.5 mb-3">
-              <h2 id="demos-heading" className="m-0 text-base font-semibold">
-                Try a bundled example
-              </h2>
-              <span className="text-muted text-xs">Explore a format, no download required</span>
-            </div>
+            <h2 id="demos-heading" className="m-0 mb-3 text-base font-semibold">
+              Try a bundled example
+            </h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
               {bootstrap.demos.map((demo) => (
                 <Button

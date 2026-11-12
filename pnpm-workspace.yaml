@@ -1,12 +1,21 @@
 packages:
   - "."
+  - "cloudflare/apps-update"
 
 # tsx resolves the platform esbuild binary from optional dependencies; no install scripts run.
+# workerd fetches the Workers runtime used by the update worker's local dev server.
 allowBuilds:
   esbuild: true
+  workerd: true
 catalog:
   vite: npm:@voidzero-dev/vite-plus-core@1.6.0
   vite-plus: 1.6.0
+minimumReleaseAgeExclude:
+  - "@cloudflare/build-output-utils@0.9.13"
+  - "@cloudflare/config@0.32.0"
+  - "@cloudflare/runtime-types@0.1.26"
+  - "@cloudflare/vite-plugin@2.0.0-beta.v.15"
+  - miniflare@5.20261110.1-beta
 overrides:
   vite@*: "catalog:"
 peerDependencyRules:

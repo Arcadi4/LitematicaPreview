@@ -30,7 +30,7 @@
       "block_entities": 0,
       "content": [97.84776306152344, 97.6500015258789, 97.84776306152344],
       "batches": 64,
-      "atlas": [2048, 2048],
+      "atlas": [1024, 1024],
       "greedy_textures": 458,
       "triangles": 28667774,
       "payload_bytes": 1731545784,

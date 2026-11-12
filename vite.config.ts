@@ -28,7 +28,6 @@ export default defineConfig({
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
 
-      // --- Core ESLint (Correctness & Best Practices) ---
       "accessor-pairs": "warn",
       "array-callback-return": "warn",
       "default-case-last": "warn",
@@ -74,7 +73,6 @@ export default defineConfig({
       "prefer-spread": "warn",
       "prefer-template": "warn",
 
-      // --- React & Accessibility ---
       "react/react-in-jsx-scope": "off",
       "react/set-state-in-effect": "off",
       "jsx-a11y/prefer-tag-over-role": "off",
@@ -99,7 +97,6 @@ export default defineConfig({
       "react/style-prop-object": "warn",
       "react/void-dom-elements-no-children": "warn",
 
-      // --- TypeScript ---
       "typescript/adjacent-overload-signatures": "warn",
       "typescript/ban-tslint-comment": "warn",
       "typescript/consistent-type-exports": "warn",
@@ -139,7 +136,6 @@ export default defineConfig({
       "typescript/unified-signatures": "warn",
       "typescript/use-unknown-in-catch-callback-variable": "warn",
 
-      // --- Unicorn (Modern Idioms & Safety) ---
       "unicorn/consistent-empty-array-spread": "warn",
       "unicorn/consistent-existence-index-check": "warn",
       "unicorn/custom-error-definition": "warn",
@@ -213,7 +209,6 @@ export default defineConfig({
       "unicorn/text-encoding-identifier-case": "warn",
       "unicorn/throw-new-error": "warn",
 
-      // --- Promise ---
       "promise/catch-or-return": "warn",
       "promise/no-multiple-resolved": "warn",
       "promise/no-nesting": "warn",
@@ -223,14 +218,12 @@ export default defineConfig({
       "promise/prefer-catch": "warn",
       "promise/spec-only": "warn",
 
-      // --- Node ---
       "node/global-require": "warn",
       "node/handle-callback-err": "warn",
       "node/no-exports-assign": "warn",
       "node/no-new-require": "warn",
       "node/no-path-concat": "warn",
 
-      // --- Vitest ---
       "vitest/no-commented-out-tests": "warn",
       "vitest/no-disabled-tests": "warn",
       "vitest/no-duplicate-hooks": "warn",
@@ -248,7 +241,6 @@ export default defineConfig({
       "vitest/valid-expect": "warn",
       "vitest/valid-title": "warn",
 
-      // --- Import ---
       "import/first": "warn",
       "import/no-amd": "warn",
       "import/no-cycle": "warn",
@@ -258,7 +250,6 @@ export default defineConfig({
       "import/no-self-import": "warn",
       "import/no-webpack-loader-syntax": "warn",
 
-      // --- Oxc ---
       "oxc/approx-constant": "warn",
       "oxc/bad-bitwise-operator": "warn",
       "oxc/branches-sharing-code": "warn",
@@ -286,5 +277,4 @@ export default defineConfig({
     // Rust owns these files; watching loaded DLLs fails with EBUSY on Windows.
     watch: { ignored: ["**/src-tauri/**"] },
   },
-  build: { target: "es2022", reportCompressedSize: false },
 })

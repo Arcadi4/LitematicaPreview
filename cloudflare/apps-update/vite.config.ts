@@ -1,3 +1,12 @@
-import { cloudflare } from "@cloudflare/vite-plugin"
+import { cloudflare } from "@cloudflare/vite-plugin";
+import { lazyPlugins } from "vite-plus";
 
-export default { plugins: [cloudflare()] }
+export default {
+  fmt: {},
+  lint: {
+    jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
+    rules: { "vite-plus/prefer-vite-plus-imports": "error" },
+    options: { typeAware: true, typeCheck: true },
+  },
+  plugins: lazyPlugins(() => [cloudflare()]),
+};

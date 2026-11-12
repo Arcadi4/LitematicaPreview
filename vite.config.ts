@@ -1,10 +1,12 @@
-import { defineConfig, lazyPlugins } from "vite-plus"
-import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
+import react from "@vitejs/plugin-react"
+import { defineConfig, lazyPlugins } from "vite-plus"
 
 export default defineConfig({
   fmt: {
     semi: false,
+    sortImports: true,
+    sortTailwindcss: true,
   },
   lint: {
     plugins: [

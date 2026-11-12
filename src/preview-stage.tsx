@@ -1,3 +1,4 @@
+import { Button, ProgressBar } from "@fluentui/react-components"
 import {
   useEffect,
   useEffectEvent,
@@ -6,7 +7,7 @@ import {
   type PointerEvent,
   type RefObject,
 } from "react"
-import { Button, ProgressBar } from "@fluentui/react-components"
+
 import { fileName, numbers, type Loaded, type Loading, type ViewportCommand } from "./app-model"
 import { FlyMotion, capturePointer, requestPointerLock } from "./fly-controls"
 
@@ -40,16 +41,16 @@ function progressLabel(loading: Loading) {
 function LoadingProgress({ loading, onCancel }: { loading: Loading; onCancel: () => void }) {
   const indeterminate = loading.phase === "upload" || loading.total === 0
   return (
-    <div className="absolute top-4 inset-x-4 flex justify-center pointer-events-none">
+    <div className="pointer-events-none absolute inset-x-4 top-4 flex justify-center">
       <div
-        className="max-w-lg w-full px-4 py-3 border border-border rounded-lg bg-surface/85 shadow-md"
+        className="border-border bg-surface/85 w-full max-w-lg rounded-lg border px-4 py-3 shadow-md"
         role="status"
         aria-live="polite"
       >
-        <div className="flex items-center justify-between gap-3 mb-2">
+        <div className="mb-2 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p className="m-0 text-sm font-semibold">{progressLabel(loading)}</p>
-            <p className="m-0 text-xs text-muted truncate" title={loading.path}>
+            <p className="text-muted m-0 truncate text-xs" title={loading.path}>
               {fileName(loading.path)}
             </p>
           </div>
@@ -59,7 +60,7 @@ function LoadingProgress({ loading, onCancel }: { loading: Loading; onCancel: ()
             className="pointer-events-auto shrink-0"
           >
             Cancel
-            <span className="ml-2 opacity-75 text-xs font-normal hidden sm:inline">Esc</span>
+            <span className="ml-2 hidden text-xs font-normal opacity-75 sm:inline">Esc</span>
           </Button>
         </div>
         <ProgressBar
@@ -67,7 +68,7 @@ function LoadingProgress({ loading, onCancel }: { loading: Loading; onCancel: ()
           max={indeterminate ? undefined : loading.total}
           aria-label={progressLabel(loading)}
         />
-        <p className="mt-2 mb-0 text-xs leading-relaxed text-muted">{progressSummary(loading)}</p>
+        <p className="text-muted mt-2 mb-0 text-xs leading-relaxed">{progressSummary(loading)}</p>
       </div>
     </div>
   )
@@ -284,7 +285,7 @@ export function PreviewStage({
 
   return (
     <section
-      className={`absolute inset-0 ${stageActive ? "visible pointer-events-auto" : "invisible pointer-events-none"}`}
+      className={`absolute inset-0 ${stageActive ? "pointer-events-auto visible" : "pointer-events-none invisible"}`}
       aria-label="Interactive 3D model"
       aria-hidden={!stageActive}
       aria-busy={Boolean(loading)}
@@ -292,7 +293,7 @@ export function PreviewStage({
       <div
         ref={viewportRef}
         role="application"
-        className="block w-full h-full bg-transparent [touch-action:none] outline-none focus-visible:outline-2 focus-visible:outline-accent focus-visible:-outline-offset-2"
+        className="focus-visible:outline-accent block h-full w-full [touch-action:none] bg-transparent outline-none focus-visible:outline-2 focus-visible:-outline-offset-2"
         tabIndex={stageActive ? 0 : -1}
         aria-label={previewPath ? `3D preview of ${fileName(previewPath)}` : "3D preview"}
         aria-describedby="canvas-controls"
@@ -313,7 +314,7 @@ export function PreviewStage({
       </p>
       {stageActive && (
         <div
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 sm:gap-2.5 px-3 py-1.5 border border-border rounded-md bg-surface text-muted text-xs whitespace-nowrap pointer-events-none max-w-[calc(100%-2rem)] sm:max-w-none"
+          className="border-border bg-surface text-muted pointer-events-none absolute bottom-4 left-1/2 flex max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-2 rounded-md border px-3 py-1.5 text-xs whitespace-nowrap sm:max-w-none sm:gap-2.5"
           aria-hidden="true"
         >
           {flyMode ? (

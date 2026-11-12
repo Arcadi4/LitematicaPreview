@@ -1,5 +1,6 @@
-import { useEffect, useEffectEvent, useState } from "react"
 import { FluentProvider, webDarkTheme, webLightTheme } from "@fluentui/react-components"
+import { useEffect, useEffectEvent, useState } from "react"
+
 import { AppDialog } from "./app-dialog"
 import { PreviewFooter } from "./app-footer"
 import { AppHeader } from "./app-header"
@@ -138,7 +139,7 @@ export default function App({ initialError }: { initialError?: string }) {
       // Portals inherit theme tokens, not the full-window app-shell layout.
       applyStylesToPortals={false}
       // Keep FluentProvider's opaque background off the native swapchain.
-      className={`flex flex-col w-full h-full min-w-[320px] bg-transparent! text-text ${dark ? "dark theme-dark" : "theme-light"}`}
+      className={`text-text flex h-full w-full min-w-[320px] flex-col bg-transparent! ${dark ? "dark theme-dark" : "theme-light"}`}
     >
       <AppHeader
         actionBusy={actionBusy}
@@ -172,7 +173,7 @@ export default function App({ initialError }: { initialError?: string }) {
       />
 
       <main
-        className="relative flex-auto min-h-0 overflow-hidden"
+        className="relative min-h-0 flex-auto overflow-hidden"
         aria-label={stageActive ? "Schematic preview" : "Welcome"}
       >
         <WelcomePanel

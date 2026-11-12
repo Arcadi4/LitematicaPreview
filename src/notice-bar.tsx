@@ -7,6 +7,7 @@ import {
   MessageBarTitle,
 } from "@fluentui/react-components"
 import { Dismiss20Regular } from "@fluentui/react-icons"
+
 import type { Notice } from "./app-model"
 
 export interface NoticeBarProps {

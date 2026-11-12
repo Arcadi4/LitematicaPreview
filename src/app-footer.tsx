@@ -63,7 +63,7 @@ function IdleSummary({ bootstrap, loading, previewMemory }: Omit<PreviewFooterPr
 export function PreviewFooter(props: PreviewFooterProps) {
   return (
     <footer
-      className="flex-none flex items-center flex-wrap gap-x-4 sm:gap-x-6 gap-y-1.5 min-h-9 px-4 sm:px-6 py-2 border-t border-border bg-surface text-muted text-xs leading-normal [&_strong]:text-text [&_strong]:font-semibold"
+      className="border-border bg-surface text-muted [&_strong]:text-text flex min-h-9 flex-none flex-wrap items-center gap-x-4 gap-y-1.5 border-t px-4 py-2 text-xs leading-normal sm:gap-x-6 sm:px-6 [&_strong]:font-semibold"
       aria-label="Preview information"
     >
       {props.loaded ? <LoadedSummary loaded={props.loaded} /> : <IdleSummary {...props} />}

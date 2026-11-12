@@ -13,6 +13,7 @@ import {
   TabList,
 } from "@fluentui/react-components"
 import { useId, useState } from "react"
+
 import icon from "../Assets/app-ui.png"
 import {
   appName,
@@ -60,7 +61,7 @@ function ControlsHelp() {
       <p className="mt-0 mb-5 leading-relaxed">
         Click or Tab into the preview to use its keyboard controls.
       </p>
-      <dl className="flex flex-col gap-0 my-0 mb-5 [&>div]:grid [&>div]:grid-cols-[80px_1fr] sm:[&>div]:grid-cols-[120px_1fr] [&>div]:gap-3 sm:[&>div]:gap-4 [&>div]:py-3 [&>div]:border-b [&>div]:border-[var(--colorNeutralStroke2,#dddddd)] [&_dt]:font-semibold [&_dd]:m-0 [&_dd]:leading-normal">
+      <dl className="my-0 mb-5 flex flex-col gap-0 [&_dd]:m-0 [&_dd]:leading-normal [&_dt]:font-semibold [&>div]:grid [&>div]:grid-cols-[80px_1fr] [&>div]:gap-3 [&>div]:border-b [&>div]:border-[var(--colorNeutralStroke2,#dddddd)] [&>div]:py-3 sm:[&>div]:grid-cols-[120px_1fr] sm:[&>div]:gap-4">
         <div>
           <dt>Orbit</dt>
           <dd>Left-drag / Arrow keys</dd>
@@ -247,8 +248,8 @@ function SettingsSections({
 function AboutLicenses({ version }: { version: string | undefined }) {
   return (
     <div className="leading-relaxed [&>p]:mb-3">
-      <div className="flex items-center gap-3.5 my-3 mb-6 [&>div]:flex [&>div]:flex-col [&>div]:gap-1 [&_strong]:text-lg [&_strong]:font-semibold [&_span]:text-xs">
-        <img className="object-contain flex-none" src={icon} width="48" height="48" alt="" />
+      <div className="my-3 mb-6 flex items-center gap-3.5 [&_span]:text-xs [&_strong]:text-lg [&_strong]:font-semibold [&>div]:flex [&>div]:flex-col [&>div]:gap-1">
+        <img className="flex-none object-contain" src={icon} width="48" height="48" alt="" />
         <div>
           <strong>{appName}</strong>
           <span>Version {version || "unavailable"}</span>
@@ -295,7 +296,7 @@ export function AppDialog({
             {dialog === "error" ? (
               <>
                 <p>The preview was closed. You are back on the home screen.</p>
-                <pre className="whitespace-pre-wrap [overflow-wrap:anywhere] max-h-[45vh] overflow-auto select-text text-xs">
+                <pre className="max-h-[45vh] overflow-auto text-xs [overflow-wrap:anywhere] whitespace-pre-wrap select-text">
                   {errorDetails}
                 </pre>
               </>

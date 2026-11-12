@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
+
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { test } from "vite-plus/test"
+
 import type { Bootstrap } from "./app-model"
 import { defaultPreviewSettings, type PreviewSettings } from "./preview-settings"
 import { SettingsPanel } from "./settings-panel"

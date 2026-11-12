@@ -1,6 +1,8 @@
 import { Component, type ErrorInfo, type ReactNode } from "react"
 import { createRoot } from "react-dom/client"
+
 import App from "./App"
+
 import "./styles.css"
 
 class AppErrorBoundary extends Component<
@@ -24,14 +26,14 @@ class AppErrorBoundary extends Component<
     if (this.state.error !== null) {
       return (
         <main
-          className="mx-auto max-h-full max-w-2xl overflow-auto p-6 text-[CanvasText] bg-[Canvas] leading-relaxed"
+          className="mx-auto max-h-full max-w-2xl overflow-auto bg-[Canvas] p-6 leading-relaxed text-[CanvasText]"
           role="alert"
         >
-          <h1 className="text-2xl font-bold leading-snug mb-4">
+          <h1 className="mb-4 text-2xl leading-snug font-bold">
             Litematica Preview could not display its interface.
           </h1>
           <p className="mb-4">Your schematic files have not been changed.</p>
-          <pre className="my-4 p-4 border border-[GrayText] rounded-md whitespace-pre-wrap break-words">
+          <pre className="my-4 rounded-md border border-[GrayText] p-4 break-words whitespace-pre-wrap">
             {this.state.error}
           </pre>
           <button onClick={() => this.setState({ recovered: this.state.error, error: null })}>

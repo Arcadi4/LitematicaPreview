@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import { getCurrentWindow } from "@tauri-apps/api/window"
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react"
+
 import {
   appName,
   errorMessage,
@@ -22,8 +23,8 @@ import {
   type ViewportCommand,
   type ViewportFailed,
 } from "./app-model"
-import { savedPreviewSettings, type PreviewSettings } from "./preview-settings"
 import { releasePointerLock, requestPointerLock } from "./fly-controls"
+import { savedPreviewSettings, type PreviewSettings } from "./preview-settings"
 import { ViewportInputQueue } from "./viewport-input"
 
 export interface PreviewSession {

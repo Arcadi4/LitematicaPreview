@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 import assert from "node:assert/strict"
-import { act, createElement, type ComponentType } from "react"
-import { createRoot, type Root } from "react-dom/client"
+
 import { FluentProvider, webLightTheme } from "@fluentui/react-components"
 import { getByRole, queryByRole, type ByRoleMatcher } from "@testing-library/dom"
+import { act, createElement, type ComponentType } from "react"
+import { createRoot, type Root } from "react-dom/client"
 import { afterAll, afterEach, beforeAll, test } from "vite-plus/test"
+
 import { AppDialog, type AppDialogProps } from "./app-dialog"
 import { AppHeader } from "./app-header"
 import type { Bootstrap, ThemePreference } from "./app-model"

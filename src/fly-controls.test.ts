@@ -1,5 +1,7 @@
 import assert from "node:assert/strict"
+
 import { afterEach, beforeEach, test, vi } from "vite-plus/test"
+
 import {
   FlyMotion,
   capturePointer,

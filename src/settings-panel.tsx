@@ -1,6 +1,7 @@
 import { Button, Field, Slider, SpinButton, Switch, Tooltip } from "@fluentui/react-components"
 import { Info20Regular } from "@fluentui/react-icons"
 import { useState, type ReactNode } from "react"
+
 import type { Bootstrap } from "./app-model"
 import { chunkSizes, type PreviewSettings } from "./preview-settings"
 
@@ -58,9 +59,9 @@ export function SettingsPanel({ bootstrap, onChange, settings }: SettingsPanelPr
         Changes are saved automatically and apply the next time you open a schematic. The current
         preview or load is not changed.
       </p>
-      <div className="rounded-md border border-border bg-surface-secondary px-3 py-2 text-sm">
+      <div className="border-border bg-surface-secondary rounded-md border px-3 py-2 text-sm">
         <p className="mt-0 mb-1 font-semibold">Memory limit — unavailable</p>
-        <p className="m-0 text-muted">
+        <p className="text-muted m-0">
           Loading runs in the application process. Memory limiting is suspended for this pipeline.
         </p>
       </div>
@@ -147,9 +148,9 @@ export function SettingsPanel({ bootstrap, onChange, settings }: SettingsPanelPr
             <span className="text-sm">threads</span>
           </div>
         </div>
-        <div className="rounded-md border border-border bg-surface-secondary px-3 py-2 text-sm">
+        <div className="border-border bg-surface-secondary rounded-md border px-3 py-2 text-sm">
           <p className="mt-0 mb-1 font-semibold">Conservative memory scheduling — unavailable</p>
-          <p className="m-0 text-muted">
+          <p className="text-muted m-0">
             This option is suspended for the current loading pipeline.
           </p>
         </div>

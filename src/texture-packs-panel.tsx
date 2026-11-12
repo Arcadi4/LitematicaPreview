@@ -6,6 +6,7 @@ import {
   Delete20Regular,
 } from "@fluentui/react-icons"
 import { useState } from "react"
+
 import type { TexturePackState } from "./app-model"
 
 export interface TexturePacksPanelProps {
@@ -51,7 +52,7 @@ export function TexturePacksPanel({
           </Button>
         </div>
         {state.packs.length === 0 ? (
-          <p className="m-0 text-sm text-muted">
+          <p className="text-muted m-0 text-sm">
             No texture packs are saved. The bundled vanilla resources are used.
           </p>
         ) : (
@@ -62,9 +63,9 @@ export function TexturePacksPanel({
             {state.packs.map((pack, index) => (
               <li
                 key={pack.id}
-                className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-surface-secondary px-3 py-2"
+                className="border-border bg-surface-secondary flex flex-wrap items-center gap-2 rounded-md border px-3 py-2"
               >
-                <span aria-hidden="true" className="w-5 text-sm tabular-nums text-muted">
+                <span aria-hidden="true" className="text-muted w-5 text-sm tabular-nums">
                   {index + 1}
                 </span>
                 <Switch
@@ -121,7 +122,7 @@ export function TexturePacksPanel({
             ))}
           </ol>
         )}
-        <div className="rounded-md border border-border bg-surface-secondary px-3 py-2 text-sm">
+        <div className="border-border bg-surface-secondary rounded-md border px-3 py-2 text-sm">
           <p className="m-0 font-semibold">Bundled vanilla resources</p>
         </div>
       </div>

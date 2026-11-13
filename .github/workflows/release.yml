@@ -154,29 +154,15 @@ jobs:
 
       # `tauri build` runs `beforeBuildCommand` (`pnpm run build`), so the
       # frontend is type-checked and bundled before the Rust release build.
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: latest
+          dotnet-channel: STS
       - name: Install Velopack
-        run: dotnet tool install --global vpk --version 1.2.161
-      - name: Prepare Azure signing metadata
-        shell: pwsh
-        env:
-          SIGNING_METADATA: ${{ secrets.LITEMATICA_WINDOWS_AZURE_SIGN_METADATA }}
-        run: |
-          if ($env:SIGNING_METADATA) {
-            $path = Join-Path $env:RUNNER_TEMP "azure-signing.json"
-            [System.IO.File]::WriteAllText($path, $env:SIGNING_METADATA)
-            "LITEMATICA_WINDOWS_AZURE_SIGN_FILE=$path" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          }
+        run: dotnet tool install --global vpk
 
       - name: Build setup and portable packages
-        env:
-          LITEMATICA_WINDOWS_SIGN_PARAMS: ${{ secrets.LITEMATICA_WINDOWS_SIGN_PARAMS }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-        run: pnpm exec tsx scripts/build.ts
+        run: pnpm exec tsx scripts/build.ts --allow-unsigned
 
       - uses: actions/upload-artifact@v7
         with:

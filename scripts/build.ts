@@ -346,7 +346,7 @@ async function main(): Promise<void> {
   log(`Node.js ${process.version}`)
   log(`pnpm ${capture("pnpm", ["--version"])}`)
   log(capture("cargo", ["--version"]))
-  log(capture("vpk", ["--version"]))
+  log(`vpk ${capture("vpk", ["--help"]).search("[0-9]+\\.[0-9]+\\.[0-9]+")}`)
   log(`Requires Visual Studio C++ Build Tools, Windows SDK, and: rustup target add ${TARGET}`)
   const signing = requiredSigning()
   if (signing) {

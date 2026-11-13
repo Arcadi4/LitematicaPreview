@@ -7,6 +7,7 @@ import {
   DialogSurface,
   DialogTitle,
   Field,
+  ProgressBar,
   Radio,
   RadioGroup,
   Tab,
@@ -23,6 +24,7 @@ import {
   type NativeCommand,
   type TexturePackState,
   type ThemePreference,
+  type UpdateStatus,
 } from "./app-model"
 import type { PreviewSettings } from "./preview-settings"
 import { SettingsPanel } from "./settings-panel"
@@ -33,9 +35,13 @@ export interface AppDialogProps {
   bootstrap: Bootstrap | null
   dialog: DialogKind
   errorDetails: string
+  onCheckForUpdate: () => void
+  onDownloadUpdate: () => void
   onImportTexturePacks: () => void
+  onInstallUpdate: () => void
   onNativeAction: (command: NativeCommand) => void
   onOpenChange: (open: boolean) => void
+  onRegisterAssociations: () => void
   onRemoveTexturePack: (id: string) => void
   onSetTexturePackEnabled: (id: string, enabled: boolean) => void
   onSetTexturePackOrder: (ids: string[]) => void
@@ -46,6 +52,7 @@ export interface AppDialogProps {
   texturePackBusy: boolean
   texturePacks: TexturePackState
   theme: ThemePreference
+  update: UpdateStatus
 }
 
 const title = (dialog: DialogKind) =>
@@ -53,7 +60,9 @@ const title = (dialog: DialogKind) =>
     ? "Unable to open preview"
     : dialog === "settings"
       ? "Settings"
-      : `About ${appName}`
+      : dialog === "associations"
+        ? "File associations"
+        : `About ${appName}`
 
 function ControlsHelp() {
   return (
@@ -245,14 +254,110 @@ function SettingsSections({
   )
 }
 
-function AboutLicenses({ version }: { version: string | undefined }) {
+function updateMessage(update: UpdateStatus): string {
+  if (update.phase === "checking") return "Checking for updates…"
+  if (update.phase === "available") return `Version ${update.version} is available.`
+  if (update.phase === "downloading")
+    return `Downloading version ${update.version}… ${update.percent}%`
+  if (update.phase === "ready") return `Version ${update.version} is ready to install.`
+  if (update.phase === "applying") return "Restarting to install the update…"
+  if (update.phase === "error") return "The update could not be completed."
+  if (update.phase === "current") return "Litematica Preview is up to date."
+  return "Updates are checked automatically."
+}
+
+function UpdateSection({
+  bootstrap,
+  update,
+  onCheckForUpdate,
+  onDownloadUpdate,
+  onInstallUpdate,
+}: Pick<
+  AppDialogProps,
+  "bootstrap" | "update" | "onCheckForUpdate" | "onDownloadUpdate" | "onInstallUpdate"
+>) {
+  if (!bootstrap?.updatesSupported) return null
+  const busy =
+    update.phase === "checking" || update.phase === "downloading" || update.phase === "applying"
+  const showNotes =
+    (update.phase === "available" || update.phase === "downloading" || update.phase === "ready") &&
+    update.notes.trim().length > 0
+  return (
+    <div className="mt-6 flex flex-col gap-2">
+      <strong className="text-sm">Updates</strong>
+      <p className="m-0 leading-relaxed">{updateMessage(update)}</p>
+      {update.phase === "downloading" && (
+        <ProgressBar value={update.percent / 100} aria-label="Update download progress" />
+      )}
+      {update.phase === "error" && update.message && (
+        <p className="m-0 leading-relaxed [overflow-wrap:anywhere]">{update.message}</p>
+      )}
+      {showNotes && (
+        <details>
+          <summary className="cursor-pointer select-none">Release notes</summary>
+          <div className="mt-2 max-h-48 overflow-auto text-sm leading-relaxed whitespace-pre-wrap">
+            {update.notes}
+          </div>
+        </details>
+      )}
+      <div className="flex gap-2">
+        {update.phase === "available" ? (
+          <Button appearance="primary" onClick={onDownloadUpdate}>
+            Download update
+          </Button>
+        ) : update.phase === "ready" ? (
+          <Button appearance="primary" onClick={onInstallUpdate}>
+            Restart and update
+          </Button>
+        ) : (
+          <Button disabled={busy} onClick={onCheckForUpdate}>
+            Check for updates
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function AssociationOptions({ bootstrap }: Pick<AppDialogProps, "bootstrap">) {
+  return (
+    <div className="leading-relaxed [&>p]:mb-3">
+      <p>
+        Windows keeps your current default apps. Litematica Preview can appear in Open with for
+        schematic files without changing those defaults.
+      </p>
+      <p>
+        Register Litematica Preview for{" "}
+        {bootstrap?.extensions.join(", ") ?? "its supported formats"}. You can change defaults later
+        in Windows Settings.
+      </p>
+      {bootstrap?.legacyInstall && (
+        <p>
+          An older installation exists at <code>{bootstrap.legacyInstall}</code>. Uninstall it
+          before registering this copy, and do not select its option to delete app data.
+        </p>
+      )}
+    </div>
+  )
+}
+
+function AboutLicenses({
+  bootstrap,
+  update,
+  onCheckForUpdate,
+  onDownloadUpdate,
+  onInstallUpdate,
+}: Pick<
+  AppDialogProps,
+  "bootstrap" | "update" | "onCheckForUpdate" | "onDownloadUpdate" | "onInstallUpdate"
+>) {
   return (
     <div className="leading-relaxed [&>p]:mb-3">
       <div className="my-3 mb-6 flex items-center gap-3.5 [&_span]:text-xs [&_strong]:text-lg [&_strong]:font-semibold [&>div]:flex [&>div]:flex-col [&>div]:gap-1">
         <img className="flex-none object-contain" src={icon} width="48" height="48" alt="" />
         <div>
           <strong>{appName}</strong>
-          <span>Version {version || "unavailable"}</span>
+          <span>Version {bootstrap?.version || "unavailable"}</span>
         </div>
       </div>
       <p>
@@ -260,6 +365,13 @@ function AboutLicenses({ version }: { version: string | undefined }) {
         LitematicaQL.
       </p>
       <p>Powered by Nucleation, Tauri, wgpu, React, and Fluent UI.</p>
+      <UpdateSection
+        bootstrap={bootstrap}
+        update={update}
+        onCheckForUpdate={onCheckForUpdate}
+        onDownloadUpdate={onDownloadUpdate}
+        onInstallUpdate={onInstallUpdate}
+      />
       <p>
         Distributed under the GNU Affero General Public License v3. This program comes with no
         warranty. Redistribution is permitted under the terms of the bundled license.
@@ -273,9 +385,13 @@ export function AppDialog({
   bootstrap,
   dialog,
   errorDetails,
+  onCheckForUpdate,
+  onDownloadUpdate,
   onImportTexturePacks,
+  onInstallUpdate,
   onNativeAction,
   onOpenChange,
+  onRegisterAssociations,
   onRemoveTexturePack,
   onSetTexturePackEnabled,
   onSetTexturePackOrder,
@@ -286,6 +402,7 @@ export function AppDialog({
   texturePackBusy,
   texturePacks,
   theme,
+  update,
 }: AppDialogProps) {
   return (
     <Dialog open={open} onOpenChange={(_, data) => onOpenChange(data.open)}>
@@ -316,8 +433,16 @@ export function AppDialog({
                   theme={theme}
                 />
               )
+            ) : dialog === "associations" ? (
+              <AssociationOptions bootstrap={bootstrap} />
             ) : (
-              <AboutLicenses version={bootstrap?.version} />
+              <AboutLicenses
+                bootstrap={bootstrap}
+                update={update}
+                onCheckForUpdate={onCheckForUpdate}
+                onDownloadUpdate={onDownloadUpdate}
+                onInstallUpdate={onInstallUpdate}
+              />
             )}
           </DialogContent>
           <DialogActions>
@@ -332,9 +457,18 @@ export function AppDialog({
                 Open licenses folder
               </Button>
             )}
-            <Button appearance="primary" onClick={() => onOpenChange(false)}>
-              Close
-            </Button>
+            {dialog === "associations" ? (
+              <>
+                <Button onClick={() => onOpenChange(false)}>Not now</Button>
+                <Button appearance="primary" onClick={onRegisterAssociations}>
+                  Register file types
+                </Button>
+              </>
+            ) : (
+              <Button appearance="primary" onClick={() => onOpenChange(false)}>
+                Close
+              </Button>
+            )}
           </DialogActions>
         </DialogBody>
       </DialogSurface>

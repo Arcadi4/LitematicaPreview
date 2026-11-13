@@ -9,3 +9,4 @@ pub mod preview_protocol;
 pub mod render;
 pub mod resources;
 pub mod texture_packs;
+pub mod update;

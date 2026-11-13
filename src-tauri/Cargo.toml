@@ -40,6 +40,7 @@ gtk = "0.18"
 webkit2gtk = "2"
 
 [target.'cfg(windows)'.dependencies]
+velopack = "=1.2.161"
 winreg = "0.56"
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",

@@ -14,10 +14,34 @@ export type Bootstrap = {
   requestId: number
   maxWorkerThreads: number
   fileAssociationsSupported: boolean
+  fileAssociationsRegistered: boolean
+  /** True only when this copy was installed or extracted by Velopack. */
+  updatesSupported: boolean
+  updatePendingVersion: string | null
+  /** Path of a pre-Velopack installation that still owns associations. */
+  legacyInstall: string | null
   /** Replays a native viewport failure from before event listeners. */
   viewportError: string | null
   texturePacks: TexturePackState
   texturePackError: string | null
+}
+export type UpdateRelease = { version: string; notes: string; size: number }
+export type UpdateProgress = { percent: number }
+export type UpdatePhase =
+  | "idle"
+  | "checking"
+  | "current"
+  | "available"
+  | "downloading"
+  | "ready"
+  | "applying"
+  | "error"
+export type UpdateStatus = {
+  phase: UpdatePhase
+  version: string | null
+  notes: string
+  percent: number
+  message: string | null
 }
 export type ThemePreference = "system" | "light" | "dark"
 /** Completed preview statistics serialized by the native `preview-loaded` event. */
@@ -47,7 +71,7 @@ export type PreviewProgress = {
 }
 export type Loaded = { path: string; metadata: Metadata; seconds: number }
 export type Notice = { intent: "error" | "success" | "info"; message: string }
-export type DialogKind = "about" | "settings" | "error"
+export type DialogKind = "about" | "settings" | "associations" | "error"
 export type NativeCommand = "register_associations" | "unregister_associations" | "show_licenses"
 export type PreviewImageAction = "copy" | "export"
 /** Camera, grid and stage commands applied by the native viewport. */

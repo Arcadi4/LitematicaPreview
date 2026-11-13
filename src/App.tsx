@@ -1,5 +1,5 @@
 import { FluentProvider, webDarkTheme, webLightTheme } from "@fluentui/react-components"
-import { useEffect, useEffectEvent, useState } from "react"
+import { useEffect, useEffectEvent, useRef, useState } from "react"
 
 import { AppDialog } from "./app-dialog"
 import { PreviewFooter } from "./app-footer"
@@ -12,6 +12,8 @@ import { PreviewStage } from "./preview-stage"
 import { usePreviewSession } from "./use-preview-session"
 import { WelcomePanel } from "./welcome-panel"
 
+const ASSOCIATION_PROMPT_KEY = "litematica-preview-association-prompt"
+
 export default function App({ initialError }: { initialError?: string }) {
   const [theme, setTheme] = useState<ThemePreference>(savedTheme)
   const [systemDark, setSystemDark] = useState(
@@ -22,9 +24,11 @@ export default function App({ initialError }: { initialError?: string }) {
     actionBusy,
     bootstrap,
     busy,
+    checkForUpdate,
     copyImage,
     dialog,
     dialogOpen,
+    downloadUpdate,
     dragging,
     errorDetails,
     exitFly,
@@ -35,6 +39,7 @@ export default function App({ initialError }: { initialError?: string }) {
     home,
     imageAction,
     importTexturePacks,
+    installUpdate,
     loadDemo,
     loaded,
     loading,
@@ -53,6 +58,7 @@ export default function App({ initialError }: { initialError?: string }) {
     texturePacks,
     toggleFly,
     toggleGrid,
+    update,
     updatePreviewSettings,
     viewportInput,
     viewportRef,
@@ -130,6 +136,40 @@ export default function App({ initialError }: { initialError?: string }) {
 
   const onThemeChange = (value: unknown) => {
     if (isTheme(value)) setTheme(value)
+  }
+  const associationPromptShown = useRef(false)
+  useEffect(() => {
+    if (
+      !bootstrap ||
+      !bootstrap.updatesSupported ||
+      !bootstrap.fileAssociationsSupported ||
+      bootstrap.fileAssociationsRegistered ||
+      associationPromptShown.current
+    )
+      return
+    associationPromptShown.current = true
+    try {
+      if (localStorage.getItem(ASSOCIATION_PROMPT_KEY) === "1") return
+    } catch {
+      // Storage is optional; the prompt still appears for this session.
+    }
+    openDialog("associations")
+  }, [bootstrap, openDialog])
+
+  const closeDialog = (open: boolean) => {
+    setDialogOpen(open)
+    if (!open && dialog === "associations") {
+      try {
+        localStorage.setItem(ASSOCIATION_PROMPT_KEY, "1")
+      } catch {
+        // Storage is optional; the prompt returns on the next launch.
+      }
+    }
+  }
+
+  const registerAssociations = () => {
+    nativeAction("register_associations")
+    closeDialog(false)
   }
   const stageActive = Boolean(loaded || loading)
 
@@ -217,9 +257,13 @@ export default function App({ initialError }: { initialError?: string }) {
         bootstrap={bootstrap}
         dialog={dialog}
         errorDetails={errorDetails}
+        onCheckForUpdate={checkForUpdate}
+        onDownloadUpdate={downloadUpdate}
         onImportTexturePacks={importTexturePacks}
+        onInstallUpdate={installUpdate}
         onNativeAction={nativeAction}
-        onOpenChange={setDialogOpen}
+        onOpenChange={closeDialog}
+        onRegisterAssociations={registerAssociations}
         onRemoveTexturePack={removeTexturePack}
         onSetTexturePackEnabled={setTexturePackEnabled}
         onSetTexturePackOrder={setTexturePackOrder}
@@ -230,6 +274,7 @@ export default function App({ initialError }: { initialError?: string }) {
         texturePackBusy={texturePackBusy}
         texturePacks={texturePacks}
         theme={theme}
+        update={update}
       />
     </FluentProvider>
   )

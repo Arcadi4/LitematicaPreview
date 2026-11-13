@@ -28,6 +28,10 @@ const bootstrap: Bootstrap = {
   requestId: 0,
   maxWorkerThreads: 8,
   fileAssociationsSupported: true,
+  fileAssociationsRegistered: true,
+  updatesSupported: false,
+  updatePendingVersion: null,
+  legacyInstall: null,
   viewportError: null,
   texturePacks: { packs: [] },
   texturePackError: null,
@@ -37,9 +41,13 @@ const dialogProps: AppDialogProps = {
   bootstrap,
   dialog: "settings",
   errorDetails: "",
+  onCheckForUpdate: () => {},
+  onDownloadUpdate: () => {},
   onImportTexturePacks: () => {},
+  onInstallUpdate: () => {},
   onNativeAction: () => {},
   onOpenChange: () => {},
+  onRegisterAssociations: () => {},
   onRemoveTexturePack: () => {},
   onSetTexturePackEnabled: () => {},
   onSetTexturePackOrder: () => {},
@@ -50,6 +58,7 @@ const dialogProps: AppDialogProps = {
   texturePackBusy: false,
   texturePacks: { packs: [] },
   theme: "system",
+  update: { phase: "idle", version: null, notes: "", percent: 0, message: null },
 }
 
 beforeAll(() => {

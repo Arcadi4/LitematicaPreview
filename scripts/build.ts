@@ -130,6 +130,19 @@ function capture(tool: string, args: string[]): string {
   return result.stdout.trim()
 }
 
+function captureVpkVersion(): string {
+  for (const args of [["--version"], ["version"]]) {
+    try {
+      const resolved = capture("vpk", args)
+      if (resolved) {
+        return resolved
+      }
+    } catch {}
+  }
+  capture("vpk", ["pack", "--help"])
+  return "available"
+}
+
 function isInteractive(): boolean {
   return (
     process.stdin.isTTY === true &&
@@ -346,7 +359,7 @@ async function main(): Promise<void> {
   log(`Node.js ${process.version}`)
   log(`pnpm ${capture("pnpm", ["--version"])}`)
   log(capture("cargo", ["--version"]))
-  log(capture("vpk", ["--version"]))
+  log(`vpk ${captureVpkVersion()}`)
   log(`Requires Visual Studio C++ Build Tools, Windows SDK, and: rustup target add ${TARGET}`)
   const signing = requiredSigning()
   if (signing) {

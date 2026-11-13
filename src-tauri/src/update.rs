@@ -1,6 +1,7 @@
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
+#[cfg(windows)]
 const FEED_URL: &str = "https://update.tanh.moe/litematica-preview/windows/";
 
 #[derive(Clone, Serialize)]

@@ -33,7 +33,6 @@ const MISSING_TOOL: Record<string, string> = {
 interface Options {
   debs: string[]
   repo: string
-  verify: boolean
   allowPrerelease: boolean
   dryRun: boolean
 }
@@ -118,7 +117,6 @@ function printUsage(): void {
       `  --repo <path>         Local reprepro repository (default: ${DEFAULT_REPOSITORY})`,
       "  --allow-prerelease    Publish a version that contains a prerelease suffix",
       "  --dry-run             Build and sign the repository without uploading",
-      "  --no-verify           Skip fetching the published metadata back",
       "  --help                Show this message",
       "",
       "Required environment:",
@@ -141,7 +139,6 @@ function parseOptions(argv: string[]): Options {
   const options: Options = {
     debs: [],
     repo: DEFAULT_REPOSITORY,
-    verify: true,
     allowPrerelease: false,
     dryRun: false,
   }
@@ -168,8 +165,6 @@ function parseOptions(argv: string[]): Options {
       options.allowPrerelease = true
     } else if (argument === "--dry-run") {
       options.dryRun = true
-    } else if (argument === "--no-verify") {
-      options.verify = false
     } else if (argument === "--help") {
       printUsage()
       process.exit(0)
@@ -680,55 +675,6 @@ function sha256(contents: Buffer): string {
   return createHash("sha256").update(contents).digest("hex")
 }
 
-function delay(milliseconds: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>()
-  setTimeout(resolve, milliseconds)
-  return promise
-}
-
-async function verifyPublication(baseUrl: string, repoRoot: string): Promise<void> {
-  const index = `dists/${APT_DISTRIBUTION}/${APT_COMPONENT}/binary-${APT_ARCHITECTURE}`
-  const byHash = `${index}/by-hash/SHA256`
-  const targets = [
-    `dists/${APT_DISTRIBUTION}/InRelease`,
-    ...["Packages", "Packages.gz", "Packages.xz"].map((name) => `${index}/${name}`),
-    ...fs.readdirSync(path.join(repoRoot, byHash)).map((name) => `${byHash}/${name}`),
-  ]
-  for (const target of targets) {
-    const expected = fs.readFileSync(path.join(repoRoot, target))
-    const url = `${baseUrl}/${target}`
-    let lastFailure = "no response"
-    let matched = false
-    for (let attempt = 1; attempt <= 12; attempt += 1) {
-      try {
-        const response = await fetch(url, {
-          headers: { "cache-control": "no-cache", pragma: "no-cache" },
-          signal: AbortSignal.timeout(20_000),
-        })
-        if (!response.ok) {
-          lastFailure = `HTTP ${response.status}`
-        } else {
-          const body = Buffer.from(await response.arrayBuffer())
-          if (sha256(body) === sha256(expected)) {
-            matched = true
-            break
-          }
-          lastFailure = `content differs (${body.length} vs ${expected.length} bytes)`
-        }
-      } catch (cause) {
-        lastFailure = (cause as Error).message
-      }
-      if (attempt < 12) {
-        await delay(5_000)
-      }
-    }
-    if (!matched) {
-      throw new Error(`Published ${url} did not match the local repository: ${lastFailure}`)
-    }
-    log(`Verified ${url}`)
-  }
-}
-
 async function main(): Promise<void> {
   const options = parseOptions(process.argv.slice(2))
   const baseUrl = normalizeAptBaseUrl(
@@ -762,9 +708,9 @@ async function main(): Promise<void> {
       uploadObject(options.repo, key, bucket, options.dryRun)
     }
 
-    if (!options.dryRun && options.verify) {
-      await verifyPublication(baseUrl, options.repo)
-    }
+    // No fetch-back through the custom domain: the zone's WAF and bot products may refuse
+    // this client while still serving the object to APT clients, and each PUT already
+    // confirmed the write.
     log(
       options.dryRun
         ? `Dry run complete. Local repository: ${options.repo}`

@@ -180,9 +180,9 @@ Publishing needs `reprepro`, GnuPG, the Cloudflare CLI (`cf`), and the released 
 pnpm run apt:publish -- --deb artifacts/LitematicaPreview-<version>-x86_64.deb
 ```
 
-The publisher rebuilds a latest-only `stable`/`main`/`amd64` reprepro distribution, verifies `InRelease` with the keyring embedded in the package, then writes the pool package, the `Packages` indexes and their immutable by-hash copies, `Release` and `Release.gpg`, and `InRelease` last. It retains old pool and by-hash objects for clients using an earlier index. Publishing fails when private key material is missing, the package does not embed the expected source and key, the embedded key does not match the signer, or an upload fails.
+The publisher rebuilds a latest-only `stable`/`main`/`amd64` reprepro distribution, verifies `InRelease` with the keyring embedded in the package, then writes the pool package, the `Packages` indexes and their immutable by-hash copies, `Release` and `Release.gpg`, and `InRelease` last. It retains old pool and by-hash objects for clients using an earlier index.
 
-Environment: `LP_APT_BASE_URL`, `LP_APT_GPG_PRIVATE_KEY` (or `LP_APT_GPG_PRIVATE_KEY_FILE`), optional `LP_APT_GPG_PASSPHRASE` and `LP_APT_GPG_FINGERPRINT`, `LP_APT_R2_BUCKET`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and optional `LP_APT_R2_JURISDICTION`. `--dry-run` builds, signs, and verifies the repository without uploading. `--no-verify` skips fetching the published `InRelease` and `Packages` back through the custom domain; keep verification enabled in CI.
+Environment: `LP_APT_BASE_URL`, `LP_APT_GPG_PRIVATE_KEY` (or `LP_APT_GPG_PRIVATE_KEY_FILE`), optional `LP_APT_GPG_PASSPHRASE` and `LP_APT_GPG_FINGERPRINT`, `LP_APT_R2_BUCKET`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and optional `LP_APT_R2_JURISDICTION`. `--dry-run` builds, signs, and verifies the repository without uploading. Publication stops at the uploads: the public custom domain sits behind the zone's WAF and bot products, which can refuse the publisher while serving clients the same object, so a fetch-back does not gate the release.
 
 Configure the custom domain so `dists/stable/InRelease` and the `Packages` indexes are not cached, or bypass the cache for `dists/`. A stale cached index can leave clients requesting objects from a different repository generation.
 

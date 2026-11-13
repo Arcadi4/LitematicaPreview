@@ -179,7 +179,7 @@ pnpm run apt:publish -- --deb artifacts/LitematicaPreview-<version>-x86_64.deb
 
 发布器会重建仅含最新版本的 `stable`/`main`/`amd64` reprepro 发行版，用软件包内嵌的密钥环验证 `InRelease`，然后依次写入软件池中的安装包、`Packages` 索引及其不可变的 by-hash 副本、`Release` 与 `Release.gpg`，最后写入 `InRelease`。旧软件池和 by-hash 对象会保留，使仍持有旧索引的客户端继续工作。私钥缺失、软件包未内嵌预期源与密钥、内嵌密钥与签名密钥不匹配或上传失败时，发布会失败。
 
-环境变量：`LP_APT_BASE_URL`、`LP_APT_GPG_PRIVATE_KEY`（或 `LP_APT_GPG_PRIVATE_KEY_FILE`）、可选的 `LP_APT_GPG_PASSPHRASE` 与 `LP_APT_GPG_FINGERPRINT`、`LP_APT_R2_BUCKET`、`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`，以及可选的 `LP_APT_R2_JURISDICTION`。`--dry-run` 只在本地构建、签名并验证仓库，不上传。`--no-verify` 跳过通过自定义域名回读已发布的 `InRelease` 与 `Packages`；CI 中应保持验证开启。
+环境变量：`LP_APT_BASE_URL`、`LP_APT_GPG_PRIVATE_KEY`（或 `LP_APT_GPG_PRIVATE_KEY_FILE`）、可选的 `LP_APT_GPG_PASSPHRASE` 与 `LP_APT_GPG_FINGERPRINT`、`LP_APT_R2_BUCKET`、`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`，以及可选的 `LP_APT_R2_JURISDICTION`。`--dry-run` 只在本地构建、签名并验证仓库，不上传。
 
 请配置自定义域名，使 `dists/stable/InRelease` 与 `Packages` 索引不被缓存，或为 `dists/` 绕过缓存。过期的缓存索引会让客户端请求到另一代仓库中的对象。
 

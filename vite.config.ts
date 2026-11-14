@@ -266,6 +266,14 @@ export default defineConfig({
     },
     overrides: [
       {
+        // jsx-a11y treats role="application" as non-interactive; the viewport surface owns raw pointer and keyboard input there.
+        files: ["src/preview-stage.tsx"],
+        rules: {
+          "jsx-a11y/no-noninteractive-element-interactions": "off",
+          "jsx-a11y/no-noninteractive-tabindex": "off",
+        },
+      },
+      {
         files: ["**/*.test.ts", "**/*.test.tsx"],
         rules: {
           "typescript/restrict-template-expressions": "off",

@@ -90,11 +90,15 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
 
   # A run triggered by a tag cannot restore a cache saved by another tag, so the
-  # release build only ever reuses caches written for the default branch. This
-  # keeps the optimized dependency graph warm on the image the Linux packages
-  # are built on.
+  # release builds only ever reuse caches written for the default branch. These
+  # jobs keep the optimized dependency graph warm on the image each package is
+  # built on, and they are the only writers of their cache: `release.yml` and
+  # `pressure.yml` restore it without saving. A cancelled or failed job must
+  # write nothing, since it has only partially compiled the dependency graph and
+  # a cache entry cannot be replaced once saved: such a snapshot would serve
+  # every later run as a full match while rebuilding whatever it lacks.
   release-cache:
-    name: Warm release cache
+    name: Warm Linux release cache
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-22.04
     env:
@@ -122,6 +126,31 @@ jobs:
         with:
           workspaces: . -> target
           shared-key: release-linux
+      # `tauri::generate_context!` embeds `frontendDist` at compile time, so the
+      # directory must exist even though nothing here loads the frontend.
+      - name: Create placeholder frontend directory
+        shell: bash
+        run: mkdir -p dist
+      - name: Compile the release host
+        run: cargo build --release --locked --manifest-path src-tauri/Cargo.toml --bin LitematicaPreview
+
+  release-cache-windows:
+    name: Warm Windows release cache
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
+      CARGO_TARGET_DIR: target
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: release-windows
       # `tauri::generate_context!` embeds `frontendDist` at compile time, so the
       # directory must exist even though nothing here loads the frontend.
       - name: Create placeholder frontend directory

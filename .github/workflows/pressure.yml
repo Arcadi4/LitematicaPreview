@@ -50,13 +50,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
-          # The release packages restore this cache. A run triggered by a tag
-          # cannot restore a cache saved by another tag, so the default branch
-          # is the only place the optimized dependency graph can stay warm.
+          # Restores the cache `ci.yml` warms on the default branch. Never save
+          # it from here: a cancelled run would store a partially compiled
+          # dependency graph as an entry nothing can replace.
           shared-key: release-windows
-          # A breach keeps the job red; the release artifacts are still worth
-          # restoring on the next run.
-          cache-on-failure: true
+          save-if: false
       # The main binary never compiles here, but tauri-build's build script
       # runs for the package and embeds frontendDist.
       - name: Create placeholder frontend directory

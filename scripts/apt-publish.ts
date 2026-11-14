@@ -56,8 +56,7 @@ function log(message: string): void {
 }
 
 function environment(name: string): string | undefined {
-  const value = process.env[name]?.trim()
-  return value ? value : undefined
+  return process.env[name]?.trim() || undefined
 }
 
 function requireEnvironment(name: string, describe: string): string {

@@ -33,7 +33,7 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 pollster = "1.0.1"
 parking_lot = "0.13"
 uuid = { version = "1", features = ["v4"] }
-litematica-preview-core = "0.1.8"
+litematica-preview-core = "0.1.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"

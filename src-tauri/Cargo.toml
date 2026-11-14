@@ -1,6 +1,6 @@
 [package]
 name = "litematica-preview"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 publish = false
 default-run = "LitematicaPreview"

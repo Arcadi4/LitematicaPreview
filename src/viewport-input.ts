@@ -15,7 +15,7 @@ export class ViewportInputQueue {
     private readonly onError: (error: unknown) => void,
   ) {}
 
-  push(command: ViewportCommand): void {
+  enqueue(command: ViewportCommand): void {
     if (command.kind === "grid") this.grid = command
     else if (command.kind === "stage") this.stage = command
     if (!this.ready) return

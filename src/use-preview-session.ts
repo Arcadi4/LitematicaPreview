@@ -209,7 +209,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   )
   useEffect(() => () => viewportQueue.clear(), [viewportQueue])
   const viewportInput = useCallback(
-    (command: ViewportCommand) => viewportQueue.push(command),
+    (command: ViewportCommand) => viewportQueue.enqueue(command),
     [viewportQueue],
   )
 
@@ -790,7 +790,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
           )
         // Bootstrap replays viewport failures that occurred before listeners were installed.
         if (result.viewportError) failViewport(result.viewportError)
-        viewportQueue.push({ kind: "grid", visible: gridRef.current })
+        viewportQueue.enqueue({ kind: "grid", visible: gridRef.current })
         viewportQueue.setReady(viewportErrorRef.current === null)
         const settings = previewSettingsRef.current
         updatePreviewSettings({

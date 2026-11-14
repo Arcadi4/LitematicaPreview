@@ -60,12 +60,12 @@ test("before readiness only the latest grid and stage survive", async () => {
     },
     (error) => assert.fail(String(error)),
   )
-  queue.push({ kind: "grid", visible: true })
-  queue.push({ kind: "stage", left: 0, top: 0, width: 1, height: 1 })
-  queue.push({ kind: "orbit", dx: 20, dy: -10 })
+  queue.enqueue({ kind: "grid", visible: true })
+  queue.enqueue({ kind: "stage", left: 0, top: 0, width: 1, height: 1 })
+  queue.enqueue({ kind: "orbit", dx: 20, dy: -10 })
   const stage: ViewportCommand = { kind: "stage", left: 12, top: 80, width: 800, height: 500 }
-  queue.push({ kind: "grid", visible: false })
-  queue.push(stage)
+  queue.enqueue({ kind: "grid", visible: false })
+  queue.enqueue(stage)
   queue.resetScene()
   frame()
   assert.deepEqual(sent, [])
@@ -92,13 +92,13 @@ test("ready frames coalesce durable state without reordering motion", async () =
   const pan: ViewportCommand = { kind: "pan", dx: 4, dy: -5 }
   const zoom: ViewportCommand = { kind: "zoom", factor: 0.88 }
   const stage: ViewportCommand = { kind: "stage", left: 0, top: 80, width: 800, height: 500 }
-  queue.push({ kind: "grid", visible: true })
-  queue.push(orbit)
-  queue.push({ kind: "stage", left: 0, top: 0, width: 1, height: 1 })
-  queue.push(pan)
-  queue.push({ kind: "grid", visible: false })
-  queue.push(zoom)
-  queue.push(stage)
+  queue.enqueue({ kind: "grid", visible: true })
+  queue.enqueue(orbit)
+  queue.enqueue({ kind: "stage", left: 0, top: 0, width: 1, height: 1 })
+  queue.enqueue(pan)
+  queue.enqueue({ kind: "grid", visible: false })
+  queue.enqueue(zoom)
+  queue.enqueue(stage)
   frame()
   await settle()
   assert.deepEqual(sent, [[orbit, pan, { kind: "grid", visible: false }, zoom, stage]])
@@ -121,7 +121,7 @@ test("continuous drag preserves ordered input with only one native frame in flig
     dx: 1,
     dy: -1,
   }))
-  for (const command of first) queue.push(command)
+  for (const command of first) queue.enqueue(command)
   frame()
   assert.deepEqual(sent, [first])
   const later: ViewportCommand[] = [
@@ -132,7 +132,7 @@ test("continuous drag preserves ordered input with only one native frame in flig
     { kind: "wheel", deltaY: -120, deltaMode: 0 },
     { kind: "arrow", dx: -1, dy: 0, panning: false },
   ]
-  for (const command of later) queue.push(command)
+  for (const command of later) queue.enqueue(command)
   frame()
   assert.equal(sent.length, 1)
   nextCompletion(completing)()
@@ -161,12 +161,12 @@ test("reset during an in-flight orbit delivers durable updates and drops pending
   )
   queue.setReady(true)
   const orbit: ViewportCommand = { kind: "orbit", dx: 1, dy: 0 }
-  queue.push(orbit)
+  queue.enqueue(orbit)
   frame()
   const stage: ViewportCommand = { kind: "stage", left: 0, top: 80, width: 800, height: 500 }
-  queue.push({ kind: "grid", visible: false })
-  queue.push(stage)
-  queue.push({ kind: "pan", dx: 9, dy: 0 })
+  queue.enqueue({ kind: "grid", visible: false })
+  queue.enqueue(stage)
+  queue.enqueue({ kind: "pan", dx: 9, dy: 0 })
   queue.resetScene()
   frame()
   assert.equal(completing.length, 1)
@@ -190,15 +190,15 @@ test("reset replays already delivered durable state but cancels scheduled moveme
   )
   queue.setReady(true)
   const stage: ViewportCommand = { kind: "stage", left: 10, top: 80, width: 800, height: 500 }
-  queue.push({ kind: "grid", visible: false })
-  queue.push(stage)
+  queue.enqueue({ kind: "grid", visible: false })
+  queue.enqueue(stage)
   frame()
   await settle()
   assert.equal(state.grid, false)
   assert.deepEqual(state.stage, stage)
   state.grid = true
   state.stage = null
-  queue.push({ kind: "pan", dx: 9, dy: 0 })
+  queue.enqueue({ kind: "pan", dx: 9, dy: 0 })
   queue.resetScene()
   frame()
   await settle()
@@ -224,13 +224,13 @@ test("reset ignores old errors without discarding the new scene's input", async 
   )
   queue.setReady(true)
   const orbit: ViewportCommand = { kind: "orbit", dx: 2, dy: 0 }
-  queue.push(orbit)
+  queue.enqueue(orbit)
   frame()
-  queue.push({ kind: "grid", visible: false })
-  queue.push({ kind: "orbit", dx: 100, dy: 0 })
+  queue.enqueue({ kind: "grid", visible: false })
+  queue.enqueue({ kind: "orbit", dx: 100, dy: 0 })
   queue.resetScene()
   const pan: ViewportCommand = { kind: "pan", dx: 3, dy: 1 }
-  queue.push(pan)
+  queue.enqueue(pan)
   assert.ok(rejectOld)
   rejectOld(new Error("Old viewport failed"))
   await settle()
@@ -259,15 +259,15 @@ test("pausing invalidates old errors and resumes with only the latest durable va
   )
   queue.setReady(true)
   const orbit: ViewportCommand = { kind: "orbit", dx: 2, dy: 0 }
-  queue.push(orbit)
+  queue.enqueue(orbit)
   frame()
-  queue.push({ kind: "pan", dx: 10, dy: 0 })
+  queue.enqueue({ kind: "pan", dx: 10, dy: 0 })
   queue.setReady(false)
-  queue.push({ kind: "grid", visible: true })
-  queue.push({ kind: "grid", visible: false })
+  queue.enqueue({ kind: "grid", visible: true })
+  queue.enqueue({ kind: "grid", visible: false })
   const stage: ViewportCommand = { kind: "stage", left: 0, top: 80, width: 900, height: 600 }
-  queue.push(stage)
-  queue.push({ kind: "fit" })
+  queue.enqueue(stage)
+  queue.enqueue({ kind: "fit" })
   assert.ok(rejectOld)
   rejectOld(new Error("Paused viewport failed"))
   await settle()
@@ -291,18 +291,18 @@ test("full clear cancels scheduled frames, forgets durable state and pauses inpu
     (error) => assert.fail(String(error)),
   )
   queue.setReady(true)
-  queue.push({ kind: "grid", visible: false })
-  queue.push({ kind: "stage", left: 0, top: 80, width: 800, height: 500 })
-  queue.push({ kind: "pan", dx: 9, dy: 0 })
+  queue.enqueue({ kind: "grid", visible: false })
+  queue.enqueue({ kind: "stage", left: 0, top: 80, width: 800, height: 500 })
+  queue.enqueue({ kind: "pan", dx: 9, dy: 0 })
   queue.clear()
   assert.equal(frames.size, 0)
-  queue.push({ kind: "fit" })
+  queue.enqueue({ kind: "fit" })
   frame()
   assert.deepEqual(sent, [])
   queue.setReady(true)
   frame()
   assert.deepEqual(sent, [])
-  queue.push({ kind: "zoom", factor: 1.12 })
+  queue.enqueue({ kind: "zoom", factor: 1.12 })
   frame()
   await settle()
   assert.deepEqual(sent, [[{ kind: "zoom", factor: 1.12 }]])
@@ -324,12 +324,12 @@ test("full clear ignores an in-flight rejection even after readiness returns", a
     (error) => errors.push(error),
   )
   queue.setReady(true)
-  queue.push({ kind: "grid", visible: false })
+  queue.enqueue({ kind: "grid", visible: false })
   frame()
   queue.clear()
   queue.setReady(true)
   const fit: ViewportCommand = { kind: "fit" }
-  queue.push(fit)
+  queue.enqueue(fit)
   frame()
   assert.deepEqual(sent, [[{ kind: "grid", visible: false }]])
   assert.ok(rejectOld)
@@ -349,9 +349,9 @@ test("a failed current frame reports the real error without replaying pending in
     (error) => errors.push(error),
   )
   queue.setReady(true)
-  queue.push({ kind: "fit" })
+  queue.enqueue({ kind: "fit" })
   frame()
-  queue.push({ kind: "zoom", factor: 0.88 })
+  queue.enqueue({ kind: "zoom", factor: 0.88 })
   const error = new Error("Graphics surface lost")
   const reject = rejecting.shift()
   assert.ok(reject, "Expected a pending frame rejection")

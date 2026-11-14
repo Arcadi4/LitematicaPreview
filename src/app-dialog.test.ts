@@ -196,15 +196,15 @@ test("Texture packs toggle, reorder highest first, and confirm per-row removal",
   assert.match(rows[0]?.textContent ?? "", /Alpha/)
   assert.match(rows[1]?.textContent ?? "", /Beta/)
 
-  const alphaUp = getByRole(panel, "button", { name: "Move Alpha up" }) as HTMLButtonElement
-  const betaDown = getByRole(panel, "button", { name: "Move Beta down" }) as HTMLButtonElement
+  const alphaUp = getByRole<HTMLButtonElement>(panel, "button", { name: "Move Alpha up" })
+  const betaDown = getByRole<HTMLButtonElement>(panel, "button", { name: "Move Beta down" })
   assert.equal(alphaUp.disabled, true, "the highest pack cannot move up")
   assert.equal(betaDown.disabled, true, "the lowest pack cannot move down")
   await click(getByRole(panel, "button", { name: "Move Beta up" }))
   assert.deepEqual(orders, [["beta", "alpha"]])
 
-  assert.equal((getByRole(panel, "switch", { name: "Alpha" }) as HTMLInputElement).checked, true)
-  assert.equal((getByRole(panel, "switch", { name: "Beta" }) as HTMLInputElement).checked, false)
+  assert.equal(getByRole<HTMLInputElement>(panel, "switch", { name: "Alpha" }).checked, true)
+  assert.equal(getByRole<HTMLInputElement>(panel, "switch", { name: "Beta" }).checked, false)
   await click(getByRole(panel, "switch", { name: "Beta" }))
   assert.deepEqual(toggles, [["beta", true]])
 

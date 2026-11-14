@@ -9,8 +9,6 @@ Windows and Linux desktop app for offline Minecraft schematic and structure view
 
 ## Commands
 
-Package manager is `pnpm` (v12). Vite+ (`vp`) powers the web toolchain; `tsx` runs project scripts.
-
 | Task                    | Command                                                                  | Notes                                                                                                        |
 | ----------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
 | Install dependencies    | `pnpm install --frozen-lockfile`                                         |                                                                                                              |

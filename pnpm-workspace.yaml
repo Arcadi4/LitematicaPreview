@@ -2,8 +2,6 @@ packages:
   - "."
   - "cloudflare/apps-update"
 
-# tsx resolves the platform esbuild binary from optional dependencies; no install scripts run.
-# workerd fetches the Workers runtime used by the update worker's local dev server.
 allowBuilds:
   esbuild: true
   workerd: true

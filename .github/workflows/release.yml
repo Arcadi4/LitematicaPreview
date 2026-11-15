@@ -108,10 +108,10 @@ jobs:
         env:
           LP_APT_BASE_URL: ${{ vars.APT_BASE_URL }}
           LP_APT_PUBLIC_KEY: ${{ secrets.APT_GPG_PUBLIC_KEY }}
-        run: pnpm exec tsx scripts/build-linux.ts --apt
+        run: pnpm exec vpx scripts/build-linux.ts --apt
       - name: Build prerelease Debian package and AppImage
         if: needs.check.outputs.prerelease == 'true'
-        run: pnpm exec tsx scripts/build-linux.ts
+        run: pnpm exec vpx scripts/build-linux.ts
 
       - uses: actions/upload-artifact@v7
         with:
@@ -162,7 +162,7 @@ jobs:
         run: dotnet tool install --global vpk
 
       - name: Build setup and portable packages
-        run: pnpm exec tsx scripts/build.ts --allow-unsigned
+        run: pnpm exec vpx scripts/build.ts --allow-unsigned
 
       - uses: actions/upload-artifact@v7
         with:
@@ -231,7 +231,7 @@ jobs:
           LP_APT_R2_BUCKET: apt-repo
         run: |
           version="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
-          pnpm exec tsx scripts/apt-publish.ts --deb "artifacts/LitematicaPreview-${version}-x86_64.deb"
+          pnpm exec vpx scripts/apt-publish.ts --deb "artifacts/LitematicaPreview-${version}-x86_64.deb"
       - name: Publish downloads and update feed
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}

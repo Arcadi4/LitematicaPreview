@@ -18,12 +18,11 @@
 
 Litematica Preview is a Windows and Linux desktop viewer for Minecraft schematics and structures. It previews `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, `.mca`, and `.nusn` files locally in 3D.
 
-If you are on macOS, check out the sister project [LitematicaQL](https://github.com/Arcadi4/LitematicaQL) for the same speed and smooth Quick Look integration!
+If you are on **macOS**, check out the sister project **[LitematicaQL](https://github.com/Arcadi4/LitematicaQL)** for the same speed and smooth Quick Look integration!
 
 ## Highlights
 
 - Preview eight Minecraft schematic and structure formats offline in textured 3D with native wgpu (Direct3D 12 on Windows, Vulkan on Linux) and Nucleation.
-- Copy the current preview to the clipboard, or use the adjacent dropdown to save it as PNG or JPEG. The file extension selects the format.
 - Import Minecraft Java resource packs, keep them locally, and arrange an enabled stack by priority. Missing resources fall back to lower packs, then bundled vanilla.
 - Load large `.litematic` files with compact decoding and chunked previews that avoid retaining the full decompressed file.
 - Generate and upload geometry concurrently with 32-block chunks by default, configurable chunk sizes and worker counts, progressive rendering, and cancellable loading progress.
@@ -32,163 +31,26 @@ If you are on macOS, check out the sister project [LitematicaQL](https://github.
 
 ## Install
 
-Download the latest release from the [release page](https://github.com/Arcadi4/LitematicaPreview/releases):
+Download the latest release from the [release page](https://github.com/Arcadi4/LitematicaPreview/releases).
 
 ### Windows x64
 
-- **Installer (`LitematicaPreview-<version>-x86_64-setup.exe`)**: A one-click Velopack installer. It installs per-user without administrator privileges, starts the app, and installs later releases from the update controls in the About dialog.
-- **Portable (`LitematicaPreview-<version>-x86_64-portable.zip`)**: Extract the archive and run `LitematicaPreview.exe` in the extracted directory. Keep its contents together; portable copies also update in place.
+Pick the **installer** (`LitematicaPreview-<version>-x86_64-setup.exe`) for a one-click, per-user setup with updates from the About dialog, or the **portable ZIP** (`LitematicaPreview-<version>-x86_64-portable.zip`): extract it, run `LitematicaPreview.exe`, and keep its files together; portable copies also update in place.
 
-Requires Windows 10 or 11 (x64) and the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (pre-installed on Windows 11 and current Windows 10 builds; the setup installer installs it automatically if missing).
-
-The one-click setup has no file-association page. Litematica Preview asks once after the first launch; choose **Register file types** to add it to Open with without changing your Windows defaults.
-
-> [!NOTE]
-> To change file associations later, open the top-right menu and select **Set as default app…** or **Remove file associations**. From the extracted portable directory, use `.\current\LitematicaPreview.exe --register` or `.\current\LitematicaPreview.exe --unregister` in PowerShell.
+Requires Windows 10 or 11 (x64). The installer adds the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) if missing. After first launch the app asks once to register file types for Open with; it does not change your defaults. Change them later from the top-right menu, or use `.\current\LitematicaPreview.exe --register` / `--unregister` from the extracted portable directory.
 
 ### Linux x64
 
-- **Debian package (`LitematicaPreview-<version>-x86_64.deb`)**: Install with `sudo apt install ./LitematicaPreview-<version>-x86_64.deb`.
-- **AppImage (`LitematicaPreview-<version>-x86_64.AppImage`)**: Make it executable with `chmod +x`, then run it.
+Install the **Debian package** (`LitematicaPreview-<version>-x86_64.deb`) with `sudo apt install ./LitematicaPreview-<version>-x86_64.deb`, or make the **AppImage** (`LitematicaPreview-<version>-x86_64.AppImage`) executable with `chmod +x` and run it.
 
-Debian packages built with the apt repository enroll the signed source `/etc/apt/sources.list.d/litematica-preview.list` and the keyring `/usr/share/keyrings/litematica-preview-archive-keyring.gpg`. Install such a package once and later releases arrive through apt:
+Releases target Ubuntu 22.04 and need GTK 3, WebKitGTK 4.1, a Vulkan loader and compatible driver, and `xdg-utils`; older distributions are not guaranteed to run the release binaries. Without a Vulkan device the app opens but cannot preview schematics. Debian packages declare these dependencies, install a desktop entry and MIME declarations, and leave your default applications unchanged — choose associations in your file manager.
+
+Debian packages built with the apt repository also enroll a signed source and keyring (removed with the package), so later releases arrive through apt:
 
 ```bash
 sudo apt update
 sudo apt install litematica-preview
 ```
-
-The repository serves the newest version only. Its pool keeps earlier package files so clients still holding an older index can finish updating. Removing the package also removes the source and keyring, so no separate cleanup is needed.
-
-Linux releases target Ubuntu 22.04 and require GTK 3, WebKitGTK 4.1, a Vulkan loader and compatible driver, and `xdg-utils`. The Debian package declares these dependencies. Without a Vulkan device the application opens but cannot preview schematics. Older distributions are not guaranteed to run binaries built on the release runner.
-
-The Debian package installs a desktop entry and MIME declarations without changing your default applications. Choose file associations through your desktop's file manager; the Windows registration commands are not shown on Linux.
-
-## Camera Controls
-
-Select **Fly** in the preview toolbar or press `V` to switch between orbit and spectator flight. In fly mode, move with `W`, `A`, `S`, and `D`, ascend with `Space`, and descend with `Ctrl`. Move the mouse to look around; click the viewport to capture the pointer, or drag to look when capture is unavailable. Press `Escape` or `V` to leave fly mode. Flight has no collision or gravity.
-
-## Texture Packs
-
-Open **Settings → Texture packs** to import Minecraft Java resource-pack ZIPs. Enable packs with the switches and arrange them with the arrow buttons, highest priority first. New imports start at the lowest custom priority.
-
-Missing textures, models, and blockstates fall back through lower packs to bundled vanilla. Changes reload the current preview. Saved packs and the previous single-pack selection are preserved; removing a saved copy never deletes the original ZIP.
-
-## Supported Formats
-
-| Extension      | File format                                   |
-| -------------- | --------------------------------------------- |
-| `.litematic`   | Litematica                                    |
-| `.schem`       | Sponge schematic                              |
-| `.schematic`   | MCEdit                                        |
-| `.nbt`         | Java structure block                          |
-| `.snbt`        | Structure SNBT, brace or bracket block states |
-| `.mcstructure` | Bedrock structure                             |
-| `.mca`         | Minecraft Anvil region                        |
-| `.nusn`        | Nucleation snapshot                           |
-
-## Development
-
-Decoding, mesh packing, and first-use texture preparation live in
-[LitematicaPreview Core](https://github.com/Arcadi4/litematica-preview-core).
-The host transfers prepared bytes into the native wgpu renderer without converting attributes or rebasing indices. Windows presents directly through a Direct3D 12 swapchain beneath WebView2. Linux renders Vulkan frames offscreen and hands their pixels to a GTK DrawingArea beneath transparent WebKitGTK. This keeps GTK in charge of X11/Wayland composition and costs one GPU readback per rendered frame; geometry never crosses the WebView bridge.
-
-GPU upload admission is bounded by both batch count and a 64 MiB budget for geometry and texture bytes. One larger batch can upload on its own; this is not a total model or VRAM limit. Home releases scene geometry and the depth/MSAA attachments, which are allocated only when visible geometry needs them. Smaller chunks reduce intermediate meshing peaks; larger worker counts trade memory for throughput.
-
-Linux presentation uses a bounded latest-frame mailbox and pooled pixel buffers. Readback waits run on a dedicated worker, while GTK objects stay on the main thread. Resize drops mismatched frames instead of stretching them, and idle windows do not schedule a rendering timer.
-
-Run the desktop app in development mode:
-
-```bash
-pnpm install --frozen-lockfile
-pnpm run tauri:dev
-```
-
-Run frontend and Rust checks (the same set CI runs):
-
-```bash
-pnpm run check
-```
-
-To exercise an unpublished core checkout, resolve its lockfile entry first:
-
-```bash
-LP_CORE_PATH=../litematica-preview-core pnpm run resolve:host
-LP_CORE_PATH=../litematica-preview-core pnpm run test:host
-```
-
-Run `pnpm run resolve:host` without the override to restore the published dependency
-before committing.
-
-### Build Windows
-
-- Node.js 24 LTS and pnpm
-- Rust stable toolchain (`x86_64-pc-windows-msvc`)
-- Visual Studio C++ Build Tools (Desktop development with C++, x64 MSVC, Windows SDK)
-- .NET 10 SDK with Velopack: `dotnet tool install --global vpk --version 1.2.161`
-
-```bash
-git clone https://github.com/Arcadi4/LitematicaPreview.git
-cd LitematicaPreview
-
-rustup target add x86_64-pc-windows-msvc
-pnpm run build:win
-```
-
-Release builds must be signed. Set `LITEMATICA_WINDOWS_SIGN_PARAMS` for `signtool` arguments or `LITEMATICA_WINDOWS_AZURE_SIGN_FILE` for Azure Artifact Signing metadata. Local unsigned test builds only: `pnpm run build:win -- --allow-unsigned`.
-
-CI accepts `LITEMATICA_WINDOWS_SIGN_PARAMS`, or `LITEMATICA_WINDOWS_AZURE_SIGN_METADATA` with `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_CLIENT_SECRET` as GitHub Actions secrets. Supply the signing provider's certificate or Azure Artifact Signing configuration before a release.
-
-Build outputs are written to `artifacts/`: `*-setup.exe`, `*-portable.zip`, and a `velopack/` directory holding `releases.win.json` plus the full (and optional delta) `.nupkg` files for `https://update.tanh.moe/litematica-preview/windows/`. The runnable staging directory remains `x86_64/`.
-Cargo output uses the workspace `target/` directory by default; set `CARGO_TARGET_DIR` to use another directory. The release workflow shares this directory and the Windows MSVC target between tests and packaging.
-The Cargo package keeps `LitematicaPreview` as `default-run` so Tauri can select the application alongside the `pressure` binary. Run the pressure tool explicitly with `pnpm run pressure:host -- ...`.
-
-### Build Linux
-
-Use a Linux x64 host with Node.js 24, pnpm 12, and Rust stable. On Ubuntu 22.04, install the native build dependencies:
-
-```bash
-sudo apt-get update
-sudo apt-get install --yes build-essential curl wget file pkg-config \
-  libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev libssl-dev librsvg2-dev \
-  libayatana-appindicator3-dev libvulkan-dev mesa-vulkan-drivers patchelf
-```
-
-```bash
-pnpm install --frozen-lockfile
-rustup target add x86_64-unknown-linux-gnu
-pnpm run build:linux
-```
-
-The Tauri build prepares the frontend and bundles resources. Versioned `.deb` and `.AppImage` files are written to `artifacts/`; `CARGO_TARGET_DIR` overrides the Cargo output directory. Run `pnpm run checksums --linux` for Linux packages, or pass both `--win --linux` for a combined release.
-
-#### Publish the apt repository
-
-A release build enrolls the signed apt repository in the Debian package with `--apt`:
-
-```bash
-LP_APT_BASE_URL=https://apt.example.com \
-LP_APT_PUBLIC_KEY_FILE=archive-public-key.asc \
-pnpm run build:linux:apt
-```
-
-`build:linux:apt` fails when the base URL or a usable public key is missing, and it verifies that the generated `.deb` contains the rendered source and keyring bytes. The base URL must use `https`; it is the public custom domain that serves the bucket.
-
-Publishing needs `reprepro`, GnuPG, the Cloudflare CLI (`cf`), and the released `.deb`:
-
-```bash
-pnpm run apt:publish -- --deb artifacts/LitematicaPreview-<version>-x86_64.deb
-```
-
-The publisher rebuilds a latest-only `stable`/`main`/`amd64` reprepro distribution, verifies `InRelease` with the keyring embedded in the package, then writes the pool package, the `Packages` indexes and their immutable by-hash copies, `Release` and `Release.gpg`, and `InRelease` last. It retains old pool and by-hash objects for clients using an earlier index.
-
-Environment: `LP_APT_BASE_URL`, `LP_APT_GPG_PRIVATE_KEY` (or `LP_APT_GPG_PRIVATE_KEY_FILE`), optional `LP_APT_GPG_PASSPHRASE` and `LP_APT_GPG_FINGERPRINT`, `LP_APT_R2_BUCKET`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and optional `LP_APT_R2_JURISDICTION`. `--dry-run` builds, signs, and verifies the repository without uploading. Publication stops at the uploads: the public custom domain sits behind the zone's WAF and bot products, which can refuse the publisher while serving clients the same object, so a fetch-back does not gate the release.
-
-Configure the custom domain so `dists/stable/InRelease` and the `Packages` indexes are not cached, or bypass the cache for `dists/`. A stale cached index can leave clients requesting objects from a different repository generation.
-
-Rotating the signing key needs a transitional release: apt verifies `InRelease` with the keyring installed by the client's current Debian package, so ship the new key before signing with it.
-
-Before treating a Linux release as stable, verify live composition on both X11 and Wayland: first load, Home/cancellation, resize/maximize/fullscreen, HiDPI, pointer and keyboard input, native dialog modality, minimize/restore, and translucent overlays during prolonged rendering. Container or offscreen checks do not establish physical-desktop or driver compatibility.
 
 ## Acknowledgements
 

@@ -70,6 +70,24 @@ Configure the custom domain so `dists/stable/InRelease` and the `Packages` index
 
 Rotating the signing key needs a transitional release: apt verifies `InRelease` with the keyring installed by the client's current Debian package, so ship the new key before signing with it.
 
+## Nix
+
+The flake builds an unpacked Linux x64 app from this checkout and lives at the
+repository root.
+
+```bash
+nix build .#litematica-preview
+nix run .
+nix develop
+```
+
+`nix build` writes the app to `result/`: the launcher is
+`result/bin/LitematicaPreview`, bundled resources are under
+`result/lib/Litematica Preview/`, and the desktop entry, icon, and MIME
+definition are under `result/share/`. The frontend and Cargo dependencies are
+fetched from their lockfiles. Use `pnpm run build:linux` for `.deb` and
+`.AppImage` release packages; the flake does not produce those bundles.
+
 ## Release verification
 
 Before treating a Linux release as stable, verify live composition on both X11 and Wayland: first load, Home/cancellation, resize/maximize/fullscreen, HiDPI, pointer and keyboard input, native dialog modality, minimize/restore, and translucent overlays during prolonged rendering. Container or offscreen checks do not establish physical-desktop or driver compatibility.

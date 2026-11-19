@@ -105,6 +105,8 @@ pub struct NativeRenderer {
     depth_view: Option<wgpu::TextureView>,
     samples: u32,
     scene: Option<Scene>,
+    /// Source/final model bounds used to fit a canonical thumbnail camera.
+    model_bounds: Option<([f32; 3], [f32; 3])>,
     device_status: Arc<DeviceStatus>,
     load_prepared: bool,
     user_interacted: bool,
@@ -214,6 +216,7 @@ impl NativeRenderer {
             depth_view,
             samples,
             scene: None,
+            model_bounds: None,
             device_status,
             load_prepared: false,
             user_interacted: false,
@@ -249,6 +252,48 @@ impl NativeRenderer {
     /// surface. No native window or display handle is created.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn new_offscreen(size: (u32, u32), sink: FrameSink) -> Result<Self, RenderError> {
+        let (device, queue, adapter) = Self::request_headless_device()?;
+        let format = wgpu::TextureFormat::Bgra8UnormSrgb;
+        let samples = Self::samples(&adapter, format);
+        let pipelines = Pipelines::new(&device, samples, format, wgpu::TextureFormat::Depth24Plus);
+        let physical_size = (size.0.max(1), size.1.max(1));
+        let target = OffscreenTarget::new(&device, &queue, physical_size, sink)?;
+        let backing_size = target.size();
+        let scale = 1.0;
+        let camera = Camera::new();
+        let (depth_view, color_view) = (None, None);
+        let device_status = DeviceStatus::new(device.clone());
+        let mut renderer = Self {
+            device,
+            queue,
+            presentation: Presentation::Offscreen(target),
+            pipelines,
+            camera,
+            format,
+            physical_size,
+            backing_size,
+            scale,
+            stage_css: None,
+            color_view,
+            depth_view,
+            samples,
+            scene: None,
+            model_bounds: None,
+            device_status,
+            load_prepared: false,
+            user_interacted: false,
+            has_visible_batch: false,
+            last_render: None,
+            frame_generation: 0,
+        };
+        renderer.refresh_camera();
+        Ok(renderer)
+    }
+
+    /// Requests the platform adapter and device shared by every headless
+    /// renderer.
+    fn request_headless_device() -> Result<(wgpu::Device, wgpu::Queue, wgpu::Adapter), RenderError>
+    {
         let (backends, backend_label) = offscreen_backend();
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = backends;
@@ -277,40 +322,7 @@ impl NativeRenderer {
                 "The graphics device could not initialize: {error}"
             ))
         })?;
-        let format = wgpu::TextureFormat::Bgra8UnormSrgb;
-        let samples = Self::samples(&adapter, format);
-        let pipelines = Pipelines::new(&device, samples, format, wgpu::TextureFormat::Depth24Plus);
-        let physical_size = (size.0.max(1), size.1.max(1));
-        let target = OffscreenTarget::new(&device, &queue, physical_size, sink)?;
-        let backing_size = target.size();
-        let scale = 1.0;
-        let camera = Camera::new();
-        let (depth_view, color_view) = (None, None);
-        let device_status = DeviceStatus::new(device.clone());
-        let mut renderer = Self {
-            device,
-            queue,
-            presentation: Presentation::Offscreen(target),
-            pipelines,
-            camera,
-            format,
-            physical_size,
-            backing_size,
-            scale,
-            stage_css: None,
-            color_view,
-            depth_view,
-            samples,
-            scene: None,
-            device_status,
-            load_prepared: false,
-            user_interacted: false,
-            has_visible_batch: false,
-            last_render: None,
-            frame_generation: 0,
-        };
-        renderer.refresh_camera();
-        Ok(renderer)
+        Ok((device, queue, adapter))
     }
 
     fn limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
@@ -493,6 +505,7 @@ impl NativeRenderer {
 
     /// Frames occupied source bounds once, before the first batch arrives.
     pub fn prepare_load(&mut self, min: [f32; 3], max: [f32; 3]) {
+        self.model_bounds = Some((min, max));
         if self.load_prepared {
             return;
         }
@@ -534,6 +547,7 @@ impl NativeRenderer {
             return;
         };
         scene.finish(metadata);
+        self.model_bounds = Some((metadata.min, metadata.max));
         if self.user_interacted && self.load_prepared {
             self.camera.update_model_bounds(metadata.min, metadata.max);
         } else {
@@ -545,6 +559,7 @@ impl NativeRenderer {
     /// Clears all displayed geometry; the caller renders the empty surface immediately.
     pub fn cancel_load(&mut self) {
         self.scene = None;
+        self.model_bounds = None;
         self.release_targets();
         self.load_prepared = false;
         self.user_interacted = false;
@@ -719,6 +734,45 @@ impl NativeRenderer {
         ))
     }
 
+    /// Renders the current live scene at `side` square pixels with the default
+    /// fitted orientation, without changing the displayed camera, stage or
+    /// targets. The copy is submitted under this lock; the caller waits for
+    /// [`CaptureJob::finish`] outside it.
+    pub fn begin_thumbnail_capture(&mut self, side: u32) -> Result<CaptureJob, RenderError> {
+        self.device_status.check().map_err(RenderError::Device)?;
+        if !self.has_visible_batch {
+            return Err(RenderError::Capture(String::from(
+                "There is no preview image to capture yet.",
+            )));
+        }
+        let bounds = self.model_bounds.ok_or_else(|| {
+            RenderError::Capture(String::from(
+                "The preview bounds are not ready to capture yet.",
+            ))
+        })?;
+        let scene = self.scene.as_ref().ok_or_else(|| {
+            RenderError::Capture(String::from("There is no preview image to capture yet."))
+        })?;
+        let result = capture_scene_thumbnail(
+            &self.device,
+            &self.queue,
+            &self.pipelines,
+            self.format,
+            self.samples,
+            side,
+            bounds,
+            scene,
+        );
+        // The thumbnail pass wrote its own camera uniforms; restore the live
+        // camera so the next presented frame keeps the user's view.
+        self.pipelines.write_cameras(
+            &self.queue,
+            self.camera.frame_camera(true),
+            self.camera.frame_camera(false),
+        );
+        result
+    }
+
     /// Encodes the clear and scene into `target`, resolving MSAA when enabled.
     fn encode_scene(
         &self,
@@ -795,6 +849,325 @@ impl NativeRenderer {
             }
             _ => Err(RenderError::SurfaceLost),
         }
+    }
+}
+
+/// Renders a scene into a square sRGB texture with the default fitted
+/// orientation and submits a copy for readback. The grid is omitted: browser
+/// thumbnails show only the model. Camera uniforms are left holding this
+/// canonical frame; callers sharing them with a live view must restore.
+#[allow(clippy::too_many_arguments)]
+fn capture_scene_thumbnail(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    pipelines: &Pipelines,
+    format: wgpu::TextureFormat,
+    samples: u32,
+    side: u32,
+    (min, max): ([f32; 3], [f32; 3]),
+    scene: &Scene,
+) -> Result<CaptureJob, RenderError> {
+    let side = side.clamp(1, device.limits().max_texture_dimension_2d);
+    let mut camera = Camera::new();
+    camera.set_model_bounds(min, max);
+    camera.resize(side as f32, side as f32);
+    let frame = camera.frame_camera(false);
+    let extent = wgpu::Extent3d {
+        width: side,
+        height: side,
+        depth_or_array_layers: 1,
+    };
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("thumbnail color"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let depth = device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("thumbnail depth"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: samples,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth24Plus,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let multisample = (samples > 1).then(|| {
+        device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("thumbnail multisample color"),
+                size: extent,
+                mip_level_count: 1,
+                sample_count: samples,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default())
+    });
+    let stride = padded_stride(side)
+        .ok_or_else(|| RenderError::Capture(String::from("The thumbnail row is too wide.")))?;
+    let bytes = u64::from(stride)
+        .checked_mul(u64::from(side))
+        .ok_or_else(|| RenderError::Capture(String::from("The thumbnail is too large.")))?;
+    if bytes > device.limits().max_buffer_size {
+        return Err(RenderError::Capture(String::from(
+            "The thumbnail is too large to read back on this graphics device.",
+        )));
+    }
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("thumbnail readback"),
+        size: bytes,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    pipelines.write_cameras(queue, frame, frame);
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("thumbnail capture"),
+    });
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("thumbnail render"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: multisample.as_ref().unwrap_or(&view),
+                depth_slice: None,
+                resolve_target: multisample.as_ref().map(|_| &view),
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: CLEAR_LINEAR[0],
+                        g: CLEAR_LINEAR[1],
+                        b: CLEAR_LINEAR[2],
+                        a: 1.0,
+                    }),
+                    store: if multisample.is_some() {
+                        wgpu::StoreOp::Discard
+                    } else {
+                        wgpu::StoreOp::Store
+                    },
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_viewport(0.0, 0.0, side as f32, side as f32, 0.0, 1.0);
+        scene.draw(pipelines, &mut pass, false)?;
+    }
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &target,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(stride),
+                rows_per_image: Some(side),
+            },
+        },
+        extent,
+    );
+    let submission = queue.submit(Some(encoder.finish()));
+    Ok(CaptureJob::new(
+        device.clone(),
+        buffer,
+        submission,
+        side,
+        side,
+        stride,
+        format,
+    ))
+}
+
+/// Reusable square thumbnail renderer for the browse grid.
+///
+/// It owns the same pipeline family and streaming scene as a live renderer,
+/// accepts decoded batches, and captures one canonical square image with no
+/// stage, camera or presentation state. [`Self::from_live`] shares the live
+/// device and queue so a batch of neighbors does not request another adapter.
+pub struct ThumbnailRenderer {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pipelines: Pipelines,
+    format: wgpu::TextureFormat,
+    samples: u32,
+    scene: Scene,
+    uploads: Arc<UploadWindow>,
+    status: Arc<DeviceStatus>,
+    bounds: Option<([f32; 3], [f32; 3])>,
+    has_geometry: bool,
+}
+
+impl ThumbnailRenderer {
+    /// Requests a dedicated headless device (Metal on macOS, Vulkan on Linux,
+    /// DX12 on Windows) and starts an empty scene.
+    pub fn new() -> Result<Self, RenderError> {
+        let (device, queue, adapter) = NativeRenderer::request_headless_device()?;
+        let format = wgpu::TextureFormat::Bgra8UnormSrgb;
+        let samples = NativeRenderer::samples(&adapter, format);
+        Ok(Self::from_device(&device, &queue, format, samples))
+    }
+
+    /// Builds pipelines and a scene on an existing device/queue. This installs
+    /// a new device error handler; use [`Self::from_live`] when sharing the
+    /// live renderer's device.
+    fn from_device(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        samples: u32,
+    ) -> Self {
+        let status = DeviceStatus::new(device.clone());
+        Self::with_device(device, queue, format, samples, status)
+    }
+
+    /// Builds a thumbnail scene on the live renderer's device and queue while
+    /// keeping its existing device error callback and status.
+    pub fn from_live(renderer: &NativeRenderer) -> Self {
+        Self::with_device(
+            &renderer.device,
+            &renderer.queue,
+            renderer.format,
+            renderer.samples,
+            Arc::clone(&renderer.device_status),
+        )
+    }
+
+    fn with_device(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        samples: u32,
+        status: Arc<DeviceStatus>,
+    ) -> Self {
+        let pipelines = Pipelines::new(device, samples, format, wgpu::TextureFormat::Depth24Plus);
+        let scene = Scene::new(device.clone(), queue.clone());
+        let uploads = Arc::new(UploadWindow::with_device(Arc::clone(&status), 1));
+        Self {
+            device: device.clone(),
+            queue: queue.clone(),
+            pipelines,
+            format,
+            samples,
+            scene,
+            uploads,
+            status,
+            bounds: None,
+            has_geometry: false,
+        }
+    }
+
+    /// Selects the bounds that fit the canonical camera, once source or final
+    /// geometry bounds are known.
+    pub fn prepare(&mut self, min: [f32; 3], max: [f32; 3]) {
+        self.bounds = Some((min, max));
+    }
+
+    /// Clears the scene so the same device, pipelines and credit window can
+    /// render another neighbor. Call only after the previous capture finished.
+    pub fn reset(&mut self) {
+        self.scene = Scene::new(self.device.clone(), self.queue.clone());
+        self.bounds = None;
+        self.has_geometry = false;
+    }
+
+    /// Uploads one streamed batch through this renderer's one-credit window,
+    /// waiting through the same bounded credit and staging-byte admission as
+    /// the live renderer while checking `current` before every wait. No GPU
+    /// allocation happens before admission.
+    pub fn attach_checked(
+        &mut self,
+        batch: &MeshBatch,
+        current: impl Fn() -> Result<(), String>,
+    ) -> Result<(), RenderError> {
+        let bytes = batch
+            .textures
+            .iter()
+            .try_fold(batch.geometry.len(), |bytes, texture| {
+                bytes.checked_add(texture.pixels.len())
+            })
+            .ok_or_else(|| {
+                RenderError::malformed_batch(
+                    "the thumbnail batch overflowed the upload size accounting",
+                )
+            })?;
+        let permit = self
+            .uploads
+            .acquire(bytes, &current)
+            .map_err(RenderError::Device)?;
+        self.scene.attach_batch(&self.pipelines, batch, permit)?;
+        if !batch.parts.is_empty() {
+            self.has_geometry = true;
+        }
+        Ok(())
+    }
+
+    /// Waits for every submitted upload to complete, checking `current` while
+    /// waiting. Call before capturing after a large stream.
+    pub fn drain_checked(
+        &mut self,
+        current: impl Fn() -> Result<(), String>,
+    ) -> Result<(), RenderError> {
+        self.uploads.drain(&current).map_err(RenderError::Device)
+    }
+
+    /// Finishes the stream with final geometry bounds. The thumbnail omits the
+    /// grid, so no grid geometry is built.
+    pub fn finish(&mut self, metadata: &PreviewInfo) {
+        self.bounds = Some((metadata.min, metadata.max));
+    }
+
+    /// Submits one square canonical capture after draining pending uploads,
+    /// checking `current` while waiting for a large stream's uploads. Wait for
+    /// [`CaptureJob::finish`] outside any caller lock.
+    pub fn begin_capture_checked(
+        &mut self,
+        side: u32,
+        current: impl Fn() -> Result<(), String>,
+    ) -> Result<CaptureJob, RenderError> {
+        self.status.check().map_err(RenderError::Device)?;
+        self.drain_checked(current)?;
+        let bounds = self.bounds.ok_or_else(|| {
+            RenderError::Capture(String::from(
+                "The thumbnail bounds are not ready to capture yet.",
+            ))
+        })?;
+        if !self.has_geometry {
+            return Err(RenderError::Capture(String::from(
+                "The thumbnail has no visible geometry to capture.",
+            )));
+        }
+        capture_scene_thumbnail(
+            &self.device,
+            &self.queue,
+            &self.pipelines,
+            self.format,
+            self.samples,
+            side,
+            bounds,
+            &self.scene,
+        )
     }
 }
 

@@ -15,6 +15,7 @@ import {
   Airplane20Regular,
   ArrowExpand20Regular,
   Copy20Regular,
+  Folder20Regular,
   FolderOpen20Regular,
   Grid20Regular,
   Home20Regular,
@@ -36,6 +37,7 @@ export interface PreviewToolbarProps {
   onFit: () => void
   onHome: () => void
   onOpenFile: () => void
+  onOpenFolder: () => void
   onToggleFly: () => void
   onToggleGrid: () => void
   onZoomIn: () => void
@@ -54,6 +56,7 @@ export function PreviewToolbar({
   onFit,
   onHome,
   onOpenFile,
+  onOpenFolder,
   onToggleFly,
   onToggleGrid,
   onZoomIn,
@@ -70,9 +73,21 @@ export function PreviewToolbar({
         disabled={busy}
         onClick={onOpenFile}
         title="Open schematic (Ctrl+O)"
+        aria-keyshortcuts="Control+O"
       >
         Open<span className="ml-1 hidden text-xs font-normal opacity-75 sm:inline">Ctrl+O</span>
       </Button>
+      <Tooltip content="Open folder (Ctrl+Shift+O)" relationship="label">
+        <Button
+          appearance="subtle"
+          icon={<Folder20Regular />}
+          disabled={busy}
+          onClick={onOpenFolder}
+          aria-label="Open folder"
+          aria-keyshortcuts="Control+Shift+O"
+          title="Open folder (Ctrl+Shift+O)"
+        />
+      </Tooltip>
       <Tooltip content="Return home" relationship="label">
         <Button appearance="subtle" icon={<Home20Regular />} onClick={onHome} aria-label="Home" />
       </Tooltip>

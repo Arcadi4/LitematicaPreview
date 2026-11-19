@@ -6,6 +6,7 @@ import { PreviewFooter } from "./app-footer"
 import { AppHeader } from "./app-header"
 import { isTheme, savedTheme, type ThemePreference } from "./app-model"
 import { PreviewToolbar } from "./app-toolbar"
+import { BrowseStrip } from "./browse-strip"
 import { DropOverlay } from "./drop-overlay"
 import { NoticeBar } from "./notice-bar"
 import { PreviewStage } from "./preview-stage"
@@ -23,6 +24,7 @@ export default function App({ initialError }: { initialError?: string }) {
   const {
     actionBusy,
     bootstrap,
+    browse,
     busy,
     checkForUpdate,
     copyImage,
@@ -44,12 +46,16 @@ export default function App({ initialError }: { initialError?: string }) {
     loaded,
     loading,
     nativeAction,
+    next,
     notice,
     openDialog,
     openFile,
+    openFolder,
     previewMemory,
     previewSettings,
+    previous,
     removeTexturePack,
+    selectBrowse,
     setDialogOpen,
     setNotice,
     setTexturePackEnabled,
@@ -94,6 +100,7 @@ export default function App({ initialError }: { initialError?: string }) {
 
   // Effect Events keep the subscription stable while using current state.
   const requestFile = useEffectEvent(() => openFile())
+  const requestFolder = useEffectEvent(() => openFolder())
   const returnHome = useEffectEvent(() => home())
 
   useEffect(() => {
@@ -101,7 +108,9 @@ export default function App({ initialError }: { initialError?: string }) {
       if (event.defaultPrevented || event.altKey) return
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "o") {
         event.preventDefault()
-        if (!dialogOpen) requestFile()
+        if (dialogOpen) return
+        if (event.shiftKey) requestFolder()
+        else requestFile()
         return
       }
       if (dialogOpen || event.ctrlKey || event.metaKey) return
@@ -200,6 +209,7 @@ export default function App({ initialError }: { initialError?: string }) {
         onFit={fit}
         onHome={home}
         onOpenFile={openFile}
+        onOpenFolder={openFolder}
         onToggleFly={toggleFly}
         onToggleGrid={toggleGrid}
         onZoomIn={zoomIn}
@@ -225,11 +235,14 @@ export default function App({ initialError }: { initialError?: string }) {
         />
 
         <PreviewStage
+          browse={browse}
           flyMode={flyMode}
           loaded={loaded}
           loading={loading}
           onCancel={home}
           onExitFly={exitFly}
+          onNext={next}
+          onPrevious={previous}
           onViewportInput={viewportInput}
           stageActive={stageActive}
           viewportRef={viewportRef}
@@ -244,6 +257,15 @@ export default function App({ initialError }: { initialError?: string }) {
 
         {dragging && <DropOverlay />}
       </main>
+
+      {browse && browse.paths.length > 1 && (
+        <BrowseStrip
+          onNext={next}
+          onPrevious={previous}
+          onSelect={selectBrowse}
+          selection={browse}
+        />
+      )}
 
       <PreviewFooter
         bootstrap={bootstrap}

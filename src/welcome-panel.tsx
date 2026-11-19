@@ -29,7 +29,7 @@ export function WelcomePanel({
             <FolderOpen20Regular />
           </div>
           <div className="flex flex-1 flex-col gap-1">
-            <strong className="text-sm font-semibold">Drop a schematic here</strong>
+            <strong className="text-sm font-semibold">Drop schematics here</strong>
           </div>
           <Button
             appearance="primary"
@@ -38,7 +38,7 @@ export function WelcomePanel({
             onClick={onOpenFile}
             className="w-full sm:w-auto!"
           >
-            {busy ? "Choosing file…" : "Open schematic"}
+            Open files
           </Button>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-2" aria-label="Supported formats">

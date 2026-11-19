@@ -85,6 +85,64 @@ pub fn pick_files(
 }
 
 /// Must run on a blocking worker, not the native event-loop thread.
+pub fn pick_folder(
+    app: &AppHandle,
+    window: WebviewWindow,
+    title: &'static str,
+) -> Result<Option<PathBuf>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        app.run_on_main_thread(move || {
+            let parent = match window.gtk_window() {
+                Ok(parent) => parent,
+                Err(error) => {
+                    let _ =
+                        sender.send(Err(format!("Unable to parent the folder picker: {error}")));
+                    return;
+                }
+            };
+            let dialog = gtk::FileChooserNative::builder()
+                .title(title)
+                .transient_for(&parent)
+                .modal(true)
+                .action(gtk::FileChooserAction::SelectFolder)
+                .build();
+            gtk::glib::MainContext::default().spawn_local(async move {
+                let response = dialog.run_future().await;
+                let folder = (response == gtk::ResponseType::Accept)
+                    .then(|| dialog.filename())
+                    .flatten();
+                dialog.destroy();
+                let _ = sender.send(Ok(folder));
+            });
+        })
+        .map_err(|error| format!("Unable to show the folder picker: {error}"))?;
+        receiver
+            .recv()
+            .map_err(|error| format!("The folder picker closed unexpectedly: {error}"))?
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        use tauri_plugin_dialog::DialogExt;
+
+        app.dialog()
+            .file()
+            .set_parent(&window)
+            .set_title(title)
+            .blocking_pick_folder()
+            .map(|folder| {
+                folder
+                    .into_path()
+                    .map_err(|error| format!("Unable to open the selected folder: {error}"))
+            })
+            .transpose()
+    }
+}
+
+/// Must run on a blocking worker, not the native event-loop thread.
 pub fn save_file(
     app: &AppHandle,
     window: WebviewWindow,

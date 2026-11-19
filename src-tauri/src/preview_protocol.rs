@@ -1,17 +1,44 @@
 use std::io::{self, Read, Write};
+use std::path::PathBuf;
 
 use litematica_preview_core::{MeshBatch, MeshPart, PreviewInfo, Texture};
+use serde::{Deserialize, Serialize};
 
-use crate::preview::Metadata;
+use crate::preview::{Metadata, PackLayer};
 
 const MAX_METADATA_BYTES: usize = 64 * 1024;
 const MAX_BATCH_BYTES: usize = 2 * 1024 * 1024 * 1024;
 const MAX_DESCRIPTORS: usize = 65_536;
 
+/// Whether a request may stream a preview that is never shown immediately.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Purpose {
+    Foreground,
+    Preload,
+}
+
+/// One decoder request. Bounds and texture limit are part of the identity the
+/// child uses to decide what its pack cache can reuse.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Request {
+    pub path: PathBuf,
+    pub pack_path: PathBuf,
+    pub layers: Vec<PackLayer>,
+    pub chunk_size: Option<u16>,
+    pub thread_count: Option<u8>,
+    pub max_texture_side: u32,
+    pub purpose: Purpose,
+}
+
 pub enum Event {
     Progress(&'static str, u64, u64),
     Prepared([f32; 3], [f32; 3]),
     Batch(MeshBatch),
+    /// The decoded model exceeded the speculative admission budget before
+    /// meshing. This is the final event for the request.
+    Skipped(String),
     Finished(Result<Metadata, String>),
 }
 
@@ -107,6 +134,18 @@ pub fn batch(mut output: impl Write, batch: &MeshBatch) -> io::Result<()> {
     output.flush()
 }
 
+/// Terminates a speculative request whose decoded model failed admission.
+/// No bounds or batches follow, so the child never builds a mesh for it.
+pub fn skipped(mut output: impl Write, reason: &str) -> io::Result<()> {
+    let mut end = reason.len().min(MAX_METADATA_BYTES);
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    output.write_all(&[6])?;
+    write_frame(&mut output, &reason.as_bytes()[..end], MAX_METADATA_BYTES)?;
+    output.flush()
+}
+
 pub fn finish(mut output: impl Write, result: Result<Metadata, String>) -> io::Result<()> {
     match result {
         Ok(metadata) => {
@@ -147,6 +186,10 @@ pub fn receive(mut input: impl Read) -> io::Result<Event> {
             Ok(Event::Finished(Err(
                 String::from_utf8(bytes).map_err(invalid)?
             )))
+        }
+        6 => {
+            let bytes = read_frame(&mut input, MAX_METADATA_BYTES)?;
+            Ok(Event::Skipped(String::from_utf8(bytes).map_err(invalid)?))
         }
         _ => Err(invalid("Invalid decoder event")),
     }
@@ -439,6 +482,16 @@ mod tests {
             assert_eq!(actual.extent, expected.extent);
             assert_eq!(actual.info.triangle_count, 1);
         }
+    }
+
+    #[test]
+    fn skipped_reason_round_trips() {
+        let mut bytes = Vec::new();
+        skipped(&mut bytes, "too large").unwrap();
+        assert!(matches!(
+            receive(bytes.as_slice()).unwrap(),
+            Event::Skipped(reason) if reason == "too large"
+        ));
     }
 
     #[test]

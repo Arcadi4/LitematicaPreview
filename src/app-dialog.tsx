@@ -72,8 +72,12 @@ function ControlsHelp() {
       </p>
       <dl className="my-0 mb-5 flex flex-col gap-0 [&_dd]:m-0 [&_dd]:leading-normal [&_dt]:font-semibold [&>div]:grid [&>div]:grid-cols-[80px_1fr] [&>div]:gap-3 [&>div]:border-b [&>div]:border-[var(--colorNeutralStroke2,#dddddd)] [&>div]:py-3 sm:[&>div]:grid-cols-[120px_1fr] sm:[&>div]:gap-4">
         <div>
+          <dt>Browse files</dt>
+          <dd>Left / Right Arrow when browsing multiple schematics</dd>
+        </div>
+        <div>
           <dt>Orbit</dt>
-          <dd>Left-drag / Arrow keys</dd>
+          <dd>Left-drag / Arrow keys (Alt + Left / Right while browsing)</dd>
         </div>
         <div>
           <dt>Pan</dt>
@@ -98,9 +102,15 @@ function ControlsHelp() {
           </dd>
         </div>
         <div>
-          <dt>Open schematic</dt>
+          <dt>Open files</dt>
           <dd>
             <kbd>Ctrl</kbd> + <kbd>O</kbd>
+          </dd>
+        </div>
+        <div>
+          <dt>Open folder</dt>
+          <dd>
+            <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>O</kbd>
           </dd>
         </div>
         <div>

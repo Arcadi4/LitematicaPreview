@@ -9,14 +9,18 @@ import {
 } from "react"
 
 import { fileName, numbers, type Loaded, type Loading, type ViewportCommand } from "./app-model"
+import type { BrowseSelection } from "./browse-strip"
 import { FlyMotion, capturePointer, requestPointerLock } from "./fly-controls"
 
 export interface PreviewStageProps {
+  browse: BrowseSelection | null
   flyMode: boolean
   loaded: Loaded | null
   loading: Loading | null
   onCancel: () => void
   onExitFly: () => void
+  onNext: () => void
+  onPrevious: () => void
   onViewportInput: (command: ViewportCommand) => void
   stageActive: boolean
   viewportRef: RefObject<HTMLDivElement | null>
@@ -75,16 +79,20 @@ function LoadingProgress({ loading, onCancel }: { loading: Loading; onCancel: ()
 }
 
 export function PreviewStage({
+  browse,
   flyMode,
   loaded,
   loading,
   onCancel,
   onExitFly,
+  onNext,
+  onPrevious,
   onViewportInput,
   stageActive,
   viewportRef,
 }: PreviewStageProps) {
   const previewPath = loaded?.path ?? loading?.path
+  const browsing = browse !== null && browse.paths.length > 1
   // The pointer that owns the current drag, mirroring the native renderer's
   // single-pointer orbit/pan capture.
   const drag = useRef<{ pointerId: number; button: number; x: number; y: number } | null>(null)
@@ -151,7 +159,35 @@ export function PreviewStage({
       }
       return
     }
+    if (
+      browsing &&
+      event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      (event.key === "ArrowLeft" || event.key === "ArrowRight")
+    ) {
+      event.preventDefault()
+      onViewportInput({
+        kind: "arrow",
+        dx: event.key === "ArrowLeft" ? -18 : 18,
+        dy: 0,
+        panning: false,
+      })
+      return
+    }
     if (event.ctrlKey || event.altKey || event.metaKey) return
+    if (browsing && !event.shiftKey) {
+      if (event.key === "ArrowLeft") {
+        event.preventDefault()
+        onPrevious()
+        return
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault()
+        onNext()
+        return
+      }
+    }
     let dx = 0
     let dy = 0
     switch (event.key) {
@@ -310,7 +346,7 @@ export function PreviewStage({
       <p id="canvas-controls" className="sr-only">
         {flyMode
           ? "Spectator fly mode. W and S move forward and back, A and D move sideways, Space rises, and Control descends. Move the mouse to look around; click the viewport to capture the pointer, or drag to look when capture is unavailable. Press V or Escape to return to orbit."
-          : "Drag to orbit. Right or middle drag to pan. Scroll to zoom. Arrow keys orbit; Shift and arrow keys pan. Plus and minus zoom. F or Home fits the model."}
+          : `${browsing ? "Left and right arrows switch schematics, and Alt plus left or right arrows orbit horizontally. " : ""}Drag to orbit. Right or middle drag to pan. Scroll to zoom.${browsing ? " Up and down arrows orbit;" : " Arrow keys orbit;"} Shift and arrow keys pan. Plus and minus zoom. F or Home fits the model.`}
       </p>
       {stageActive && (
         <div
@@ -324,6 +360,11 @@ export function PreviewStage({
             </>
           ) : (
             <>
+              {browsing && (
+                <>
+                  ←/→ schematics<span>·</span>
+                </>
+              )}
               Drag to orbit<span>·</span>Right-drag to pan<span>·</span>Scroll to zoom
             </>
           )}

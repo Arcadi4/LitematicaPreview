@@ -72,6 +72,125 @@ impl Metadata {
     }
 }
 
+/// Bounded decoded content information available before meshing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DecodedMetrics {
+    pub block_count: i64,
+    pub block_entity_count: i64,
+    pub dimensions: [u32; 3],
+    pub volume: u64,
+}
+
+impl DecodedMetrics {
+    pub fn new(block_count: i64, block_entity_count: i64, dimensions: [u32; 3]) -> Self {
+        let volume = dimensions
+            .iter()
+            .try_fold(1_u64, |volume, side| volume.checked_mul(u64::from(*side)))
+            .unwrap_or(u64::MAX);
+        Self {
+            block_count,
+            block_entity_count,
+            dimensions,
+            volume,
+        }
+    }
+
+    fn from_source(source: &litematica_preview_core::DecodedSchematic) -> Self {
+        let (x, y, z) = source.content_dimensions();
+        let side = |value: i32| u32::try_from(value.max(0)).unwrap_or(0);
+        Self::new(
+            source.block_count(),
+            source.block_entity_count(),
+            [side(x), side(y), side(z)],
+        )
+    }
+}
+
+/// Fixed conservative admission for speculative preloads. Compression ratio
+/// means the on-disk size cannot bound decoded or meshed memory, so the gate
+/// uses the decoded metrics instead.
+pub const PRELOAD_MAX_BLOCKS: i64 = 150_000;
+pub const PRELOAD_MAX_BLOCK_ENTITIES: i64 = 25_000;
+pub const PRELOAD_MAX_VOLUME: u64 = 4_194_304;
+/// Speculative reads stop before allocating past this compressed size.
+pub const PRELOAD_MAX_FILE_BYTES: u64 = 1024 * 1024;
+
+/// Pre-decode resource budget for one request. Foreground previews keep the
+/// historical representation limits; speculative preloads are bounded before
+/// reading or decoding so a hostile or densely compressed neighbor cannot
+/// allocate before the decoded-metrics gate runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecodeBudget {
+    pub max_file_bytes: u64,
+    pub limits: DecodeLimits,
+}
+
+impl DecodeBudget {
+    pub fn foreground() -> Self {
+        Self {
+            max_file_bytes: u64::MAX,
+            limits: DecodeLimits {
+                max_input_bytes: isize::MAX as usize,
+                max_decompressed_bytes: isize::MAX as usize,
+                max_dimension: i32::MAX as usize,
+                max_volume: isize::MAX as usize / std::mem::size_of::<usize>(),
+                max_regions: usize::MAX,
+                max_palette_entries: usize::MAX,
+                max_entities: usize::MAX,
+                max_block_entities: usize::MAX,
+                max_nbt_depth: 64,
+                max_nbt_string_bytes: isize::MAX as usize,
+                max_nbt_collection_items: usize::MAX,
+                max_nbt_nodes: usize::MAX,
+            },
+        }
+    }
+
+    pub fn preload() -> Self {
+        Self {
+            max_file_bytes: PRELOAD_MAX_FILE_BYTES,
+            limits: DecodeLimits {
+                max_input_bytes: PRELOAD_MAX_FILE_BYTES as usize,
+                max_decompressed_bytes: 32 * 1024 * 1024,
+                max_dimension: 1024,
+                max_volume: 16 * 1024 * 1024,
+                max_regions: 4_096,
+                max_palette_entries: 65_536,
+                max_entities: 100_000,
+                max_block_entities: 250_000,
+                max_nbt_depth: 64,
+                max_nbt_string_bytes: 256 * 1024,
+                max_nbt_collection_items: 1_000_000,
+                max_nbt_nodes: 2_000_000,
+            },
+        }
+    }
+}
+
+/// Rejects models that are too large to prepare in the background. This runs
+/// after decoding and before any mesh work or texture upload.
+pub fn preload_admission(metrics: &DecodedMetrics) -> Result<(), String> {
+    if metrics.block_count > PRELOAD_MAX_BLOCKS {
+        return Err(format!(
+            "This schematic is too large to preload ({} blocks; the preload limit is {}).",
+            metrics.block_count, PRELOAD_MAX_BLOCKS
+        ));
+    }
+    if metrics.block_entity_count > PRELOAD_MAX_BLOCK_ENTITIES {
+        return Err(format!(
+            "This schematic is too large to preload ({} block entities; the preload limit is {}).",
+            metrics.block_entity_count, PRELOAD_MAX_BLOCK_ENTITIES
+        ));
+    }
+    if metrics.volume > PRELOAD_MAX_VOLUME {
+        return Err(format!(
+            "This schematic is too large to preload ({} occupied cells; the preload limit is {}).",
+            metrics.volume, PRELOAD_MAX_VOLUME
+        ));
+    }
+    Ok(())
+}
+
 type Job = Box<dyn FnOnce(&mut Option<crate::preview_process::DecoderProcess>) + Send>;
 
 #[derive(Default)]
@@ -80,33 +199,112 @@ struct Schedule {
     running: bool,
     decoder: Option<crate::preview_process::DecoderProcess>,
     control: Option<Arc<crate::preview_process::DecoderControl>>,
+    preload_control: Option<Arc<crate::preview_process::DecoderControl>>,
 }
 
 #[derive(Default)]
 pub struct PreviewWorker {
     generation: AtomicU64,
     active_request: AtomicU64,
+    preload_generation: AtomicU64,
     schedule: Mutex<Schedule>,
 }
 
 impl PreviewWorker {
     pub fn begin_session(&self) -> u64 {
-        let (id, control, decoder) = {
+        let (id, control, decoder, preload) = {
             let mut schedule = self.schedule.lock();
             let id = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+            let preload = self.invalidate_preload(&mut schedule);
             schedule.pending = None;
             self.active_request.store(0, Ordering::Release);
             let control = schedule.control.take();
             if let Some(control) = &control {
                 control.invalidate();
             }
-            (id, control, schedule.decoder.take())
+            (id, control, schedule.decoder.take(), preload)
         };
         if let Some(control) = control {
             control.stop();
         }
+        if let Some(preload) = preload {
+            preload.stop();
+        }
         drop(decoder);
         id
+    }
+
+    /// Reserves the single speculative preload slot. Fails when the caller is
+    /// stale or a foreground request is running, so a late preload job cannot
+    /// claim the token of a newer navigation.
+    pub fn begin_preload(&self, foreground_id: u64) -> Result<u64, String> {
+        let (token, control) = {
+            let mut schedule = self.schedule.lock();
+            if foreground_id == 0
+                || foreground_id != self.generation.load(Ordering::Acquire)
+                || self.active_request.load(Ordering::Acquire) != 0
+            {
+                return Err("Cancelled".into());
+            }
+            let control = self.invalidate_preload(&mut schedule);
+            (self.preload_generation.load(Ordering::Acquire), control)
+        };
+        if let Some(control) = control {
+            control.stop();
+        }
+        Ok(token)
+    }
+
+    pub fn ensure_preload(&self, token: u64) -> Result<(), String> {
+        if self.preload_generation.load(Ordering::Acquire) == token {
+            Ok(())
+        } else {
+            Err("Cancelled".into())
+        }
+    }
+
+    /// Interrupts speculative decoding only. Finished cache entries are held
+    /// outside the decoder lifetime and survive this call.
+    pub fn cancel_preload(&self) {
+        let control = {
+            let mut schedule = self.schedule.lock();
+            self.invalidate_preload(&mut schedule)
+        };
+        if let Some(control) = control {
+            control.stop();
+        }
+    }
+
+    fn invalidate_preload(
+        &self,
+        schedule: &mut Schedule,
+    ) -> Option<Arc<crate::preview_process::DecoderControl>> {
+        self.preload_generation.fetch_add(1, Ordering::AcqRel);
+        let control = schedule.preload_control.take();
+        if let Some(control) = &control {
+            control.invalidate();
+        }
+        control
+    }
+
+    pub(crate) fn register_preload(
+        &self,
+        token: u64,
+        control: Arc<crate::preview_process::DecoderControl>,
+    ) -> Result<(), String> {
+        let mut schedule = self.schedule.lock();
+        self.ensure_preload(token)?;
+        schedule.preload_control = Some(control);
+        Ok(())
+    }
+
+    /// Releases the speculative registration without stopping an idle decoder,
+    /// so its parsed packs stay warm for the next neighboring preload.
+    pub(crate) fn release_preload(&self, token: u64) {
+        let mut schedule = self.schedule.lock();
+        if self.preload_generation.load(Ordering::Acquire) == token {
+            schedule.preload_control = None;
+        }
     }
 
     /// Serializes generation changes with scene mutations and result emission.
@@ -127,12 +325,14 @@ impl PreviewWorker {
         job: Job,
     ) -> Result<(), String> {
         let mut interrupted = None;
+        let mut preload = None;
         let result = (|| {
             let mut schedule = self.schedule.lock();
             if id <= self.generation.load(Ordering::Acquire) {
                 return Err("Cancelled".into());
             }
             self.generation.store(id, Ordering::Release);
+            preload = self.invalidate_preload(&mut schedule);
             schedule.pending = None;
             if self.active_request.swap(id, Ordering::AcqRel) != 0 {
                 interrupted = schedule.control.take();
@@ -163,6 +363,9 @@ impl PreviewWorker {
             Ok(())
         })();
         if let Some(control) = interrupted {
+            control.stop();
+        }
+        if let Some(control) = preload {
             control.stop();
         }
         result
@@ -207,13 +410,14 @@ impl PreviewWorker {
         id: u64,
         clear: impl FnOnce() -> Result<(), String>,
     ) -> Result<(), String> {
-        let (result, control, decoder) = {
+        let (result, control, preload, decoder) = {
             let mut schedule = self.schedule.lock();
             if id < self.generation.load(Ordering::Acquire) {
                 return Ok(());
             }
             self.generation.store(id, Ordering::Release);
             self.active_request.store(0, Ordering::Release);
+            let preload = self.invalidate_preload(&mut schedule);
             schedule.pending = None;
             let result = catch_unwind(AssertUnwindSafe(clear))
                 .unwrap_or_else(|panic| Err(panic_message(panic)));
@@ -221,10 +425,13 @@ impl PreviewWorker {
             if let Some(control) = &control {
                 control.invalidate();
             }
-            (result, control, schedule.decoder.take())
+            (result, control, preload, schedule.decoder.take())
         };
         if let Some(control) = control {
             control.stop();
+        }
+        if let Some(preload) = preload {
+            preload.stop();
         }
         drop(decoder);
         result
@@ -380,8 +587,8 @@ pub fn decode(
     packs: &mut PackCache,
     current: impl Fn() -> Result<(), String>,
     prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
-    mut consume: impl FnMut(MeshBatch) -> Result<(), String>,
-    mut progress: impl FnMut(&'static str, u64, u64),
+    consume: impl FnMut(MeshBatch) -> Result<(), String>,
+    progress: impl FnMut(&'static str, u64, u64),
 ) -> Result<Metadata, String> {
     let PreviewRequest {
         path,
@@ -390,30 +597,51 @@ pub fn decode(
         options,
         max_texture_side,
     } = request;
+    decode_admitted(
+        path,
+        pack_path,
+        layers,
+        packs,
+        options,
+        max_texture_side,
+        &DecodeBudget::foreground(),
+        |_| Ok(()),
+        current,
+        prepared,
+        consume,
+        progress,
+    )
+}
+
+/// Decodes within `budget`, offers the decoded metrics to `admit`, and only
+/// then meshes. The callback is the single point where speculative work is
+/// gated, so a rejected model never builds an atlas or streams geometry.
+pub fn decode_admitted(
+    path: &Path,
+    pack_path: &Path,
+    layers: &[PackLayer],
+    packs: &mut PackCache,
+    options: PreviewOptions,
+    max_texture_side: u32,
+    budget: &DecodeBudget,
+    admit: impl FnOnce(&DecodedMetrics) -> Result<(), String>,
+    current: impl Fn() -> Result<(), String>,
+    prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
+    mut consume: impl FnMut(MeshBatch) -> Result<(), String>,
+    mut progress: impl FnMut(&'static str, u64, u64),
+) -> Result<Metadata, String> {
     let result = catch_unwind(AssertUnwindSafe(|| {
         options.validate()?;
         progress("decode", 0, 0);
-        let data = read_file(path, "schematic", &current)?;
+        let data = read_file(path, "schematic", budget.max_file_bytes, &current)?;
         let pack = packs.resolve(pack_path, layers, &current)?;
-        // Representation bounds are independent of the Windows job's hard cap.
-        let limits = DecodeLimits {
-            max_input_bytes: isize::MAX as usize,
-            max_decompressed_bytes: isize::MAX as usize,
-            max_dimension: i32::MAX as usize,
-            max_volume: isize::MAX as usize / std::mem::size_of::<usize>(),
-            max_regions: usize::MAX,
-            max_palette_entries: usize::MAX,
-            max_entities: usize::MAX,
-            max_block_entities: usize::MAX,
-            max_nbt_depth: 64,
-            max_nbt_string_bytes: isize::MAX as usize,
-            max_nbt_collection_items: usize::MAX,
-            max_nbt_nodes: usize::MAX,
-        };
+        // Foreground keeps the historical representation bounds; preloads pass
+        // a small fixed budget so decode cannot outgrow the child's job cap.
         let source =
-            litematica_preview_core::decode_with_options(&data, &limits, options, &current)
+            litematica_preview_core::decode_with_options(&data, &budget.limits, options, &current)
                 .map_err(|e| e.to_string())?;
         drop(data);
+        admit(&DecodedMetrics::from_source(&source))?;
         if source.block_count() == 0 {
             return Err("The schematic must contain at least one block.".into());
         }
@@ -511,12 +739,13 @@ fn read_resource_pack(
     if metadata.len() > LIMIT {
         return Err("Choose a resource pack smaller than 256 MB.".into());
     }
-    read_file(path, "resource pack", current)
+    read_file(path, "resource pack", u64::MAX, current)
 }
 
 fn read_file(
     path: &Path,
     kind: &str,
+    max_bytes: u64,
     current: impl Fn() -> Result<(), String>,
 ) -> Result<Vec<u8>, String> {
     let mut file =
@@ -526,6 +755,12 @@ fn read_file(
         .map_err(|e| format!("Unable to inspect {}: {e}", path.display()))?;
     if !metadata.is_file() {
         return Err(format!("Choose a {kind} file, not a folder or device."));
+    }
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "Choose a {kind} smaller than {} MB.",
+            max_bytes / (1024 * 1024)
+        ));
     }
     let mut bytes = Vec::new();
     let mut chunk = [0u8; 64 * 1024];
@@ -543,6 +778,12 @@ fn read_file(
             .try_reserve(count)
             .map_err(|_| "There is not enough memory to read this file.".to_string())?;
         bytes.extend_from_slice(&chunk[..count]);
+        if bytes.len() as u64 > max_bytes {
+            return Err(format!(
+                "Choose a {kind} smaller than {} MB.",
+                max_bytes / (1024 * 1024)
+            ));
+        }
     }
     if bytes.is_empty() {
         return Err(format!("Choose a nonempty {kind}."));
@@ -934,6 +1175,33 @@ mod tests {
             }
         }
         !crc
+    }
+
+    #[test]
+    fn speculative_gate_rejects_small_compressed_models_that_expand_past_the_budget() {
+        let huge = DecodedMetrics::new(i64::MAX, 0, [1024, 1024, 1024]);
+        assert!(preload_admission(&huge).is_err());
+        let dense = DecodedMetrics::new(1, 0, [1024, 1024, 1024]);
+        assert!(preload_admission(&dense).is_err());
+        let small = DecodedMetrics::new(64, 2, [16, 16, 16]);
+        assert!(preload_admission(&small).is_ok());
+    }
+
+    #[test]
+    fn speculative_budget_bounds_pre_decode_resources() {
+        let preload = DecodeBudget::preload();
+        assert_eq!(preload.max_file_bytes, PRELOAD_MAX_FILE_BYTES);
+        assert_eq!(
+            preload.limits.max_input_bytes,
+            PRELOAD_MAX_FILE_BYTES as usize
+        );
+        assert!(preload.limits.max_decompressed_bytes <= 32 * 1024 * 1024);
+        assert!(preload.limits.max_dimension <= 1024);
+        assert!(preload.limits.max_volume <= 16 * 1024 * 1024);
+        assert!(preload.limits.max_nbt_nodes <= 2_000_000);
+        let foreground = DecodeBudget::foreground();
+        assert!(foreground.max_file_bytes > preload.max_file_bytes);
+        assert!(foreground.limits.max_input_bytes > preload.limits.max_input_bytes);
     }
 
     #[test]

@@ -1,4 +1,7 @@
 pub mod associations;
+pub mod browse;
+pub mod browse_preview;
+pub mod browse_thumbnail;
 pub mod file_dialog;
 pub mod formats;
 pub mod image_clipboard;

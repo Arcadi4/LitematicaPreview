@@ -116,7 +116,9 @@ fn write_file(
         ImageFormat::Jpeg => {
             let rgb: Vec<u8> = image
                 .rgba
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
                 .collect();
             JpegEncoder::new_with_quality(&mut writer, JPEG_QUALITY)

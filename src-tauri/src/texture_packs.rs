@@ -369,7 +369,7 @@ mod tests {
             .expect("import bundled resource pack");
 
         let state = library.state().unwrap();
-        assert_eq!(state.packs, [pack.clone()]);
+        assert_eq!(state.packs.as_slice(), std::slice::from_ref(&pack));
         assert!(state.packs[0].enabled);
         assert_eq!(
             library.layers().expect("enabled stack"),
@@ -489,7 +489,7 @@ mod tests {
         let second = library.import("Second", b"two", |_| Ok(())).unwrap();
 
         let state = library.remove(&first.id).unwrap();
-        assert_eq!(state.packs, [second.clone()]);
+        assert_eq!(state.packs.as_slice(), std::slice::from_ref(&second));
         assert!(!fixture.root.join(format!("{}.zip", first.id)).exists());
         assert!(fixture.root.join(format!("{}.zip", second.id)).is_file());
     }

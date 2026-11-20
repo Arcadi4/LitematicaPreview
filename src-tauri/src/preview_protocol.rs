@@ -161,7 +161,7 @@ fn receive_batch(input: &mut impl Read) -> io::Result<MeshBatch> {
     let texture_count = input.u32()? as usize;
     validate_counts(geometry_len, part_count, texture_count)?;
     let vertex_stride = input.u32()?;
-    if !matches!(vertex_stride, 24 | 28) || geometry_len % 4 != 0 {
+    if !matches!(vertex_stride, 24 | 28) || !geometry_len.is_multiple_of(4) {
         return Err(invalid("Invalid decoder geometry layout"));
     }
     let mut budget = MAX_BATCH_BYTES;
@@ -201,8 +201,8 @@ fn receive_batch(input: &mut impl Read) -> io::Result<MeshBatch> {
             || part.alpha_mode > 2
             || part.vertex_count == 0
             || part.index_count == 0
-            || part.vertex_offset % 4 != 0
-            || part.index_offset % 4 != 0
+            || !part.vertex_offset.is_multiple_of(4)
+            || !part.index_offset.is_multiple_of(4)
             || vertex_end.is_none_or(|end| end > part.index_offset as u64)
             || index_end.is_none_or(|end| end > geometry_len as u64)
         {

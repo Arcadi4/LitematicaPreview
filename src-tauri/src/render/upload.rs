@@ -61,10 +61,10 @@ fn check(failure: &DeviceFailure) -> Result<(), String> {
 }
 
 fn fail(failure: &DeviceFailure, message: String) {
-    if let Ok(mut error) = failure.lock() {
-        if error.is_none() {
-            *error = Some(message);
-        }
+    if let Ok(mut error) = failure.lock()
+        && error.is_none()
+    {
+        *error = Some(message);
     }
 }
 

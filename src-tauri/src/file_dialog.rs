@@ -146,7 +146,7 @@ pub fn save_file(
             .set_title(title)
             .set_file_name(default_name);
         for (name, extensions) in filters {
-            dialog = dialog.add_filter(*name, *extensions);
+            dialog = dialog.add_filter(*name, extensions);
         }
         dialog
             .blocking_save_file()

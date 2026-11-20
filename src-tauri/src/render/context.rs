@@ -565,10 +565,10 @@ impl NativeRenderer {
     /// their readback worker and never wait for it here.
     pub fn render(&mut self) -> Result<(), RenderError> {
         self.device_status.check().map_err(RenderError::Device)?;
-        if let Presentation::Offscreen(target) = &self.presentation {
-            if let Some(message) = target.failure() {
-                return Err(RenderError::Device(message));
-            }
+        if let Presentation::Offscreen(target) = &self.presentation
+            && let Some(message) = target.failure()
+        {
+            return Err(RenderError::Device(message));
         }
         if !self.camera.dirty() {
             return Ok(());

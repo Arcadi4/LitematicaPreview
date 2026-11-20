@@ -200,7 +200,7 @@ impl Scene {
     }
 
     fn validate_batch(&self, batch: &MeshBatch) -> Result<(), RenderError> {
-        if !matches!(batch.vertex_stride, 24 | 28) || batch.geometry.len() % 4 != 0 {
+        if !matches!(batch.vertex_stride, 24 | 28) || !batch.geometry.len().is_multiple_of(4) {
             return Err(RenderError::malformed_batch(
                 "the batch geometry layout is invalid",
             ));
@@ -232,8 +232,8 @@ impl Scene {
                 || part.alpha_mode > 2
                 || part.vertex_count == 0
                 || part.index_count == 0
-                || part.vertex_offset % 4 != 0
-                || part.index_offset % 4 != 0
+                || !part.vertex_offset.is_multiple_of(4)
+                || !part.index_offset.is_multiple_of(4)
                 || vertex_end.is_none_or(|end| end > part.index_offset as u64)
                 || index_end.is_none_or(|end| end > batch.geometry.len() as u64)
             {
@@ -303,13 +303,11 @@ impl Scene {
         pass: &mut wgpu::RenderPass,
         grid_visible: bool,
     ) -> Result<(), RenderError> {
-        if grid_visible {
-            if let Some(grid) = self.grid.as_ref() {
-                pass.set_pipeline(pipelines.grid_pipeline());
-                pass.set_bind_group(0, pipelines.grid_camera(), &[]);
-                pass.set_vertex_buffer(0, grid.buffer.slice(..));
-                pass.draw(0..grid.count, 0..1);
-            }
+        if grid_visible && let Some(grid) = self.grid.as_ref() {
+            pass.set_pipeline(pipelines.grid_pipeline());
+            pass.set_bind_group(0, pipelines.grid_camera(), &[]);
+            pass.set_vertex_buffer(0, grid.buffer.slice(..));
+            pass.draw(0..grid.count, 0..1);
         }
         for blended in [false, true] {
             for batch in &self.batches {

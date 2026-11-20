@@ -9,7 +9,7 @@ use crate::render::math::{
 /// Vertical field of view in degrees.
 const FOV_DEGREES: f32 = 28.0;
 /// Tangent of half the vertical field of view, used for fitting and panning.
-const HALF_FOV_TAN: f32 = 0.249_328_0;
+const HALF_FOV_TAN: f32 = 0.249_328;
 /// Orbit sensitivity in radians per CSS pixel.
 const ORBIT_SPEED: f32 = 0.008;
 /// Maximum absolute pitch in radians.

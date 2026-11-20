@@ -51,6 +51,12 @@ impl UpdateState {
     }
 }
 
+impl Default for UpdateState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Runs Velopack's installer and updater hooks before any other startup work.
 pub fn run_startup_hooks() {
     #[cfg(windows)]

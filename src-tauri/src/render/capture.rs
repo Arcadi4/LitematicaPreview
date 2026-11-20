@@ -126,7 +126,7 @@ impl CaptureJob {
                 match self.format {
                     wgpu::TextureFormat::Rgba8UnormSrgb => rgba.extend_from_slice(row),
                     wgpu::TextureFormat::Bgra8UnormSrgb => {
-                        for pixel in row.chunks_exact(4) {
+                        for pixel in row.as_chunks::<4>().0 {
                             rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
                         }
                     }
@@ -145,7 +145,7 @@ impl CaptureJob {
         }
         // Source-over blending leaves coverage in alpha; the stage itself is
         // opaque and its RGB is already composited over the clear color.
-        for pixel in rgba.chunks_exact_mut(4) {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
             pixel[3] = 255;
         }
         PreviewImage::new(self.width, self.height, rgba).map_err(RenderError::Capture)

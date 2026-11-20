@@ -1016,7 +1016,7 @@ impl LoadState {
             let started = Instant::now();
             encode_frame(rig, scene, &self.camera)
                 .map_err(|error| format!("The pressure frame failed: {error}"))?;
-            self.stamps.first_frame.get_or_insert_with(|| started);
+            self.stamps.first_frame.get_or_insert(started);
             self.last_render = Some(Instant::now());
         }
         Ok(())
@@ -1186,7 +1186,7 @@ fn run_load(
                 current()?;
                 let metadata = preview_process::load(
                     decoder,
-                    &*worker,
+                    &worker,
                     id,
                     preview::PreviewRequest {
                         path: &path,
@@ -1223,10 +1223,7 @@ fn run_load(
                 Ok(())
             }))
             .unwrap_or_else(|panic| Err(panic_text(&panic)));
-            let error = match outcome_result {
-                Ok(()) => None,
-                Err(failure) => Some(failure),
-            };
+            let error = outcome_result.err();
             worker.release(id);
             job_stop.store(true, Ordering::Release);
             let summary = summarize(&job_series);
@@ -1279,15 +1276,15 @@ fn warm_loads(settings: &Settings) -> Vec<OutcomeRow> {
 
 fn check_cold(row: &OutcomeRow, frames_reported: bool) -> Vec<String> {
     let mut breaches = retained_breach(&format!("cold {}", row.fixture), row.retained_bytes);
-    if let Some(percent) = row.decoder_cap_percent {
-        if percent >= 95.0 {
-            breaches.push(format!(
-                "cold {}: decoder child private working set sits at {percent}% of the decoder memory cap",
-                row.fixture
-            ));
-        }
+    if let Some(percent) = row.decoder_cap_percent
+        && percent >= 95.0
+    {
+        breaches.push(format!(
+            "cold {}: decoder child private working set sits at {percent}% of the decoder memory cap",
+            row.fixture
+        ));
     }
-    if frames_reported && row.frames_growth_bytes.abs() as usize > FRAME_STABLE_BUDGET {
+    if frames_reported && row.frames_growth_bytes.unsigned_abs() > FRAME_STABLE_BUDGET as u64 {
         breaches.push(format!(
             "cold {}: the frame loop changed host allocations by {} bytes, over the \
              {FRAME_STABLE_BUDGET} byte allowance",
@@ -1310,17 +1307,17 @@ fn check_warm(rows: &[OutcomeRow]) -> Vec<String> {
         .find(|row| row.load == 2)
         .and_then(|row| row.child_peak);
     for row in rows.iter().filter(|row| row.load >= 3) {
-        if let (Some(base), Some(child)) = (baseline, row.child_peak) {
-            if child > base + REUSE_GROWTH_BUDGET as u64 {
-                breaches.push(format!(
-                    "warm load {} of {}: decoder child reached {} bytes, \
-                     {} bytes over the load-2 baseline plus the reuse allowance",
-                    row.load,
-                    row.fixture,
-                    child,
-                    child - base,
-                ));
-            }
+        if let (Some(base), Some(child)) = (baseline, row.child_peak)
+            && child > base + REUSE_GROWTH_BUDGET as u64
+        {
+            breaches.push(format!(
+                "warm load {} of {}: decoder child reached {} bytes, \
+                 {} bytes over the load-2 baseline plus the reuse allowance",
+                row.load,
+                row.fixture,
+                child,
+                child - base,
+            ));
         }
     }
     breaches
@@ -1408,10 +1405,10 @@ impl CoreRun {
                 self.geometry_max[axis] = self.geometry_max[axis].max(batch.info.max[axis] as f64);
             }
         }
-        if let Some(texture) = batch.textures.iter().find(|texture| texture.index == 0) {
-            if self.record.atlas == [0, 0] {
-                self.record.atlas = [texture.width as u64, texture.height as u64];
-            }
+        if let Some(texture) = batch.textures.iter().find(|texture| texture.index == 0)
+            && self.record.atlas == [0, 0]
+        {
+            self.record.atlas = [texture.width as u64, texture.height as u64];
         }
         for texture in &batch.textures {
             if texture.index != 0 {
@@ -1510,14 +1507,13 @@ fn run_core_pass(
         let failure = result.as_ref().err().cloned();
         {
             let mut run_ref = run.borrow_mut();
-            if failure.is_none() {
-                if let Ok(metadata) = &result {
-                    run_ref.record.blocks = metadata.block_count.max(0) as u64;
-                    run_ref.record.block_entities = metadata.block_entity_count.max(0) as u64;
-                    for axis in 0..3 {
-                        run_ref.record.content[axis] =
-                            (metadata.max[axis] - metadata.min[axis]) as f64;
-                    }
+            if failure.is_none()
+                && let Ok(metadata) = &result
+            {
+                run_ref.record.blocks = metadata.block_count.max(0) as u64;
+                run_ref.record.block_entities = metadata.block_entity_count.max(0) as u64;
+                for axis in 0..3 {
+                    run_ref.record.content[axis] = (metadata.max[axis] - metadata.min[axis]) as f64;
                 }
             }
             run_ref.finish(failure.clone(), elapsed);

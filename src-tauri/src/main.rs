@@ -923,22 +923,19 @@ fn run() -> Result<(), String> {
             if matches!(
                 event,
                 tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
-            ) {
-                if let Some(viewer) = window.try_state::<ViewerState>() {
-                    if let Ok(mut renderer) = viewer.renderer.lock() {
-                        if let Some(renderer) = renderer.as_mut() {
-                            if let Ok(size) = window.inner_size() {
-                                renderer.resize(size.width, size.height);
-                            }
-                            if let Ok(scale) = window.scale_factor() {
-                                renderer.set_scale(scale);
-                            }
-                            // A failed frame here is retried by the next input; only load
-                            // failures reach the DOM as `preview-failed`.
-                            let _ = renderer.render();
-                        }
-                    }
+            ) && let Some(viewer) = window.try_state::<ViewerState>()
+                && let Ok(mut renderer) = viewer.renderer.lock()
+                && let Some(renderer) = renderer.as_mut()
+            {
+                if let Ok(size) = window.inner_size() {
+                    renderer.resize(size.width, size.height);
                 }
+                if let Ok(scale) = window.scale_factor() {
+                    renderer.set_scale(scale);
+                }
+                // A failed frame here is retried by the next input; only load
+                // failures reach the DOM as `preview-failed`.
+                let _ = renderer.render();
             }
         })
         .invoke_handler(tauri::generate_handler![

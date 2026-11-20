@@ -1188,11 +1188,13 @@ fn run_load(
                     decoder,
                     &*worker,
                     id,
-                    &path,
-                    &packed,
-                    &[],
-                    options.clone(),
-                    max_texture_side,
+                    preview::PreviewRequest {
+                        path: &path,
+                        pack_path: &packed,
+                        layers: &[],
+                        options,
+                        max_texture_side,
+                    },
                     {
                         let state = Arc::clone(&state);
                         move |min, max| -> Result<(), String> {
@@ -1473,12 +1475,14 @@ fn run_core_pass(
         meter::AllocationMeter::reset_peak();
         let run = Rc::new(RefCell::new(CoreRun::new(name, before)));
         let result = preview::decode(
-            &fixture_path(name),
-            &pack_path(),
-            &[],
+            preview::PreviewRequest {
+                path: &fixture_path(name),
+                pack_path: &pack_path(),
+                layers: &[],
+                options: settings.options(),
+                max_texture_side: preview::MAX_ATLAS_SIDE,
+            },
             &mut packs,
-            settings.options(),
-            preview::MAX_ATLAS_SIDE,
             || Ok(()),
             {
                 let run = Rc::clone(&run);

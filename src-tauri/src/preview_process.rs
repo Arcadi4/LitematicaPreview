@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use litematica_preview_core::{MeshBatch, PreviewOptions};
 use parking_lot::Mutex;
 
-use crate::preview::{Metadata, PackLayer, PreviewWorker};
+use crate::preview::{Metadata, PackLayer, PreviewRequest, PreviewWorker};
 use crate::preview_protocol::{self as wire, Event};
 
 const TOKEN_BYTES: usize = 32;
@@ -215,17 +215,20 @@ impl DecoderProcess {
 
     fn load(
         &mut self,
-        path: &Path,
-        pack_path: &Path,
-        layers: &[PackLayer],
-        options: PreviewOptions,
-        max_texture_side: u32,
+        request: PreviewRequest<'_>,
         current: impl Fn() -> Result<(), String>,
         prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
         mut consume: impl FnMut(MeshBatch) -> Result<(), String>,
         mut progress: impl FnMut(&'static str, u64, u64),
     ) -> Result<Result<Metadata, String>, String> {
-        let request = serde_json::to_vec(&(
+        let PreviewRequest {
+            path,
+            pack_path,
+            layers,
+            options,
+            max_texture_side,
+        } = request;
+        let request_bytes = serde_json::to_vec(&(
             path,
             pack_path,
             layers,
@@ -239,7 +242,7 @@ impl DecoderProcess {
             .stream
             .as_mut()
             .ok_or("The decoder is not connected.")?;
-        wire::write_frame(stream.get_mut(), &request, MAX_REQUEST_BYTES)
+        wire::write_frame(stream.get_mut(), &request_bytes, MAX_REQUEST_BYTES)
             .map_err(|e| format!("Unable to send the decoder request: {e}"))?;
         let mut prepared = Some(prepared);
         loop {
@@ -286,11 +289,7 @@ pub fn load(
     decoder: &mut Option<DecoderProcess>,
     worker: &PreviewWorker,
     id: u64,
-    path: &Path,
-    pack_path: &Path,
-    layers: &[PackLayer],
-    options: PreviewOptions,
-    max_texture_side: u32,
+    request: PreviewRequest<'_>,
     prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
     consume: impl FnMut(MeshBatch) -> Result<(), String>,
     progress: impl FnMut(&'static str, u64, u64),
@@ -312,11 +311,7 @@ pub fn load(
         .ok_or("The decoder process is unavailable.")?;
     worker.register_decoder(id, Arc::clone(&process.control))?;
     let result = process.load(
-        path,
-        pack_path,
-        layers,
-        options,
-        max_texture_side,
+        request,
         || worker.ensure_current(id),
         prepared,
         consume,
@@ -385,12 +380,14 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
         };
         let transport_error = RefCell::new(None);
         let result = crate::preview::decode(
-            &path,
-            &pack_path,
-            &layers,
+            PreviewRequest {
+                path: &path,
+                pack_path: &pack_path,
+                layers: &layers,
+                options,
+                max_texture_side,
+            },
             &mut packs,
-            options,
-            max_texture_side,
             || match transport_error.borrow().as_ref() {
                 Some(error) => Err(format!("The decoder connection failed: {error}")),
                 None => Ok(()),

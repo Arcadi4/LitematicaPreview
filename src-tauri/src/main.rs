@@ -8,7 +8,7 @@ use litematica_preview::associations;
 use litematica_preview::file_dialog;
 use litematica_preview::formats;
 use litematica_preview::image_clipboard;
-use litematica_preview::preview::{self, PreviewWorker};
+use litematica_preview::preview::{self, PreviewRequest, PreviewWorker};
 use litematica_preview::preview_image::{self, PreviewImage};
 use litematica_preview::preview_process;
 use litematica_preview::render::context::NativeRenderer;
@@ -297,11 +297,13 @@ fn start_preview(
                     decoder,
                     &job_worker,
                     request_id,
-                    &path,
-                    &pack_path,
-                    &layers,
-                    options,
-                    max_texture_side,
+                    PreviewRequest {
+                        path: &path,
+                        pack_path: &pack_path,
+                        layers: &layers,
+                        options,
+                        max_texture_side,
+                    },
                     |min, max| {
                         job_worker.with_current(request_id, || {
                             with_renderer(&renderer, |renderer| renderer.prepare_load(min, max))

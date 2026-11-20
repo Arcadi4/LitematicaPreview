@@ -274,6 +274,15 @@ pub struct PackLayer {
     pub path: PathBuf,
 }
 
+#[derive(Clone, Copy)]
+pub struct PreviewRequest<'a> {
+    pub path: &'a Path,
+    pub pack_path: &'a Path,
+    pub layers: &'a [PackLayer],
+    pub options: PreviewOptions,
+    pub max_texture_side: u32,
+}
+
 /// Overlays `layers` from lowest to highest on one clone of the parsed base.
 /// The bundled vanilla pack stays the final per-key fallback.
 pub fn compose_resource_packs(
@@ -367,17 +376,20 @@ impl PackCache {
 
 /// The decoded source and cached packs outlive the borrowing mesh stream.
 pub fn decode(
-    path: &Path,
-    pack_path: &Path,
-    layers: &[PackLayer],
+    request: PreviewRequest<'_>,
     packs: &mut PackCache,
-    options: PreviewOptions,
-    max_texture_side: u32,
     current: impl Fn() -> Result<(), String>,
     prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
     mut consume: impl FnMut(MeshBatch) -> Result<(), String>,
     mut progress: impl FnMut(&'static str, u64, u64),
 ) -> Result<Metadata, String> {
+    let PreviewRequest {
+        path,
+        pack_path,
+        layers,
+        options,
+        max_texture_side,
+    } = request;
     let result = catch_unwind(AssertUnwindSafe(|| {
         options.validate()?;
         progress("decode", 0, 0);
@@ -717,16 +729,18 @@ mod tests {
         let mut packs = PackCache::default();
         let mut batches = 0;
         let metadata = decode(
-            &schematic,
-            &pack,
-            std::slice::from_ref(&layer),
-            &mut packs,
-            PreviewOptions {
-                chunk_size: Some(32),
-                thread_count: Some(2),
-                ..PreviewOptions::default()
+            PreviewRequest {
+                path: &schematic,
+                pack_path: &pack,
+                layers: std::slice::from_ref(&layer),
+                options: PreviewOptions {
+                    chunk_size: Some(32),
+                    thread_count: Some(2),
+                    ..PreviewOptions::default()
+                },
+                max_texture_side: MAX_ATLAS_SIDE,
             },
-            MAX_ATLAS_SIDE,
+            &mut packs,
             || Ok(()),
             |_, _| Ok(()),
             |_| {

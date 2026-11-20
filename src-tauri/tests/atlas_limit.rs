@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use litematica_preview::preview::{MAX_ATLAS_SIDE, PackCache, decode};
+use litematica_preview::preview::{MAX_ATLAS_SIDE, PackCache, PreviewRequest, decode};
 use litematica_preview_core::{MeshBatch, PreviewOptions};
 
 #[test]
@@ -12,12 +12,14 @@ fn texture_atlas_grows_within_device_limit() {
     let load =
         |packs: &mut PackCache, limit, consume: &mut dyn FnMut(MeshBatch) -> Result<(), String>| {
             decode(
-                &schematic,
-                &pack,
-                &[],
+                PreviewRequest {
+                    path: &schematic,
+                    pack_path: &pack,
+                    layers: &[],
+                    options: PreviewOptions::default(),
+                    max_texture_side: limit,
+                },
                 packs,
-                PreviewOptions::default(),
-                limit,
                 || Ok(()),
                 |_, _| Ok(()),
                 consume,

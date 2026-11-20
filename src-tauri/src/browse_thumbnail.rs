@@ -402,7 +402,7 @@ mod tests {
         assert_eq!(changed.key(), content_hash(b"second content"));
         assert!(!cache.contains(changed.key()));
         assert_eq!(cache.lookup(changed.key()), None);
-        assert_eq!(cache.lookup(original.key()).is_some(), true);
+        assert!(cache.lookup(original.key()).is_some());
         std::fs::remove_dir_all(&directory).unwrap();
     }
 

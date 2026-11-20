@@ -351,10 +351,7 @@ fn file_stamp(path: &Path) -> Result<FileStamp, String> {
 fn key_stamps(key: &PreviewKey) -> Result<Vec<(PathBuf, FileStamp)>, String> {
     let mut paths: Vec<&Path> = vec![&key.path, &key.pack_path];
     for layer in &key.layers {
-        if !paths
-            .iter()
-            .any(|candidate| *candidate == layer.path.as_path())
-        {
+        if !paths.contains(&layer.path.as_path()) {
             paths.push(&layer.path);
         }
     }
@@ -576,20 +573,32 @@ pub enum PreloadOutcome {
     Cancelled,
 }
 
-fn load_speculative(
-    decoder: &mut Option<DecoderProcess>,
-    worker: &PreviewWorker,
+struct Speculative<'a> {
+    decoder: &'a mut Option<DecoderProcess>,
+    worker: &'a PreviewWorker,
     token: u64,
-    path: &Path,
-    pack_path: &Path,
-    layers: &[PackLayer],
-    options: PreviewOptions,
-    max_texture_side: u32,
+}
+
+fn load_speculative(
+    spec: Speculative<'_>,
+    request: PreviewRequest<'_>,
     purpose: Purpose,
     prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
     consume: impl FnMut(MeshBatch) -> Result<(), String>,
     progress: impl FnMut(&'static str, u64, u64),
 ) -> Result<LoadOutcome, String> {
+    let Speculative {
+        decoder,
+        worker,
+        token,
+    } = spec;
+    let PreviewRequest {
+        path,
+        pack_path,
+        layers,
+        options,
+        max_texture_side,
+    } = request;
     worker.ensure_preload(token)?;
     if decoder
         .as_ref()
@@ -646,13 +655,16 @@ pub fn preload(
     decoder: &mut Option<DecoderProcess>,
     worker: &PreviewWorker,
     token: u64,
-    path: &Path,
-    pack_path: &Path,
-    layers: &[PackLayer],
-    options: PreviewOptions,
-    max_texture_side: u32,
+    request: PreviewRequest<'_>,
     mut progress: impl FnMut(&'static str, u64, u64),
 ) -> Result<PreloadOutcome, String> {
+    let PreviewRequest {
+        path,
+        pack_path,
+        layers,
+        options,
+        max_texture_side,
+    } = request;
     worker.ensure_preload(token)?;
     let key = PreviewKey::new(path, pack_path, layers, options, max_texture_side);
     if let Some(metadata) = cache()
@@ -679,14 +691,18 @@ pub fn preload(
     let mut byte_length = 0usize;
     let mut overflowed = false;
     let outcome = load_speculative(
-        decoder,
-        worker,
-        token,
-        path,
-        pack_path,
-        layers,
-        speculative,
-        max_texture_side,
+        Speculative {
+            decoder,
+            worker,
+            token,
+        },
+        PreviewRequest {
+            path,
+            pack_path,
+            layers,
+            options: speculative,
+            max_texture_side,
+        },
         Purpose::Preload,
         |min, max| {
             bounds = Some((min, max));
@@ -761,27 +777,35 @@ pub fn load_thumbnail(
     decoder: &mut Option<DecoderProcess>,
     worker: &PreviewWorker,
     token: u64,
-    path: &Path,
-    pack_path: &Path,
-    options: PreviewOptions,
-    max_texture_side: u32,
+    request: PreviewRequest<'_>,
     prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
     consume: impl FnMut(MeshBatch) -> Result<(), String>,
 ) -> Result<Metadata, String> {
+    let PreviewRequest {
+        path,
+        pack_path,
+        options,
+        max_texture_side,
+        ..
+    } = request;
     let speculative = PreviewOptions {
         thread_count: None,
         speed_first: false,
         ..options
     };
     match load_speculative(
-        decoder,
-        worker,
-        token,
-        path,
-        pack_path,
-        &[],
-        speculative,
-        max_texture_side,
+        Speculative {
+            decoder,
+            worker,
+            token,
+        },
+        PreviewRequest {
+            path,
+            pack_path,
+            layers: &[],
+            options: speculative,
+            max_texture_side,
+        },
         Purpose::Foreground,
         prepared,
         consume,
@@ -858,15 +882,20 @@ pub fn run(port: &std::ffi::OsStr) -> Result<(), String> {
             }
         };
         let transport_error = RefCell::new(None);
-        let result = crate::preview::decode_admitted(
-            &request.path,
-            &request.pack_path,
-            &request.layers,
-            &mut packs,
+        let request = PreviewRequest {
+            path: &request.path,
+            pack_path: &request.pack_path,
+            layers: &request.layers,
             options,
-            request.max_texture_side,
-            &budget,
-            admit,
+            max_texture_side: request.max_texture_side,
+        };
+        let result = crate::preview::decode_admitted(
+            crate::preview::AdmittedRequest {
+                request,
+                budget: &budget,
+                admit,
+            },
+            &mut packs,
             || match transport_error.borrow().as_ref() {
                 Some(error) => Err(format!("The decoder connection failed: {error}")),
                 None => Ok(()),

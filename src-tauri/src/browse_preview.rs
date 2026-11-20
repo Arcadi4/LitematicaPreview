@@ -26,7 +26,7 @@ use crate::browse_thumbnail::{
     ThumbnailCache, ThumbnailSource, finish_capture_png, store_source_thumbnail_checked,
 };
 use crate::formats;
-use crate::preview::{PackLayer, PreviewWorker};
+use crate::preview::{PackLayer, PreviewRequest, PreviewWorker};
 use crate::preview_process::{self, DecoderProcess, PreloadOutcome};
 use crate::render::context::{NativeRenderer, ThumbnailRenderer};
 use crate::resources;
@@ -164,16 +164,13 @@ fn speculate(
     // The live scene is valid only until the next foreground submit calls
     // begin_load. Hash first so a cached thumbnail costs no GPU work, then
     // capture the opened vanilla scene only while the token is still current.
-    if layers.is_empty() {
-        if let Some(cache) = &cache {
-            if let Some(source) = open_unchanged(worker, token, active, active_stat) {
-                if !cache.contains(source.key()) {
-                    if let Some(png) = capture_live(worker, renderer, foreground_id) {
-                        store_and_emit(app, worker, token, cache, &source, &png, active);
-                    }
-                }
-            }
-        }
+    if layers.is_empty()
+        && let Some(cache) = &cache
+        && let Some(source) = open_unchanged(worker, token, active, active_stat)
+        && !cache.contains(source.key())
+        && let Some(png) = capture_live(worker, renderer, foreground_id)
+    {
+        store_and_emit(app, worker, token, cache, &source, &png, active);
     }
 
     for neighbor in neighbors {
@@ -185,11 +182,13 @@ fn speculate(
             decoder,
             worker,
             token,
-            neighbor,
-            pack_path,
-            layers,
-            options,
-            max_texture_side,
+            PreviewRequest {
+                path: neighbor,
+                pack_path,
+                layers,
+                options,
+                max_texture_side,
+            },
             |_, _, _| {},
         );
         if !matches!(warmed, Ok(PreloadOutcome::Cached(_))) {
@@ -222,11 +221,13 @@ fn speculate(
                 decoder,
                 worker,
                 token,
-                neighbor,
-                pack_path,
-                &[],
-                options,
-                max_texture_side,
+                PreviewRequest {
+                    path: neighbor,
+                    pack_path,
+                    layers: &[],
+                    options,
+                    max_texture_side,
+                },
                 |_, _, _| {},
             );
             if !matches!(vanilla, Ok(PreloadOutcome::Cached(_))) {
@@ -249,7 +250,7 @@ fn speculate(
                 scratch.prepare(metadata.min, metadata.max);
                 for batch in batches {
                     scratch
-                        .attach_checked(batch, &current)
+                        .attach_checked(batch, current)
                         .map_err(|error| error.to_string())?;
                 }
                 scratch.finish(&metadata.info());
@@ -292,10 +293,13 @@ fn speculate(
             decoder,
             worker,
             token,
-            active,
-            pack_path,
-            thumbnail_options,
-            max_texture_side,
+            PreviewRequest {
+                path: active,
+                pack_path,
+                layers: &[],
+                options: thumbnail_options,
+                max_texture_side,
+            },
             |min, max| {
                 let mut scratch = cell.borrow_mut();
                 scratch.reset();
@@ -410,16 +414,15 @@ fn thumbnail_scratch<'a>(
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {
-    if left == right {
-        return true;
-    }
     #[cfg(windows)]
     {
-        left.to_string_lossy()
-            .eq_ignore_ascii_case(right.to_string_lossy().as_ref())
+        left == right
+            || left
+                .to_string_lossy()
+                .eq_ignore_ascii_case(right.to_string_lossy().as_ref())
     }
     #[cfg(not(windows))]
     {
-        false
+        left == right
     }
 }

@@ -490,6 +490,12 @@ pub struct PreviewRequest<'a> {
     pub max_texture_side: u32,
 }
 
+pub struct AdmittedRequest<'a, A> {
+    pub request: PreviewRequest<'a>,
+    pub budget: &'a DecodeBudget,
+    pub admit: A,
+}
+
 /// Overlays `layers` from lowest to highest on one clone of the parsed base.
 /// The bundled vanilla pack stays the final per-key fallback.
 pub fn compose_resource_packs(
@@ -590,22 +596,14 @@ pub fn decode(
     consume: impl FnMut(MeshBatch) -> Result<(), String>,
     progress: impl FnMut(&'static str, u64, u64),
 ) -> Result<Metadata, String> {
-    let PreviewRequest {
-        path,
-        pack_path,
-        layers,
-        options,
-        max_texture_side,
-    } = request;
+    let budget = DecodeBudget::foreground();
     decode_admitted(
-        path,
-        pack_path,
-        layers,
+        AdmittedRequest {
+            request,
+            budget: &budget,
+            admit: |_: &DecodedMetrics| Ok(()),
+        },
         packs,
-        options,
-        max_texture_side,
-        &DecodeBudget::foreground(),
-        |_| Ok(()),
         current,
         prepared,
         consume,
@@ -617,19 +615,25 @@ pub fn decode(
 /// then meshes. The callback is the single point where speculative work is
 /// gated, so a rejected model never builds an atlas or streams geometry.
 pub fn decode_admitted(
-    path: &Path,
-    pack_path: &Path,
-    layers: &[PackLayer],
+    input: AdmittedRequest<'_, impl FnOnce(&DecodedMetrics) -> Result<(), String>>,
     packs: &mut PackCache,
-    options: PreviewOptions,
-    max_texture_side: u32,
-    budget: &DecodeBudget,
-    admit: impl FnOnce(&DecodedMetrics) -> Result<(), String>,
     current: impl Fn() -> Result<(), String>,
     prepared: impl FnOnce([f32; 3], [f32; 3]) -> Result<(), String>,
     mut consume: impl FnMut(MeshBatch) -> Result<(), String>,
     mut progress: impl FnMut(&'static str, u64, u64),
 ) -> Result<Metadata, String> {
+    let AdmittedRequest {
+        request,
+        budget,
+        admit,
+    } = input;
+    let PreviewRequest {
+        path,
+        pack_path,
+        layers,
+        options,
+        max_texture_side,
+    } = request;
     let result = catch_unwind(AssertUnwindSafe(|| {
         options.validate()?;
         progress("decode", 0, 0);

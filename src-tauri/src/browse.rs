@@ -235,17 +235,16 @@ fn sort_paths(paths: &mut [PathBuf]) {
 
 /// Windows compares paths case-insensitively; other platforms keep exact names.
 fn same_path(left: &Path, right: &Path) -> bool {
-    if left == right {
-        return true;
-    }
     #[cfg(windows)]
     {
-        left.to_string_lossy()
-            .eq_ignore_ascii_case(right.to_string_lossy().as_ref())
+        left == right
+            || left
+                .to_string_lossy()
+                .eq_ignore_ascii_case(right.to_string_lossy().as_ref())
     }
     #[cfg(not(windows))]
     {
-        false
+        left == right
     }
 }
 

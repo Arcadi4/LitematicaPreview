@@ -1,7 +1,8 @@
 [package]
 name = "litematica-preview"
 version = "0.7.3"
-edition = "2021"
+rust-version = "1.100"
+edition = "2024"
 publish = false
 default-run = "LitematicaPreview"
 
@@ -27,6 +28,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.23"
 nucleation = { version = "0.12", features = ["meshing"] }
 wgpu = "30"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

@@ -10,7 +10,7 @@
 //! copy or publication.
 
 use crate::render::context::RenderError;
-use crate::render::frame::{padded_stride, Frame, FramePixels, FrameSink, PixelPool};
+use crate::render::frame::{Frame, FramePixels, FrameSink, PixelPool, padded_stride};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;

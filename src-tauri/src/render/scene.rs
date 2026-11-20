@@ -1,7 +1,7 @@
 //! Live GPU geometry appended directly from Core mesh batches.
 
 use crate::render::context::RenderError;
-use crate::render::pipelines::{Pipelines, PART_UNIFORM_BYTES};
+use crate::render::pipelines::{PART_UNIFORM_BYTES, Pipelines};
 use crate::render::upload::UploadPermit;
 use litematica_preview_core::{MeshBatch, PreviewInfo};
 

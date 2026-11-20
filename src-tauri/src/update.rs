@@ -109,10 +109,10 @@ mod platform {
     use std::sync::{Arc, Mutex};
 
     use velopack::{
-        sources::HttpSource, HttpOptions, UpdateCheck, UpdateInfo, UpdateManager, VelopackAsset,
+        HttpOptions, UpdateCheck, UpdateInfo, UpdateManager, VelopackAsset, sources::HttpSource,
     };
 
-    use super::{UpdateRelease, FEED_URL};
+    use super::{FEED_URL, UpdateRelease};
 
     #[derive(Clone)]
     struct Candidate {

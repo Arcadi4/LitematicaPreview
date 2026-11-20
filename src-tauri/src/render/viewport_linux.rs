@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use gtk::cairo::{Context, Filter, Format, ImageSurface, Operator};
 use gtk::glib;
 use gtk::prelude::*;
-use gtk::{gdk, DrawingArea, Overlay};
+use gtk::{DrawingArea, Overlay, gdk};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use webkit2gtk::WebViewExt;

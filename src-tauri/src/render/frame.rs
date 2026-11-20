@@ -129,7 +129,7 @@ pub type FrameSink = Arc<dyn Fn(Result<Frame, String>) + Send + Sync>;
 
 #[cfg(test)]
 mod tests {
-    use super::{padded_stride, FramePixels, PixelPool};
+    use super::{FramePixels, PixelPool, padded_stride};
 
     #[test]
     fn stride_is_aligned_and_rejects_widths_that_exceed_u32() {

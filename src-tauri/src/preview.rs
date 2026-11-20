@@ -1,9 +1,9 @@
 use std::fs::File;
 use std::io::Read;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use litematica_preview_core::{MeshBatch, MeshStream, PreviewInfo, PreviewOptions};
@@ -616,10 +616,12 @@ mod tests {
     fn caught_native_panic_does_not_poison_generation_recovery() {
         let worker = PreviewWorker::default();
         worker.cancel(1, || Ok(())).unwrap();
-        assert!(worker
-            .with_current::<()>(1, || panic!("native failure"))
-            .unwrap_err()
-            .contains("native failure"));
+        assert!(
+            worker
+                .with_current::<()>(1, || panic!("native failure"))
+                .unwrap_err()
+                .contains("native failure")
+        );
         worker.cancel(2, || Ok(())).unwrap();
         assert_eq!(worker.with_current(2, || Ok(42)).unwrap(), 42);
     }
@@ -927,10 +929,12 @@ mod tests {
             serde_json::json!({"chunkSize": 48, "threadCount": null}),
             serde_json::json!({"chunkSize": 64, "threadCount": 1}),
         ] {
-            assert!(serde_json::from_value::<LoadOptions>(value)
-                .unwrap()
-                .validate()
-                .is_err());
+            assert!(
+                serde_json::from_value::<LoadOptions>(value)
+                    .unwrap()
+                    .validate()
+                    .is_err()
+            );
         }
     }
 }

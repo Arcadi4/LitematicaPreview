@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use litematica_preview::preview::{decode, PackCache, MAX_ATLAS_SIDE};
+use litematica_preview::preview::{MAX_ATLAS_SIDE, PackCache, decode};
 use litematica_preview_core::{MeshBatch, PreviewOptions};
 
 #[test]

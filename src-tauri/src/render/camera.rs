@@ -3,7 +3,7 @@
 //! in [`super::context`].
 
 use crate::render::math::{
-    self, add3, cross3, dot3, mul3, normalize3, scale_and_add3, sub3, Mat4, Vec3, UP,
+    self, Mat4, UP, Vec3, add3, cross3, dot3, mul3, normalize3, scale_and_add3, sub3,
 };
 
 /// Vertical field of view in degrees.

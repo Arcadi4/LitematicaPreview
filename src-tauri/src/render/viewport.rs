@@ -17,7 +17,7 @@ use tauri::{Manager, Runtime};
 
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetParent, GetWindow, GetWindowLongPtrW, IsWindow, GWL_STYLE, GW_CHILD, WS_CHILD,
+    GW_CHILD, GWL_STYLE, GetParent, GetWindow, GetWindowLongPtrW, IsWindow, WS_CHILD,
     WS_CLIPCHILDREN,
 };
 

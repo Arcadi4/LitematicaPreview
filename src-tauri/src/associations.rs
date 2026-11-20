@@ -35,12 +35,12 @@ mod platform {
     use std::{borrow::Cow, io, ptr};
 
     use windows_sys::Win32::UI::{
-        Shell::{SHChangeNotify, ShellExecuteW, SHCNE_ASSOCCHANGED, SHCNF_IDLIST},
+        Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify, ShellExecuteW},
         WindowsAndMessaging::SW_SHOWNORMAL,
     };
     use winreg::{
-        enums::{HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_NONE},
         RegKey, RegValue,
+        enums::{HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_NONE},
     };
 
     const PROG_ID: &str = "LitematicaPreview.Schematic";

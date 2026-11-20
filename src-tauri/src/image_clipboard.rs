@@ -53,11 +53,11 @@ pub fn copy_image(app: &tauri::AppHandle, image: PreviewImage) -> Result<(), Str
     use std::time::Duration;
     use tauri::Manager;
     use windows_sys::Win32::Foundation::{GetLastError, GlobalFree, HGLOBAL, HWND};
-    use windows_sys::Win32::Graphics::Gdi::{BITMAPV5HEADER, BI_BITFIELDS, LCS_GM_IMAGES};
+    use windows_sys::Win32::Graphics::Gdi::{BI_BITFIELDS, BITMAPV5HEADER, LCS_GM_IMAGES};
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
     };
-    use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GHND};
+    use windows_sys::Win32::System::Memory::{GHND, GlobalAlloc, GlobalLock, GlobalUnlock};
     use windows_sys::Win32::System::Ole::CF_DIBV5;
 
     const CLIPBOARD_ATTEMPTS: usize = 8;

@@ -5,7 +5,7 @@
 use litematica_preview::render::upload;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 use upload::{DeviceStatus, UploadWindow};
 

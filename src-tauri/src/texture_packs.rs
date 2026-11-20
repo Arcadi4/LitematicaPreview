@@ -220,7 +220,7 @@ impl TexturePackLibrary {
         let bytes = match fs::read(&index) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(TexturePackState::default())
+                return Ok(TexturePackState::default());
             }
             Err(error) => return Err(format!("Unable to read the texture pack library: {error}")),
         };
@@ -455,12 +455,16 @@ mod tests {
         let second = library.import("Second", b"two", |_| Ok(())).unwrap();
         let original = library.state().unwrap();
 
-        assert!(library
-            .set_order(&[first.id.clone(), first.id.clone()])
-            .is_err());
-        assert!(library
-            .set_order(&[first.id.clone(), "missing".into()])
-            .is_err());
+        assert!(
+            library
+                .set_order(&[first.id.clone(), first.id.clone()])
+                .is_err()
+        );
+        assert!(
+            library
+                .set_order(&[first.id.clone(), "missing".into()])
+                .is_err()
+        );
         assert_eq!(library.state().unwrap(), original);
 
         let ordered = library

@@ -388,9 +388,7 @@ fn dx12_uploaded_meshes_render_with_wgsl_part_layout() {
         );
         let reused_opaque = pixel(50);
         assert!(
-            reused_opaque[0] == 0
-                && reused_opaque[1] > 200
-                && reused_opaque[2..] == [0, 255],
+            reused_opaque[0] == 0 && reused_opaque[1] > 200 && reused_opaque[2..] == [0, 255],
             "Shared alpha uniforms must preserve each texture: {reused_opaque:?}, compact={compact}",
         );
     }

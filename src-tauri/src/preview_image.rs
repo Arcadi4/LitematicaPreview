@@ -154,7 +154,7 @@ fn image_format(mut path: PathBuf) -> Result<(PathBuf, ImageFormat), String> {
         Some(extension) => {
             return Err(format!(
                 "Choose a .png, .jpg, or .jpeg file name, not .{extension}."
-            ))
+            ));
         }
     };
     Ok((path, format))
@@ -162,7 +162,7 @@ fn image_format(mut path: PathBuf) -> Result<(PathBuf, ImageFormat), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{save, PreviewImage};
+    use super::{PreviewImage, save};
     use std::path::PathBuf;
 
     fn test_image() -> PreviewImage {

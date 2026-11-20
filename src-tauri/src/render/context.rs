@@ -13,9 +13,9 @@
 
 use crate::render::camera::Camera;
 use crate::render::capture::CaptureJob;
-use crate::render::frame::{padded_stride, FrameSink};
+use crate::render::frame::{FrameSink, padded_stride};
 use crate::render::offscreen::OffscreenTarget;
-use crate::render::pipelines::{Pipelines, CAMERA_UNIFORM_BYTES};
+use crate::render::pipelines::{CAMERA_UNIFORM_BYTES, Pipelines};
 use crate::render::scene::Scene;
 use crate::render::upload::{DeviceStatus, UploadPermit, UploadWindow};
 use litematica_preview_core::{MeshBatch, PreviewInfo};
@@ -52,7 +52,9 @@ impl std::fmt::Display for RenderError {
                 formatter,
                 "The graphics surface is unavailable. Reopen the schematic after the window recovers."
             ),
-            Self::Initialization(message) | Self::MalformedBatch(message) | Self::Device(message) => {
+            Self::Initialization(message)
+            | Self::MalformedBatch(message)
+            | Self::Device(message) => {
                 write!(formatter, "{message}")
             }
             Self::Capture(message) => write!(formatter, "{message}"),
@@ -908,7 +910,7 @@ const _: () = {
 mod tests {
     #[cfg(windows)]
     use super::NativeRenderer;
-    use super::{backing_size, map_stage_viewport, stage_capture_rect, CaptureRect};
+    use super::{CaptureRect, backing_size, map_stage_viewport, stage_capture_rect};
     #[cfg(windows)]
     use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow};
 
@@ -1074,20 +1076,21 @@ mod tests {
         let _window = Window(hwnd);
         let mut renderer = NativeRenderer::new_from_hwnd(hwnd as isize, (800, 400)).unwrap();
         renderer.camera().set_model_bounds([-1.0; 3], [1.0; 3]);
-        let check =
-            |renderer: &NativeRenderer| {
-                let matrix = renderer.camera.frame_camera(false).view_projection;
-                let row_length = |row: usize| {
-                    (0..3)
-                        .map(|column| matrix[column * 4 + row].powi(2))
-                        .sum::<f32>()
-                        .sqrt()
-                };
-                let horizontal = row_length(0) * renderer.physical_size.0 as f32;
-                let vertical = row_length(1) * renderer.physical_size.1 as f32;
-                assert!((horizontal / vertical - 1.0).abs() < 0.002,
-                "World-unit pixel scales must match: horizontal={horizontal}, vertical={vertical}");
+        let check = |renderer: &NativeRenderer| {
+            let matrix = renderer.camera.frame_camera(false).view_projection;
+            let row_length = |row: usize| {
+                (0..3)
+                    .map(|column| matrix[column * 4 + row].powi(2))
+                    .sum::<f32>()
+                    .sqrt()
             };
+            let horizontal = row_length(0) * renderer.physical_size.0 as f32;
+            let vertical = row_length(1) * renderer.physical_size.1 as f32;
+            assert!(
+                (horizontal / vertical - 1.0).abs() < 0.002,
+                "World-unit pixel scales must match: horizontal={horizontal}, vertical={vertical}"
+            );
+        };
         check(&renderer);
         for (width, height, scale) in [(400, 800, 1.25), (1200, 400, 1.5), (800, 800, 2.0)] {
             renderer.resize(width, height);

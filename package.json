@@ -15,10 +15,10 @@
     "checksums": "vpx scripts/checksums.ts",
     "dev": "vp dev --host 127.0.0.1",
     "doctor": "react-doctor",
-    "format:check": "vp fmt --check",
-    "format:rust:write": "cargo fmt --all",
-    "format:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
-    "format": "vp fmt",
+    "fmt:check": "vp fmt --check",
+    "fmt:rust:write": "cargo fmt --all",
+    "fmt:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
+    "fmt": "vp fmt && pnpm run fmt:rust",
     "lint": "vp lint",
     "preview": "vp preview --host 127.0.0.1",
     "pressure:host": "vpx scripts/cargo.ts run --release --locked --manifest-path src-tauri/Cargo.toml --bin pressure --",
@@ -54,5 +54,5 @@
     "vite": "catalog:",
     "vite-plus": "catalog:"
   },
-  "packageManager": "pnpm@12.18.0"
+  "packageManager": "pnpm@12.21.0"
 }

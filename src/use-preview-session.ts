@@ -26,7 +26,7 @@ import {
   type ViewportCommand,
   type ViewportFailed,
 } from "./app-model"
-import { parseBrowseSelection, type BrowseSelection } from "./browse-strip"
+import { parseBrowseSelection, type BrowseSelection } from "./browse-model"
 import { releasePointerLock, requestPointerLock } from "./fly-controls"
 import { savedPreviewSettings, type PreviewSettings } from "./preview-settings"
 import { ViewportInputQueue } from "./viewport-input"

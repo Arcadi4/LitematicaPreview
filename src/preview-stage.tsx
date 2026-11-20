@@ -9,7 +9,7 @@ import {
 } from "react"
 
 import { fileName, numbers, type Loaded, type Loading, type ViewportCommand } from "./app-model"
-import type { BrowseSelection } from "./browse-strip"
+import type { BrowseSelection } from "./browse-model"
 import { FlyMotion, capturePointer, requestPointerLock } from "./fly-controls"
 
 export interface PreviewStageProps {

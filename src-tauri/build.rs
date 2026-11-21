@@ -6,7 +6,11 @@ fn main() {
             )
             .app_manifest(tauri_build::AppManifest::new().commands(&[
                 "bootstrap",
-                "choose_file",
+                "choose_files",
+                "choose_folder",
+                "browse_siblings",
+                "browse_paths",
+                "browse_thumbnail",
                 "start_preview",
                 "preview_memory",
                 "cancel_load",

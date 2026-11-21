@@ -1,3 +1,9 @@
+# Unreleased
+
+## Features
+
+- Browse schematic folders and batches: Open Files selects several files, Open Folder opens a directory, and opening one file finds supported schematics beside it without recursing into subfolders. The list sorts alphabetically by filename, the arrow keys switch previews while the preview is focused without wrapping at either end, nearby files preload within a bounded internal budget, and content-hash thumbnails persist using bundled textures ([#13](https://github.com/Arcadi4/LitematicaPreview/issues/13)).
+
 # v0.7.0
 
 ## Features

@@ -134,7 +134,16 @@ test("Settings defaults to Performance and switches to the existing controls ref
 
   await click(byRole("tab", "Control"))
   const control = selectedPanel()
-  for (const label of ["Orbit", "Pan", "Zoom", "Fit model", "Open schematic", "Cancel loading"]) {
+  for (const label of [
+    "Browse files",
+    "Orbit",
+    "Pan",
+    "Zoom",
+    "Fit model",
+    "Open files",
+    "Open folder",
+    "Cancel loading",
+  ]) {
     assert.ok([...control.querySelectorAll("dt")].some((node) => node.textContent === label))
   }
   assert.equal(getByRole(control, "heading", { name: "Control" }).tagName, "H2")

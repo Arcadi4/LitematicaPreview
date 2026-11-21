@@ -28,7 +28,6 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-base64 = "0.23"
 nucleation = { version = "0.12", features = ["meshing"] }
 wgpu = "30"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
@@ -58,3 +57,6 @@ windows-sys = { version = "0.61", features = [
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
+
+[lints.cargo]
+unused_dependencies = "warn"

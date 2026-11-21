@@ -249,8 +249,9 @@ impl NativeRenderer {
     /// surface. No native window or display handle is created.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn new_offscreen(size: (u32, u32), sink: FrameSink) -> Result<Self, RenderError> {
+        let (backends, backend_label) = offscreen_backend();
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = offscreen_backends();
+        descriptor.backends = backends;
         let instance = wgpu::Instance::new(descriptor);
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::default(),
@@ -261,7 +262,7 @@ impl NativeRenderer {
         .map_err(|_| {
             RenderError::Initialization(format!(
                 "{} is unavailable. Update your graphics driver to preview schematics.",
-                offscreen_backend_label()
+                backend_label
             ))
         })?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -797,28 +798,13 @@ impl NativeRenderer {
     }
 }
 
-fn offscreen_backends() -> wgpu::Backends {
-    #[cfg(windows)]
-    let backends = wgpu::Backends::DX12;
-    #[cfg(target_os = "linux")]
-    let backends = wgpu::Backends::VULKAN;
-    #[cfg(target_os = "macos")]
-    let backends = wgpu::Backends::METAL;
-    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-    let backends = wgpu::Backends::PRIMARY;
-    backends
-}
-
-fn offscreen_backend_label() -> &'static str {
-    #[cfg(windows)]
-    let label = "Direct3D 12";
-    #[cfg(target_os = "linux")]
-    let label = "Vulkan";
-    #[cfg(target_os = "macos")]
-    let label = "Metal";
-    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-    let label = "The graphics backend";
-    label
+fn offscreen_backend() -> (wgpu::Backends, &'static str) {
+    cfg_select! {
+        windows => { (wgpu::Backends::DX12, "Direct3D 12") }
+        target_os = "linux" => { (wgpu::Backends::VULKAN, "Vulkan") }
+        target_os = "macos" => { (wgpu::Backends::METAL, "Metal") }
+        _ => { (wgpu::Backends::PRIMARY, "The graphics backend") }
+    }
 }
 
 fn backing_size((width, height): (u32, u32), max_dimension: u32) -> (u32, u32) {

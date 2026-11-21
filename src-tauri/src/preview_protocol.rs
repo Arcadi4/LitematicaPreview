@@ -115,10 +115,7 @@ pub fn finish(mut output: impl Write, result: Result<Metadata, String>) -> io::R
             write_frame(&mut output, &bytes, MAX_METADATA_BYTES)?;
         }
         Err(mut error) => {
-            let mut end = error.len().min(MAX_METADATA_BYTES);
-            while !error.is_char_boundary(end) {
-                end -= 1;
-            }
+            let end = error.floor_char_boundary(error.len().min(MAX_METADATA_BYTES));
             error.truncate(end);
             output.write_all(&[5])?;
             write_frame(&mut output, error.as_bytes(), MAX_METADATA_BYTES)?;

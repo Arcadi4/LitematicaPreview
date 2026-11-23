@@ -9,8 +9,8 @@
 //! logical key event so typed characters follow the active keyboard layout.
 
 use rune::{
-    Align, Anim, Drag, El, Key, KeyEvent, LiveRegion, Mods, Phase, PhysicalInput, PhysicalKeyCode,
-    Shadow, Spring, SpringPair, TextStyle, Transition, Tx, col, el, icon, row, text,
+    col, el, icon, row, text, Align, Anim, Drag, El, Key, KeyEvent, LiveRegion, Mods, Phase,
+    PhysicalInput, PhysicalKeyCode, Shadow, Spring, SpringPair, TextStyle, Transition, Tx,
 };
 use rune_kit::shell::{Sidebar, SidebarRow};
 use rune_kit::{Button, ButtonVariant, ControlSize, Divider, Kit, SegmentedControl, Switch};
@@ -18,11 +18,12 @@ use rune_kit::{Button, ButtonVariant, ControlSize, Divider, Kit, SegmentedContro
 use crate::app::App;
 use crate::icons::Icon;
 use crate::preferences::{
-    Action, Conflict, KeyChord, MAX_FOV_DEGREES, MAX_SENSITIVITY, MIN_FOV_DEGREES, MIN_SENSITIVITY,
-    Mode, PreviewSettings, Theme, key_chord, key_chord_from_physical,
+    key_chord, key_chord_from_physical, Action, Conflict, KeyChord, Mode, PreviewSettings, Theme,
+    MAX_FOV_DEGREES, MAX_SENSITIVITY, MIN_FOV_DEGREES, MIN_SENSITIVITY,
 };
 use crate::update::{Source, State as UpdateState};
 use crate::view::instant_exit;
+use crate::view::{LIGHTING_SCENE, SCENE_EFFECT};
 
 /// The widest a section's column grows, its side padding included.
 const CONTENT_WIDTH: f32 = 680.0;
@@ -40,14 +41,16 @@ const SLIDER_KNOB: f32 = 16.0;
 pub(crate) enum PreferencesSection {
     #[default]
     Appearance,
+    Lighting,
     Controls,
     Performance,
     Updates,
 }
 
 impl PreferencesSection {
-    const ALL: [PreferencesSection; 4] = [
+    const ALL: [PreferencesSection; 5] = [
         PreferencesSection::Appearance,
+        PreferencesSection::Lighting,
         PreferencesSection::Controls,
         PreferencesSection::Performance,
         PreferencesSection::Updates,
@@ -57,6 +60,7 @@ impl PreferencesSection {
         match self {
             PreferencesSection::Appearance => "Appearance",
             PreferencesSection::Controls => "Controls",
+            PreferencesSection::Lighting => "Lighting",
             PreferencesSection::Performance => "Performance",
             PreferencesSection::Updates => "Updates",
         }
@@ -66,6 +70,7 @@ impl PreferencesSection {
         match self {
             PreferencesSection::Appearance => Icon::Color.glyph(),
             PreferencesSection::Controls => Icon::Keyboard.glyph(),
+            PreferencesSection::Lighting => Icon::Sun.glyph(),
             PreferencesSection::Performance => Icon::Gauge.glyph(),
             PreferencesSection::Updates => Icon::ArrowDownload.glyph(),
         }
@@ -156,6 +161,7 @@ fn reset_all(s: &mut App) {
 pub fn view(s: &App, k: &Kit) -> El {
     let groups = match s.preferences_section {
         PreferencesSection::Appearance => return appearance(s, k),
+        PreferencesSection::Lighting => lighting(s, k),
         PreferencesSection::Controls => controls(s, k),
         PreferencesSection::Performance => performance(s, k),
         PreferencesSection::Updates => updates(s, k),
@@ -346,6 +352,158 @@ fn appearance(s: &App, k: &Kit) -> El {
                 .items_center()
                 .child(footer),
         )
+}
+
+fn lighting(s: &App, k: &Kit) -> Vec<El> {
+    let settings = s.preferences.lighting;
+    let surface = col()
+        .key("lighting-preview")
+        .w_full()
+        .h(240.0)
+        .radius(k.radius.lg)
+        .border(1.0, k.c.border_base)
+        .center();
+    let preview = if s.active.is_some() {
+        surface.child(
+            rune::effect(SCENE_EFFECT)
+                .key(LIGHTING_SCENE)
+                .label("Schematic lighting preview")
+                .role("region")
+                .w_full()
+                .h_full(),
+        )
+    } else {
+        surface.child(
+            text("Load a file for lighting preview")
+                .key("lighting-placeholder")
+                .font(k.ty.small)
+                .color(k.c.text_muted),
+        )
+    };
+    let levels = group(
+        k,
+        "lighting-levels",
+        Some("Light levels"),
+        vec![
+            slider_setting(
+                k,
+                Slider {
+                    key: "ambient-light",
+                    label: "Ambient light",
+                    description: "Even light added to every face of the schematic.",
+                    readout: format!("{:.0}%", settings.ambient * 100.0),
+                    value: settings.ambient,
+                    range: SliderRange {
+                        min: LightingSettings::MIN_STRENGTH,
+                        max: LightingSettings::MAX_STRENGTH,
+                        step: 0.05,
+                        grain: 0.01,
+                        log: false,
+                    },
+                    disabled: false,
+                    get: |s| s.preferences.lighting.ambient,
+                    set: |s, value| s.set_ambient_light(value),
+                },
+            ),
+            slider_setting(
+                k,
+                Slider {
+                    key: "sunlight",
+                    label: "Sunlight",
+                    description: "Light falling on faces turned toward the sun.",
+                    readout: format!("{:.0}%", settings.sunlight * 100.0),
+                    value: settings.sunlight,
+                    range: SliderRange {
+                        min: LightingSettings::MIN_STRENGTH,
+                        max: LightingSettings::MAX_STRENGTH,
+                        step: 0.05,
+                        grain: 0.01,
+                        log: false,
+                    },
+                    disabled: false,
+                    get: |s| s.preferences.lighting.sunlight,
+                    set: |s, value| s.set_sunlight(value),
+                },
+            ),
+        ],
+        None,
+    );
+    let direction = group(
+        k,
+        "lighting-direction",
+        Some("Sun direction"),
+        vec![
+            slider_setting(
+                k,
+                Slider {
+                    key: "sun-azimuth",
+                    label: "Azimuth",
+                    description: "Which way the sun points around the schematic.",
+                    readout: format!("{:.0}°", settings.azimuth()),
+                    value: settings.azimuth(),
+                    range: SliderRange {
+                        min: LightingSettings::MIN_AZIMUTH,
+                        max: LightingSettings::MAX_AZIMUTH,
+                        step: 5.0,
+                        grain: 1.0,
+                        log: false,
+                    },
+                    disabled: false,
+                    get: |s| s.preferences.lighting.azimuth(),
+                    set: |s, degrees| s.set_light_azimuth(degrees),
+                },
+            ),
+            slider_setting(
+                k,
+                Slider {
+                    key: "sun-elevation",
+                    label: "Elevation",
+                    description: "How high the sun sits above the schematic.",
+                    readout: format!("{:.0}°", settings.elevation()),
+                    value: settings.elevation(),
+                    range: SliderRange {
+                        min: LightingSettings::MIN_ELEVATION,
+                        max: LightingSettings::MAX_ELEVATION,
+                        step: 5.0,
+                        grain: 1.0,
+                        log: false,
+                    },
+                    disabled: false,
+                    get: |s| s.preferences.lighting.elevation(),
+                    set: |s, degrees| s.set_light_elevation(degrees),
+                },
+            ),
+        ],
+        Some(
+            row()
+                .key("lighting-footer")
+                .w_full()
+                .gap(16.0)
+                .center_y()
+                .child(
+                    note(
+                        k,
+                        if s.active.is_some() {
+                            "Changes update the preview and exports as you drag. Browse thumbnails keep the default look."
+                        } else {
+                            "Open a schematic to see the light change as you drag. Browse thumbnails keep the default look."
+                        },
+                    )
+                    .grow(1.0)
+                    .min_w(0.0),
+                )
+                .child(
+                    Button::new("Reset lighting")
+                        .icon(Icon::Refresh.glyph())
+                        .variant(ButtonVariant::Ghost)
+                        .control_size(ControlSize::Small)
+                        .on_press(|s: &mut App| s.reset_lighting())
+                        .build(k)
+                        .key("reset-lighting"),
+                ),
+        ),
+    );
+    vec![preview, levels, direction]
 }
 
 fn controls(s: &App, k: &Kit) -> Vec<El> {
@@ -1217,11 +1375,10 @@ mod tests {
         };
         assert!(record_physical_input(&mut app, &tab, &mut tx));
         assert_eq!(app.recording, None);
-        assert!(
-            app.preferences
-                .binding(Action::Fit)
-                .matches(&key_event(Key::Tab), &tx)
-        );
+        assert!(app
+            .preferences
+            .binding(Action::Fit)
+            .matches(&key_event(Key::Tab), &tx));
 
         app.recording = Some(Action::FlyForward);
         let shift = PhysicalInput::Key {
@@ -1270,13 +1427,11 @@ mod tests {
 
         assert_eq!(runtime.state.recording, None);
         let colemak_w = key_event(Key::Text(",".into()));
-        assert!(
-            runtime
-                .state
-                .preferences
-                .binding(Action::FlyForward)
-                .matches(&colemak_w, &Tx::default())
-        );
+        assert!(runtime
+            .state
+            .preferences
+            .binding(Action::FlyForward)
+            .matches(&colemak_w, &Tx::default()));
     }
 
     #[test]

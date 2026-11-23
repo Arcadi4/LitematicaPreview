@@ -20,6 +20,7 @@ Litematica Preview is a native desktop viewer for Windows, macOS, and Linux. It 
 
 - Open several schematics in one window with tabs. Open a folder or a single file to browse nearby schematics with cached thumbnails.
 - Orbit, pan, zoom, or fly through the preview. Set key bindings for both modes and adjust spectator field of view and mouse sensitivity in Preferences.
+- Adjust ambient light, sunlight, and sun direction in Preferences against a live schematic preview.
 - Copy the preview or save it as PNG or JPEG. Stack Minecraft Java resource packs in priority order, with bundled textures as the fallback.
 - Preview large schematics progressively with configurable chunk sizes and worker counts.
 

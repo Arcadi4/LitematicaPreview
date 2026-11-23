@@ -312,6 +312,7 @@ fn dx12_uploaded_meshes_render_with_wgsl_part_layout() {
     let errors = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let pipelines = Pipelines::new(
         &device,
+        &queue,
         1,
         wgpu::TextureFormat::Rgba8UnormSrgb,
         wgpu::TextureFormat::Depth24Plus,

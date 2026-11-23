@@ -17,6 +17,7 @@ use std::fmt;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+use crate::render::lighting::FrameLighting;
 use litematica_preview_core::PreviewOptions;
 use rune::{
     Chord, ChordKey, ChordMod, Key, KeyEvent, KeyPlatform, Modifier, Mods, PhysicalKeyCode,
@@ -52,6 +53,97 @@ impl Theme {
             Theme::Light => false,
             Theme::Dark => true,
         }
+    }
+}
+
+/// Lighting of the schematic scene. Angles are in degrees.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LightingSettings {
+    pub ambient: f32,
+    pub sunlight: f32,
+    azimuth: f32,
+    elevation: f32,
+}
+
+impl Default for LightingSettings {
+    fn default() -> Self {
+        let length = 3.6f32.sqrt();
+        Self {
+            ambient: 0.68,
+            sunlight: 0.32,
+            azimuth: (1.0 / length).atan2(0.8 / length).to_degrees(),
+            elevation: (1.4 / length).asin().to_degrees(),
+        }
+    }
+}
+
+impl LightingSettings {
+    pub const MIN_STRENGTH: f32 = 0.0;
+    pub const MAX_STRENGTH: f32 = 1.0;
+    pub const MIN_AZIMUTH: f32 = -180.0;
+    pub const MAX_AZIMUTH: f32 = 180.0;
+    pub const MIN_ELEVATION: f32 = -90.0;
+    pub const MAX_ELEVATION: f32 = 90.0;
+
+    pub fn azimuth(self) -> f32 {
+        self.azimuth
+    }
+
+    pub fn elevation(self) -> f32 {
+        self.elevation
+    }
+
+    /// Unit vector from a surface toward the light.
+    pub fn direction(self) -> [f32; 3] {
+        let azimuth = self.azimuth.to_radians();
+        let elevation = self.elevation.to_radians();
+        let horizontal = elevation.cos();
+        [
+            horizontal * azimuth.sin(),
+            elevation.sin(),
+            horizontal * azimuth.cos(),
+        ]
+    }
+
+    pub fn frame(self) -> FrameLighting {
+        FrameLighting {
+            direction: self.direction(),
+            ambient: self.ambient,
+            sunlight: self.sunlight,
+        }
+    }
+
+    pub fn set_ambient(&mut self, value: f32) {
+        if value.is_finite() {
+            self.ambient = value.clamp(Self::MIN_STRENGTH, Self::MAX_STRENGTH);
+        }
+    }
+
+    pub fn set_sunlight(&mut self, value: f32) {
+        if value.is_finite() {
+            self.sunlight = value.clamp(Self::MIN_STRENGTH, Self::MAX_STRENGTH);
+        }
+    }
+
+    pub fn set_azimuth(&mut self, degrees: f32) {
+        if degrees.is_finite() {
+            self.azimuth = degrees.clamp(Self::MIN_AZIMUTH, Self::MAX_AZIMUTH);
+        }
+    }
+
+    pub fn set_elevation(&mut self, degrees: f32) {
+        if degrees.is_finite() {
+            self.elevation = degrees.clamp(Self::MIN_ELEVATION, Self::MAX_ELEVATION);
+        }
+    }
+
+    fn sanitized(mut self) -> Self {
+        self.set_ambient(self.ambient);
+        self.set_sunlight(self.sunlight);
+        self.set_azimuth(self.azimuth);
+        self.set_elevation(self.elevation);
+        self
     }
 }
 
@@ -538,6 +630,8 @@ pub struct Preferences {
     pub auto_update: bool,
     pub update_source: crate::update::Source,
     pub preview: PreviewSettings,
+    #[serde(default)]
+    pub lighting: LightingSettings,
     bindings: BTreeMap<String, Binding>,
 }
 
@@ -554,6 +648,7 @@ impl Default for Preferences {
             auto_update: true,
             update_source: crate::update::Source::default(),
             preview: PreviewSettings::default(),
+            lighting: LightingSettings::default(),
             bindings,
         }
     }
@@ -729,6 +824,7 @@ impl Preferences {
         self.set_sensitivity(self.sensitivity);
         self.set_fov(self.fov);
         self.preview = self.preview.sanitized();
+        self.lighting = self.lighting.sanitized();
         for action in ALL_ACTIONS {
             self.bindings
                 .entry(action.key().to_owned())
@@ -1026,5 +1122,32 @@ mod tests {
             assert_eq!(options.thread_count, None);
             assert!(!options.speed_first);
         }
+    }
+    #[test]
+    fn lighting_defaults_match_the_shipped_scene_shading() {
+        let lighting = LightingSettings::default();
+        let length = 3.6f32.sqrt();
+        let expected = [1.0 / length, 1.4 / length, 0.8 / length];
+        for (actual, expected) in lighting.direction().into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-5);
+        }
+        assert_eq!((lighting.ambient, lighting.sunlight), (0.68, 0.32));
+    }
+
+    #[test]
+    fn an_old_preferences_file_gets_the_shipped_lighting() {
+        let loaded: Preferences = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
+        assert_eq!(loaded.lighting, LightingSettings::default());
+    }
+
+    #[test]
+    fn lighting_from_disk_is_clamped_to_the_slider_ranges() {
+        let json = r#"{"lighting":{"ambient":4,"sunlight":-2,"azimuth":500,"elevation":-200}}"#;
+        let loaded: Preferences = serde_json::from_str(json).unwrap();
+        let loaded = loaded.normalized();
+        assert_eq!(loaded.lighting.ambient, 1.0);
+        assert_eq!(loaded.lighting.sunlight, 0.0);
+        assert_eq!(loaded.lighting.azimuth(), 180.0);
+        assert_eq!(loaded.lighting.elevation(), -90.0);
     }
 }

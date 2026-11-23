@@ -355,7 +355,9 @@ impl App {
 
     pub(crate) fn set_gpu(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.gpu = Some((device.clone(), queue.clone()));
-        self.scene_factory = Some(LiveScene::new(device, queue));
+        let mut scene = LiveScene::new(device, queue);
+        scene.set_lighting(self.preferences.lighting.frame());
+        self.scene_factory = Some(scene);
         if self.active.is_some() {
             self.begin_preview();
         }
@@ -887,6 +889,43 @@ impl App {
         self.page = page;
         self.recording = None;
         self.reset_confirming = false;
+    }
+
+    pub(crate) fn set_ambient_light(&mut self, value: f32) {
+        self.preferences.lighting.set_ambient(value);
+        self.lighting_changed();
+    }
+
+    pub(crate) fn set_sunlight(&mut self, value: f32) {
+        self.preferences.lighting.set_sunlight(value);
+        self.lighting_changed();
+    }
+
+    pub(crate) fn set_light_azimuth(&mut self, degrees: f32) {
+        self.preferences.lighting.set_azimuth(degrees);
+        self.lighting_changed();
+    }
+
+    pub(crate) fn set_light_elevation(&mut self, degrees: f32) {
+        self.preferences.lighting.set_elevation(degrees);
+        self.lighting_changed();
+    }
+
+    pub(crate) fn reset_lighting(&mut self) {
+        self.preferences.lighting = Default::default();
+        self.lighting_changed();
+    }
+
+    fn lighting_changed(&mut self) {
+        let lighting = self.preferences.lighting.frame();
+        if let Some(scene) = &self.scene {
+            scene.lock().set_lighting(lighting);
+        }
+        if let Some(factory) = self.scene_factory.as_mut() {
+            factory.set_lighting(lighting);
+        }
+        self.save_preferences();
+        self.request_frame();
     }
 
     pub(crate) fn save_preferences(&mut self) {

@@ -7,7 +7,7 @@ use rune::compose::{Compositor, DeviceKey, Frame};
 
 use crate::app::{App, Preview, VIEWPORT};
 use crate::preferences_ui::SKY;
-use crate::view::SCENE_EFFECT;
+use crate::view::{LIGHTING_SCENE, SCENE_EFFECT};
 
 #[derive(Default)]
 pub(crate) struct ViewerCompositor {
@@ -33,7 +33,11 @@ impl Compositor<App> for ViewerCompositor {
             return;
         }
         self.sky = None;
-        let Some((rect, _)) = frame.rt.presented(VIEWPORT) else {
+        let viewport = frame
+            .rt
+            .presented(VIEWPORT)
+            .or_else(|| frame.rt.presented(LIGHTING_SCENE));
+        let Some((rect, _)) = viewport else {
             self.blit = None;
             frame.draw_ui();
             return;

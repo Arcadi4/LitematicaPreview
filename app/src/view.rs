@@ -4,7 +4,8 @@ use rune_kit::shell::{
     TabOrientation, TabOverflow, TabStrip, Toolbar,
 };
 use rune_kit::{
-    Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Spinner, Switch,
+    Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Spinner, Switch, Toast,
+    ToastRegion,
 };
 
 use crate::app::{App, Capture, Page, Preview, VIEWPORT, title};
@@ -37,8 +38,8 @@ pub(crate) fn view(s: &App, cx: &mut Cx<App>) -> El {
     let kit = Kit::neutral(s.preferences.theme.is_dark(cx.system_dark()));
     let base = match s.page {
         Page::Viewer => split(s, cx, &kit),
-        Page::Preferences => page_shell(s, cx, &kit, "Preferences", preferences_ui::view(s, &kit)),
-        Page::TexturePacks => page_shell(s, cx, &kit, "Texture Packs", texture_packs(s, &kit)),
+        Page::Preferences => page_shell(cx, &kit, "Preferences", preferences_ui::view(s, &kit)),
+        Page::TexturePacks => page_shell(cx, &kit, "Texture Packs", texture_packs(s, &kit)),
     };
     let mut base = base
         .on_key_up(App::key_up)
@@ -74,7 +75,7 @@ pub(crate) fn view(s: &App, cx: &mut Cx<App>) -> El {
                 ),
         );
     }
-    rune_kit::root(base, Vec::new())
+    rune_kit::root(base, [toasts(s, &kit)])
 }
 
 fn split(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
@@ -141,28 +142,20 @@ fn viewer(s: &App, kit: &Kit) -> El {
     } else {
         stage(s, kit)
     };
-    let mut status = col()
-        .key("preview-status")
-        .absolute(12.0, 12.0)
-        .max_w(420.0)
-        .gap(8.0)
-        .items_start();
-    if let Some(notice) = notice(s, kit) {
-        status = status.child(notice);
-    }
-    if matches!(s.update_state, update::State::Available(_)) && s.preferences.auto_update {
-        status = status.child(update_notice(kit));
-    }
-    if s.active.is_some() {
-        status = status.child(stage_caption(s, kit).unwrap_or_else(|| preview_metadata(s, kit)));
-    }
-    col()
+    let mut viewer = col()
         .key("viewer")
         .w_full()
         .h_full()
         .min_h(0.0)
-        .child(content)
-        .child(status)
+        .child(content);
+    if s.active.is_some() {
+        viewer = viewer.child(
+            stage_caption(s, kit)
+                .unwrap_or_else(|| preview_metadata(s, kit))
+                .absolute(12.0, 12.0),
+        );
+    }
+    viewer
 }
 
 fn tabs(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
@@ -752,69 +745,38 @@ fn navigation_hint(s: &App, kit: &Kit) -> El {
         .truncate()
 }
 
-fn notice(s: &App, kit: &Kit) -> Option<El> {
-    let notice = s.notice.clone()?;
-    Some(
-        row()
-            .key("notice")
-            .padding(8.0)
-            .gap(8.0)
-            .radius(6.0)
-            .fill(kit.c.layer_01)
-            .border(1.0, kit.c.border_base)
-            .center_y()
-            .child(
-                text(notice)
-                    .font(kit.ty.small)
-                    .color(kit.c.text_base)
-                    .grow(1.0)
-                    .wrap(),
-            )
-            .child(
-                IconButton::new(Icon::Dismiss.glyph())
-                    .variant(IconButtonVariant::GhostMuted)
-                    .control_size(ControlSize::Mini)
-                    .label("Dismiss")
-                    .on_press(|s: &mut App| s.notice = None)
-                    .build(kit)
-                    .key("dismiss-notice"),
-            ),
-    )
-}
-
-fn update_notice(kit: &Kit) -> El {
-    row()
-        .padding(8.0)
-        .gap(8.0)
-        .radius(6.0)
-        .fill(kit.c.layer_01)
-        .border(1.0, kit.c.border_base)
-        .center_y()
-        .child(
-            text("An update is available.")
-                .font(kit.ty.small)
-                .color(kit.c.text_base)
-                .grow(1.0),
-        )
-        .child(
-            Button::new("View update")
-                .variant(ButtonVariant::GhostMuted)
-                .control_size(ControlSize::Small)
-                .on_press(|s: &mut App| {
+fn toasts(s: &App, kit: &Kit) -> El {
+    let mut region = ToastRegion::new();
+    if let Some(notice) = &s.notice {
+        region = region.toast(
+            Toast::new("notice", notice.as_str())
+                .on_close(|s: &mut App| s.notice = None)
+                .build(kit),
+        );
+    }
+    if s.page == Page::Viewer
+        && matches!(s.update_state, update::State::Available(_))
+        && s.preferences.auto_update
+    {
+        region = region.toast(
+            Toast::new("update-available", "An update is available.")
+                .action(kit, "View update", true, |s: &mut App, _: &mut Tx| {
                     s.preferences_section = preferences_ui::PreferencesSection::Updates;
                     s.open_page(Page::Preferences);
                 })
-                .build(kit)
-                .key("view-update"),
-        )
+                .build(kit),
+        );
+    }
+    region.build(kit)
 }
 
-fn page_shell(s: &App, cx: &mut Cx<App>, kit: &Kit, title: &str, body: El) -> El {
-    let mut content = col().key("page").w_full().h_full().min_h(0.0);
-    if let Some(notice) = notice(s, kit) {
-        content = content.child(notice.mx(8.0).mt(8.0));
-    }
-    content = content.child(col().w_full().grow(1.0).min_h(0.0).child(body));
+fn page_shell(cx: &mut Cx<App>, kit: &Kit, title: &str, body: El) -> El {
+    let content = col()
+        .key("page")
+        .w_full()
+        .h_full()
+        .min_h(0.0)
+        .child(col().w_full().grow(1.0).min_h(0.0).child(body));
     let back = Button::new("Back")
         .icon(Icon::Back.glyph())
         .variant(ButtonVariant::Ghost)

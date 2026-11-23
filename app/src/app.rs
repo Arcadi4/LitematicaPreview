@@ -19,6 +19,8 @@ use crate::{file_dialog, formats, preferences_ui, preview_image, resources, upda
 
 pub(crate) const VIEWPORT: &str = "schematic-viewport";
 const THUMBNAIL_RADIUS: usize = 4;
+/// Seconds a notice toast stays up before it dismisses itself.
+const NOTICE_SECONDS: f64 = 5.0;
 
 type Handler = Box<dyn FnOnce(&mut App, &mut Tx) -> bool + Send>;
 
@@ -90,6 +92,8 @@ pub(crate) struct App {
     pub(crate) update_state: update::State,
     pub(crate) recording: Option<Action>,
     pub(crate) notice: Option<String>,
+    /// The notice on screen and the poll clock time it appeared, which starts its timeout.
+    notice_shown: Option<(String, f64)>,
     pub(crate) preferences_section: preferences_ui::PreferencesSection,
     pub(crate) sidebar: rune_kit::shell::PaneState,
     pub(crate) page: Page,
@@ -164,6 +168,7 @@ impl App {
             update_state: update::State::Idle,
             recording: None,
             notice,
+            notice_shown: None,
             page: Page::Viewer,
             tabs: Vec::new(),
             active: None,
@@ -250,6 +255,7 @@ impl App {
             self.open_paths(paths);
             changed = true;
         }
+        changed |= self.expire_notice(now, tx);
         let dt = self
             .last_poll
             .replace(now)
@@ -271,6 +277,29 @@ impl App {
             tx.wake_after(std::time::Duration::from_millis(16));
         }
         changed
+    }
+
+    fn expire_notice(&mut self, now: f64, tx: &mut Tx) -> bool {
+        let Some(notice) = &self.notice else {
+            self.notice_shown = None;
+            return false;
+        };
+        let since = match &self.notice_shown {
+            Some((shown, since)) if shown == notice => *since,
+            _ => {
+                self.notice_shown = Some((notice.clone(), now));
+                now
+            }
+        };
+        let left = since + NOTICE_SECONDS - now;
+        if left > 0.0 {
+            tx.wake_after(std::time::Duration::from_secs_f64(left));
+            return false;
+        }
+        self.notice = None;
+        self.notice_shown = None;
+        tx.animated();
+        true
     }
 
     fn background<T: Send + 'static>(

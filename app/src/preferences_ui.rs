@@ -10,8 +10,8 @@
 //! logical key event so typed characters follow the active keyboard layout.
 
 use rune::{
-    Align, Drag, El, Key, KeyEvent, LiveRegion, Mods, Phase, PhysicalInput, PhysicalKeyCode,
-    Shadow, TextStyle, Tx, col, el, icon, row, text,
+    Align, Anim, Drag, El, Key, KeyEvent, LiveRegion, Mods, Phase, PhysicalInput, PhysicalKeyCode,
+    Shadow, Spring, SpringPair, TextStyle, Transition, Tx, col, el, icon, row, text,
 };
 use rune_kit::shell::{Sidebar, SidebarRow};
 use rune_kit::{Button, ButtonVariant, ControlSize, Divider, Kit, SegmentedControl, Switch};
@@ -377,7 +377,7 @@ fn binding_row(s: &App, k: &Kit, action: Action) -> El {
     } else {
         keys.join(" / ")
     };
-    let mut control = row()
+    let control = row()
         .key(format!("record-{}", action.key()))
         .role("button")
         .label(action.title())
@@ -389,7 +389,8 @@ fn binding_row(s: &App, k: &Kit, action: Action) -> El {
         })
         .focusable(true)
         .h(28.0)
-        .min_w(64.0)
+        // Fixed so resting, hover, and recording values blend without a width flight.
+        .w(104.0)
         .px(3.0)
         // Hangs past the row's inset by its own padding, so the keycaps line up with the other
         // rows' controls.
@@ -397,6 +398,11 @@ fn binding_row(s: &App, k: &Kit, action: Action) -> El {
         .justify_end()
         .center_y()
         .radius(k.radius.md)
+        .hover_group()
+        .hover_motion(
+            Anim::from(Spring::new(0.16, 0.0)),
+            Anim::from(Spring::new(0.16, 0.0)),
+        )
         .focus_ring(2.0, 2.0, k.c.border_focus)
         .on_press_tx(move |s: &mut App, tx: &mut Tx| {
             if s.recording == Some(action) {
@@ -416,26 +422,47 @@ fn binding_row(s: &App, k: &Kit, action: Action) -> El {
             }
         })
         .on_physical_input(move |s: &mut App, input, tx| record_physical_input(s, input, tx));
-    control = if recording {
-        control.fill(k.c.layer_01).border(1.0, k.c.border_focus)
-    } else {
-        k.interactive(control)
-    };
-    control = control.child(
+    let control = control.child(
         if recording {
             text("Press a key…")
+                .key("record-prompt")
                 .font(k.ty.ui_compact)
                 .color(k.c.text_muted)
-        } else if keys.is_empty() {
-            text("Not bound")
-                .font(k.ty.ui_compact)
-                .color(k.c.text_faint)
         } else {
+            let value = if keys.is_empty() {
+                text("Not bound")
+                    .font(k.ty.ui_compact)
+                    .color(k.c.text_faint)
+            } else {
+                row()
+                    .gap(6.0)
+                    .center_y()
+                    .children(keys.iter().map(|key| keycap(k, key)))
+            };
             row()
-                .gap(6.0)
+                .key("record-value")
+                .h(22.0)
                 .center_y()
-                .children(keys.iter().map(|key| keycap(k, key)))
+                .child(value.group_opacity(1.0, 0.0))
+                .child(
+                    row()
+                        .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                        .justify_end()
+                        .center_y()
+                        .child(
+                            text("Edit")
+                                .key("edit-hint")
+                                .font(k.ty.ui_compact)
+                                .color(k.c.text_muted)
+                                .group_opacity(0.0, 1.0),
+                        ),
+                )
         }
+        .transition(Transition::opacity().springs(SpringPair::new(
+            Spring::new(0.12, 0.0),
+            Spring::new(0.08, 0.0),
+        )))
+        .enter_delay(0.09)
         .a11y_hidden(),
     );
     setting(k, action.key(), action.title(), None, control)

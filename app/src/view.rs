@@ -8,6 +8,7 @@ use rune_kit::{
 };
 
 use crate::app::{App, Capture, Page, Preview, VIEWPORT, title};
+use crate::formats;
 use crate::icons::Icon;
 use crate::preferences::Action;
 use crate::{preferences_ui, preview, update};
@@ -139,7 +140,10 @@ fn viewer(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
     } else {
         main = main.child(stage(s, kit));
     }
-    main.child(status_bar(s, kit))
+    if s.active.is_some() {
+        main = main.child(status_bar(s, kit));
+    }
+    main
 }
 
 fn tab_band(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
@@ -196,79 +200,81 @@ fn tabs(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
 }
 
 fn welcome(s: &App, kit: &Kit) -> El {
-    let mut demos = row().gap(6.0);
-    for path in &s.demos {
-        let path = path.clone();
-        demos = demos.child(
-            Button::new(title(&path))
-                .variant(ButtonVariant::GhostMuted)
-                .control_size(ControlSize::Small)
-                .on_press(move |s: &mut App| s.open_paths(vec![path.clone()]))
-                .build(kit),
+    let extensions = formats::EXTENSIONS.join("  ·  ");
+    let mark = el()
+        .w(44.0)
+        .h(44.0)
+        .radius(12.0)
+        .fill(kit.c.layer_02)
+        .center()
+        .child(
+            icon(Icon::Cube.glyph(), 24.0)
+                .color(kit.c.text_base)
+                .a11y_hidden(),
         );
-    }
+    let actions = row()
+        .gap(8.0)
+        .center_y()
+        .child(
+            Button::new("Open Files…")
+                .icon(Icon::OpenFiles.glyph())
+                .variant(ButtonVariant::Contrast)
+                .control_size(ControlSize::Large)
+                .shortcut("cmd+o")
+                .disabled(s.choosing)
+                .on_press(|s: &mut App| s.open_dialog())
+                .build(kit)
+                .key("welcome-open-files"),
+        )
+        .child(
+            Button::new("Open Folder…")
+                .icon(Icon::OpenFolder.glyph())
+                .control_size(ControlSize::Large)
+                .shortcut("cmd+shift+o")
+                .disabled(s.choosing)
+                .on_press_tx(App::open_folder)
+                .build(kit)
+                .key("welcome-open-folder"),
+        );
     let mut content = col()
         .w_full()
-        .max_w(520.0)
-        .gap(12.0)
+        .max_w(640.0)
+        .gap(20.0)
         .items_center()
+        .child(mark)
         .child(
-            text("Litematica Preview")
-                .font(rune::TextStyle { size: 22.0, weight: 600.0, line_height: 28.0, ..kit.ty.ui_medium })
-                .color(kit.c.text_base),
-        )
-        .child(
-            text("Open a Minecraft schematic or drop it anywhere in this window to preview it offline.")
-                .font(kit.ty.ui)
-                .color(kit.c.text_muted)
-                .wrap()
-                .w_full(),
-        )
-        .child(
-            row()
-                .gap(8.0)
-                .center_y()
+            col()
+                .gap(6.0)
+                .items_center()
                 .child(
-                    Button::new("Open Files…")
-                        .icon(Icon::OpenFiles.glyph())
-                        .variant(ButtonVariant::Contrast)
-                        .control_size(ControlSize::Large)
-                        .shortcut("cmd+o")
-                        .disabled(s.choosing)
-                        .on_press(|s: &mut App| s.open_dialog())
-                        .build(kit)
-                        .key("welcome-open-files"),
+                    text("Litematica Preview")
+                        .font(rune::TextStyle {
+                            size: 22.0,
+                            weight: 600.0,
+                            line_height: 28.0,
+                            ..kit.ty.ui_medium
+                        })
+                        .color(kit.c.text_base),
                 )
                 .child(
-                    Button::new("Open Folder…")
-                        .icon(Icon::OpenFolder.glyph())
-                        .control_size(ControlSize::Large)
-                        .shortcut("cmd+shift+o")
-                        .disabled(s.choosing)
-                        .on_press_tx(App::open_folder)
-                        .build(kit)
-                        .key("welcome-open-folder"),
+                    text("Drop schematics anywhere to preview them offline")
+                        .font(kit.ty.ui)
+                        .color(kit.c.text_muted),
                 ),
-        );
+        )
+        .child(actions)
+        .child(text(extensions).font(kit.ty.small).color(kit.c.text_faint));
     if !s.demos.is_empty() {
-        content = content
-            .child(
-                text("Try an example")
-                    .font(kit.ty.small)
-                    .color(kit.c.text_faint),
-            )
-            .child(
-                el().w_full()
-                    .h(32.0)
-                    .scroll_x()
-                    .child(row().gap(4.0).center_y().child(demos)),
-            );
+        let demos = s.demos.clone();
+        content = content.child(
+            Button::new("Try the examples")
+                .icon(Icon::BoxMultiple.glyph())
+                .variant(ButtonVariant::GhostMuted)
+                .on_press(move |s: &mut App| s.open_paths(demos.clone()))
+                .build(kit)
+                .key("welcome-examples"),
+        );
     }
-    content = content.child(
-        text(format!("Version {}", env!("CARGO_PKG_VERSION")))
-            .font(kit.ty.small)
-            .color(kit.c.text_faint),
-    );
     col()
         .key("welcome")
         .w_full()
@@ -278,6 +284,12 @@ fn welcome(s: &App, kit: &Kit) -> El {
         .padding(24.0)
         .center()
         .child(content)
+        .child(
+            text(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                .font(kit.ty.small)
+                .color(kit.c.text_faint)
+                .mt(24.0),
+        )
 }
 
 fn sidebar(s: &App, kit: &Kit) -> El {
@@ -699,15 +711,12 @@ fn status_bar(s: &App, kit: &Kit) -> El {
         ),
         Preview::Loading(..) => "Loading…".into(),
         Preview::Failed(_) => "Preview unavailable".into(),
-        Preview::None if s.active.is_some() => "Preparing preview…".into(),
-        Preview::None => "No schematic open".into(),
+        Preview::None => "Preparing preview…".into(),
     };
     let hint = if s.spectator {
-        "Spectator · move the pointer to look around".to_string()
-    } else if s.active.is_some() {
-        "Orbit: drag · Pan: Shift-drag · Zoom: scroll".to_string()
+        "Spectator · move the pointer to look around"
     } else {
-        format!("{OPEN_SHORTCUT} to open · drop a file to preview")
+        "Orbit: drag · Pan: Shift-drag · Zoom: scroll"
     };
     row()
         .key("status-bar")

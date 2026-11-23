@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -18,7 +19,17 @@ use crate::texture_packs::{TexturePack, TexturePackLibrary};
 use crate::{file_dialog, formats, preferences_ui, preview_image, resources, update};
 
 pub(crate) const VIEWPORT: &str = "schematic-viewport";
+/// Siblings on each side of the selection whose thumbnails are rendered.
 const THUMBNAIL_RADIUS: usize = 4;
+/// Thumbnails kept resident; past it the ones farthest from the selection are dropped.
+const RESIDENT_THUMBNAILS: usize = 64;
+/// The sibling indices whose thumbnails are rendered: [`THUMBNAIL_RADIUS`] either side of
+/// `index`, shifted in at either end so the window keeps its width while the list is longer.
+fn thumbnail_range(len: usize, index: usize) -> Range<usize> {
+    let span = (THUMBNAIL_RADIUS * 2 + 1).min(len);
+    let start = index.saturating_sub(THUMBNAIL_RADIUS).min(len - span);
+    start..start + span
+}
 /// Seconds a notice toast stays up before it dismisses itself.
 const NOTICE_SECONDS: f64 = 5.0;
 
@@ -519,11 +530,11 @@ impl App {
         self.active_tab()?.nearby.directory.as_deref()
     }
 
-    pub(crate) fn visible_nearby(&self) -> Option<(&[PathBuf], usize)> {
+    /// The sibling range whose thumbnails are rendered: [`THUMBNAIL_RADIUS`] either side of the
+    /// selection, shifted in at either end instead of shrinking.
+    pub(crate) fn thumbnail_window(&self) -> Option<&[PathBuf]> {
         let (paths, index) = self.nearby()?;
-        let start = index.saturating_sub(THUMBNAIL_RADIUS);
-        let end = (index + THUMBNAIL_RADIUS + 1).min(paths.len());
-        Some((&paths[start..end], start))
+        Some(&paths[thumbnail_range(paths.len(), index)])
     }
 
     pub(crate) fn browse_at(&mut self, index: usize, tx: &mut Tx) {
@@ -678,12 +689,11 @@ impl App {
     }
 
     fn queue_thumbnails(&mut self) {
-        let Some((paths, _)) = self.visible_nearby() else {
+        let Some(window) = self.thumbnail_window().map(|window| window.to_vec()) else {
             return;
         };
-        let nearby = paths.to_vec();
-        self.thumbnails.retain(|path, _| nearby.contains(path));
-        let paths: Vec<_> = nearby
+        self.trim_thumbnails();
+        let paths: Vec<_> = window
             .into_iter()
             .filter(|path| !self.thumbnails.contains_key(path))
             .collect();
@@ -727,6 +737,37 @@ impl App {
                 }
             }
         });
+    }
+
+    /// Keeps thumbnails for the active tab's siblings, dropping those farthest from the
+    /// selection once more than [`RESIDENT_THUMBNAILS`] are held.
+    fn trim_thumbnails(&mut self) {
+        let Some(tab) = self.active_tab() else {
+            return;
+        };
+        let nearby = Arc::clone(&tab.nearby);
+        let index = tab.nearby_index;
+        self.thumbnails
+            .retain(|path, _| nearby.paths.contains(path));
+        let excess = self.thumbnails.len().saturating_sub(RESIDENT_THUMBNAILS);
+        if excess == 0 {
+            return;
+        }
+        let mut farthest: Vec<(usize, PathBuf)> = self
+            .thumbnails
+            .keys()
+            .filter_map(|path| {
+                nearby
+                    .paths
+                    .iter()
+                    .position(|candidate| candidate == path)
+                    .map(|at| (at.abs_diff(index), path.clone()))
+            })
+            .collect();
+        farthest.sort_by_key(|a| std::cmp::Reverse(a.0));
+        for (_, path) in farthest.into_iter().take(excess) {
+            self.thumbnails.remove(&path);
+        }
     }
 
     pub(crate) fn finish_capture(&mut self, capture: Capture, job: CaptureJob) {
@@ -1073,4 +1114,19 @@ pub(crate) fn title(path: &Path) -> String {
         .unwrap_or(path.as_os_str())
         .to_string_lossy()
         .into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::thumbnail_range;
+
+    #[test]
+    fn thumbnail_range_keeps_its_width_at_both_ends() {
+        assert_eq!(thumbnail_range(0, 0), 0..0);
+        assert_eq!(thumbnail_range(7, 0), 0..7);
+        assert_eq!(thumbnail_range(7, 6), 0..7);
+        assert_eq!(thumbnail_range(20, 0), 0..9);
+        assert_eq!(thumbnail_range(20, 10), 6..15);
+        assert_eq!(thumbnail_range(20, 19), 11..20);
+    }
 }

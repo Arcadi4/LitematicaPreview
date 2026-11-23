@@ -328,31 +328,18 @@ fn sidebar(s: &App, kit: &Kit) -> El {
                 )
             },
         );
-        sidebar = sidebar.child(
+        sidebar = sidebar.header(
             SidebarHeader::new(label.into_owned())
                 .count(all.len())
                 .build(kit)
                 .help(detail),
         );
-        if let Some((paths, start)) = s.visible_nearby() {
-            for (at, path) in (start..).zip(paths) {
-                let selected = at == index;
-                let mut row = SidebarRow::new(title(path))
-                    .height(30.0)
-                    .selected(selected)
-                    .on_select(move |s: &mut App, tx: &mut Tx| s.browse_at(at, tx));
-                if let Some(image) = s.thumbnails.get(path) {
-                    row = row.avatar(thumbnail(image));
-                } else {
-                    row = row.icon(Icon::Cube.glyph());
-                }
-                sidebar = sidebar.child(
-                    row.build(kit)
-                        .key(format!("browse-{at}"))
-                        .help(path.display().to_string()),
-                );
-            }
-        }
+        let rows = kit.clone();
+        sidebar = sidebar.row_height(32.0).virtual_rows(
+            all.len(),
+            |_: &App, at| format!("browse-{at}").into(),
+            move |s: &App, at| browse_row(s, at, &rows),
+        );
         if all.len() > 1 {
             sidebar = sidebar.footer(nearby_nav(index, all.len(), kit));
         }
@@ -409,6 +396,29 @@ fn sidebar(s: &App, kit: &Kit) -> El {
         .h_full()
         .min_h(0.0)
         .child(sidebar.build(kit))
+}
+
+fn browse_row(s: &App, at: usize, kit: &Kit) -> El {
+    let Some((paths, index)) = s.nearby() else {
+        return col();
+    };
+    let Some(path) = paths.get(at) else {
+        return col();
+    };
+    let mut row = SidebarRow::new(title(path))
+        .height(30.0)
+        .selected(at == index)
+        .on_select(move |s: &mut App, tx: &mut Tx| s.browse_at(at, tx));
+    if let Some(image) = s.thumbnails.get(path) {
+        row = row.avatar(thumbnail(image));
+    } else {
+        row = row.icon(Icon::Cube.glyph());
+    }
+    col()
+        .w_full()
+        .h(32.0)
+        .pb(2.0)
+        .child(row.build(kit).w_full().help(path.display().to_string()))
 }
 
 fn nearby_nav(index: usize, count: usize, kit: &Kit) -> El {

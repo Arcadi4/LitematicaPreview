@@ -483,12 +483,16 @@ pub struct PreviewSettings {
 
 impl PreviewSettings {
     pub const CHUNK_SIZES: [u32; 5] = [16, 32, 64, 128, 256];
+    pub const MIN_THREADS: u8 = 2;
+    pub const MAX_THREADS: u8 = 8;
 
     fn sanitized(mut self) -> Self {
         if !Self::CHUNK_SIZES.contains(&self.chunk_size) {
             self.chunk_size = 32;
         }
-        self.thread_count = self.thread_count.clamp(2, 8);
+        self.thread_count = self
+            .thread_count
+            .clamp(Self::MIN_THREADS, Self::MAX_THREADS);
         if !self.chunking_enabled {
             self.multithreading_enabled = false;
         }
@@ -696,7 +700,8 @@ impl Preferences {
     }
 
     pub fn set_thread_count(&mut self, count: u8) {
-        self.preview.thread_count = count.clamp(2, 8);
+        self.preview.thread_count =
+            count.clamp(PreviewSettings::MIN_THREADS, PreviewSettings::MAX_THREADS);
     }
 
     /// The worker preset for the preview pipeline, in the core crate's shape. The configured

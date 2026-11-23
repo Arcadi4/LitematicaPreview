@@ -11,18 +11,19 @@
 //! the same preference API, so a recording cannot change the viewer while it runs.
 
 use rune::{
-    El, Key, KeyEvent, LiveRegion, Mods, PhysicalInput, PhysicalKeyCode, Tx, col, el, icon, row,
-    text,
+    Align, Drag, El, Key, KeyEvent, LiveRegion, Mods, Phase, PhysicalInput, PhysicalKeyCode,
+    Shadow, TextStyle, Tx, col, el, icon, row, text,
 };
 use rune_kit::shell::{Sidebar, SidebarRow};
 use rune_kit::{
-    Button, ButtonVariant, ControlSize, Divider, Keybind, Kit, SegmentedControl, State, Switch,
+    Button, ButtonVariant, ControlSize, Divider, Keybind, Kit, SegmentedControl, Switch,
 };
 
 use crate::app::App;
 use crate::icons::Icon;
 use crate::preferences::{
-    Action, Conflict, KeyChord, Mode, PreviewSettings, Theme, key_chord, key_chord_from_physical,
+    Action, Conflict, KeyChord, MAX_FOV_DEGREES, MAX_SENSITIVITY, MIN_FOV_DEGREES, MIN_SENSITIVITY,
+    Mode, PreviewSettings, Theme, key_chord, key_chord_from_physical,
 };
 use crate::update::{Source, State as UpdateState};
 
@@ -33,6 +34,9 @@ const CONTENT_WIDTH: f32 = 680.0;
 const ROW_INSET: f32 = 14.0;
 /// A single-line row's height; rows with an explanation grow past it.
 const ROW_HEIGHT: f32 = 44.0;
+/// A slider's track length, knob included.
+const SLIDER_WIDTH: f32 = 168.0;
+const SLIDER_KNOB: f32 = 16.0;
 
 /// A focused area of the preferences page.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -302,42 +306,50 @@ fn controls(s: &App, k: &Kit) -> Vec<El> {
 fn camera(s: &App, k: &Kit) -> El {
     let sensitivity = s.preferences.sensitivity;
     let fov = s.preferences.fov;
-    let sensitivity_value = format!("{:.0}%", sensitivity * 100.0);
-    let fov_value = format!("{fov:.0}°");
     group(
         k,
         "controls-camera",
         Some("Camera feel"),
         vec![
-            stepper_setting(
+            slider_setting(
                 k,
-                "sensitivity",
-                "Mouse sensitivity",
-                "How far the spectator camera turns for a given pointer movement.",
-                &sensitivity_value,
-                "Lower mouse sensitivity",
-                "Raise mouse sensitivity",
-                false,
-                |s| {
-                    s.preferences
-                        .set_sensitivity(s.preferences.sensitivity - 0.05)
-                },
-                |s| {
-                    s.preferences
-                        .set_sensitivity(s.preferences.sensitivity + 0.05)
+                Slider {
+                    key: "sensitivity",
+                    label: "Mouse sensitivity",
+                    description: "How far the spectator camera turns for a given pointer movement.",
+                    readout: format!("{:.0}%", sensitivity * 100.0),
+                    value: sensitivity,
+                    range: SliderRange {
+                        min: MIN_SENSITIVITY,
+                        max: MAX_SENSITIVITY,
+                        step: 0.05,
+                        grain: 0.01,
+                        log: true,
+                    },
+                    disabled: false,
+                    get: |s| s.preferences.sensitivity,
+                    set: |s, value| s.preferences.set_sensitivity(value),
                 },
             ),
-            stepper_setting(
+            slider_setting(
                 k,
-                "fov",
-                "Field of view",
-                "Vertical field of view in spectator mode.",
-                &fov_value,
-                "Narrow the field of view",
-                "Widen the field of view",
-                false,
-                |s| s.preferences.set_fov(s.preferences.fov - 1.0),
-                |s| s.preferences.set_fov(s.preferences.fov + 1.0),
+                Slider {
+                    key: "fov",
+                    label: "Field of view",
+                    description: "Vertical field of view in spectator mode.",
+                    readout: format!("{fov:.0}°"),
+                    value: fov,
+                    range: SliderRange {
+                        min: MIN_FOV_DEGREES,
+                        max: MAX_FOV_DEGREES,
+                        step: 1.0,
+                        grain: 1.0,
+                        log: false,
+                    },
+                    disabled: false,
+                    get: |s| s.preferences.fov,
+                    set: |s, value| s.preferences.set_fov(value),
+                },
             ),
         ],
         None,
@@ -552,37 +564,29 @@ fn performance(s: &App, k: &Kit) -> Vec<El> {
             s.save_preferences();
         },
     );
-    let sizes: Vec<String> = PreviewSettings::CHUNK_SIZES
-        .iter()
-        .map(|size| size.to_string())
-        .collect();
-    let selected = PreviewSettings::CHUNK_SIZES
-        .iter()
-        .position(|size| *size == preview.chunk_size);
-    let mut chunk_size = SegmentedControl::new(&sizes, selected)
-        .fit()
-        .label("Chunk size")
-        .on_pick(|s: &mut App, index, _| {
-            if let Some(size) = PreviewSettings::CHUNK_SIZES.get(index) {
-                s.preferences.set_chunk_size(*size);
-                s.save_preferences();
-            }
-        });
-    if !preview.chunking_enabled {
-        for index in 0..sizes.len() {
-            chunk_size = chunk_size.segment_state(index, State::Disabled);
-        }
-    }
-    let chunk_size_description = "The edge length, in blocks, of each geometry chunk.";
-    let chunk_size = setting(
+    let chunk_size = slider_setting(
         k,
-        "chunk-size",
-        "Chunk size",
-        Some(chunk_size_description),
-        chunk_size
-            .build(k)
-            .description(chunk_size_description)
-            .focus_group(),
+        Slider {
+            key: "chunk-size",
+            label: "Chunk size",
+            description: "The edge length, in blocks, of each geometry chunk.",
+            readout: preview.chunk_size.to_string(),
+            value: chunk_size_index(preview.chunk_size),
+            range: SliderRange {
+                min: 0.0,
+                max: (PreviewSettings::CHUNK_SIZES.len() - 1) as f32,
+                step: 1.0,
+                grain: 1.0,
+                log: false,
+            },
+            disabled: !preview.chunking_enabled,
+            get: |s| chunk_size_index(s.preferences.preview.chunk_size),
+            set: |s, index| {
+                if let Some(size) = PreviewSettings::CHUNK_SIZES.get(index as usize) {
+                    s.preferences.set_chunk_size(*size);
+                }
+            },
+        },
     );
     let multithreading_description = if preview.chunking_enabled {
         "Uses more CPU cores while preparing and meshing a schematic."
@@ -603,22 +607,28 @@ fn performance(s: &App, k: &Kit) -> Vec<El> {
         },
     );
     let threaded = preview.chunking_enabled && preview.multithreading_enabled;
-    let thread_count = stepper_setting(
+    let thread_count = slider_setting(
         k,
-        "threads",
-        "Worker threads",
-        "The number of worker threads used while meshing.",
-        &preview.thread_count.to_string(),
-        "Use fewer worker threads",
-        "Use more worker threads",
-        !threaded,
-        |s| {
-            s.preferences
-                .set_thread_count(s.preferences.preview.thread_count.saturating_sub(1));
-        },
-        |s| {
-            s.preferences
-                .set_thread_count(s.preferences.preview.thread_count.saturating_add(1));
+        Slider {
+            key: "threads",
+            label: "Worker threads",
+            description: if threaded {
+                "The number of worker threads used while meshing."
+            } else {
+                "The number of worker threads used while meshing. Unavailable while chunking or multithreading is off."
+            },
+            readout: preview.thread_count.to_string(),
+            value: f32::from(preview.thread_count),
+            range: SliderRange {
+                min: f32::from(PreviewSettings::MIN_THREADS),
+                max: f32::from(PreviewSettings::MAX_THREADS),
+                step: 1.0,
+                grain: 1.0,
+                log: false,
+            },
+            disabled: !threaded,
+            get: |s| f32::from(s.preferences.preview.thread_count),
+            set: |s, count| s.preferences.set_thread_count(count as u8),
         },
     );
     let footer = row()
@@ -651,6 +661,13 @@ fn performance(s: &App, k: &Kit) -> Vec<El> {
         vec![chunking, chunk_size, multithreading, thread_count],
         Some(footer),
     )]
+}
+
+fn chunk_size_index(size: u32) -> f32 {
+    PreviewSettings::CHUNK_SIZES
+        .iter()
+        .position(|chunk| *chunk == size)
+        .unwrap_or_default() as f32
 }
 
 const APPIMAGE_UPDATE_URL: &str = "https://github.com/AppImageCommunity/AppImageUpdate/issues";
@@ -819,67 +836,179 @@ fn update_status(s: &App, k: &Kit) -> Option<El> {
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn stepper_setting(
-    k: &Kit,
-    key: &str,
-    label: &str,
-    description: &str,
-    value: &str,
-    decrease: &str,
-    increase: &str,
-    disabled: bool,
-    lower: impl Fn(&mut App) + 'static,
-    higher: impl Fn(&mut App) + 'static,
-) -> El {
-    let down = Icon::ChevronDown.glyph();
-    let up = down;
-    let minus = Button::new(decrease)
-        .label_with(move |_, ink| icon(down, 12.0).color(ink))
-        .control_size(ControlSize::Mini)
-        .help(decrease)
-        .disabled(disabled)
-        .on_press(move |s: &mut App| {
-            lower(s);
-            s.save_preferences();
-        })
-        .build(k);
-    let plus = Button::new(increase)
-        .label_with(move |_, ink| icon(up, 12.0).color(ink).rotate(std::f32::consts::PI))
-        .control_size(ControlSize::Mini)
-        .help(increase)
-        .disabled(disabled)
-        .on_press(move |s: &mut App| {
-            higher(s);
-            s.save_preferences();
-        })
-        .build(k);
-    let mut description = description.to_owned();
-    if disabled {
-        description.push_str(" Unavailable while chunking or multithreading is off.");
+/// How a slider's value spans its track.
+#[derive(Clone, Copy)]
+struct SliderRange {
+    min: f32,
+    max: f32,
+    /// What one arrow key moves the value by.
+    step: f32,
+    /// What every set value rounds to.
+    grain: f32,
+    /// Spaces the track geometrically, so every doubling takes the same travel.
+    log: bool,
+}
+
+impl SliderRange {
+    fn position(self, value: f32) -> f32 {
+        let position = if self.log {
+            (value / self.min).ln() / (self.max / self.min).ln()
+        } else {
+            (value - self.min) / (self.max - self.min)
+        };
+        position.clamp(0.0, 1.0)
     }
-    let control = row()
-        .key(format!("stepper-{key}"))
-        .gap(8.0)
-        .center_y()
-        .role("group")
+
+    fn value(self, position: f32) -> f32 {
+        let position = position.clamp(0.0, 1.0);
+        self.snap(if self.log {
+            self.min * (self.max / self.min).powf(position)
+        } else {
+            self.min + position * (self.max - self.min)
+        })
+    }
+
+    fn snap(self, value: f32) -> f32 {
+        ((value / self.grain).round() * self.grain).clamp(self.min, self.max)
+    }
+}
+
+/// A slider row: what it shows, and how it reads and writes the preference behind it.
+struct Slider<'a> {
+    key: &'a str,
+    label: &'a str,
+    description: &'a str,
+    readout: String,
+    value: f32,
+    range: SliderRange,
+    disabled: bool,
+    get: fn(&App) -> f32,
+    set: fn(&mut App, f32),
+}
+
+/// A knob on a track with the value read out beside it. A press on the track jumps the knob
+/// there; a drag that starts on the knob keeps the knob where it was grabbed. Arrow keys step,
+/// Home and End go to the ends. The value saves after each step and at the end of a drag.
+fn slider_setting(k: &Kit, slider: Slider) -> El {
+    let Slider {
+        key,
+        label,
+        description,
+        readout,
+        value,
+        range,
+        disabled,
+        get,
+        set,
+    } = slider;
+    let height = 20.0;
+    let rail = 4.0;
+    let travel = SLIDER_WIDTH - SLIDER_KNOB;
+    let knob_at = move |value: f32| SLIDER_KNOB / 2.0 + range.position(value) * travel;
+    let on_knob = move |x: f32, value: f32| (x - knob_at(value)).abs() <= SLIDER_KNOB / 2.0 + 2.0;
+    let value_at = move |x: f32| range.value((x - SLIDER_KNOB / 2.0) / travel);
+    let position = range.position(value);
+    let knob = el()
+        .key("knob")
+        .size(SLIDER_KNOB, SLIDER_KNOB)
+        .absolute(position * travel, (height - SLIDER_KNOB) / 2.0)
+        .radius(SLIDER_KNOB / 2.0)
+        .fill(k.c.knob)
+        .box_shadow(Shadow {
+            spread: 0.5,
+            color: k.c.border_strong,
+            ..Default::default()
+        })
+        .motion(k.motion.control)
+        .a11y_hidden();
+    let mut track = el()
+        .key(format!("slider-{key}"))
+        .role("slider")
         .label(label)
-        .a11y_value(value)
-        .description(description.clone())
-        .child(minus)
+        .description(description)
+        .range_value(f64::from(value), f64::from(range.min), f64::from(range.max))
+        .range_step(f64::from(range.step))
+        .a11y_value(readout.clone())
+        .disabled(disabled)
+        .size(SLIDER_WIDTH, height)
+        .radius(height / 2.0)
         .child(
-            text(value)
-                .key("value")
-                .min_w(52.0)
-                .center()
-                .font(k.ty.ui_medium)
-                .color(k.c.text_base),
+            el().key("rail")
+                .size(SLIDER_WIDTH, rail)
+                .absolute(0.0, (height - rail) / 2.0)
+                .radius(rail / 2.0)
+                .fill(k.c.layer_03)
+                .a11y_hidden(),
         )
-        .child(plus);
-    let control = if disabled {
-        control.layer_opacity(0.5)
+        .child(
+            el().key("fill")
+                .size(SLIDER_KNOB / 2.0 + position * travel, rail)
+                .absolute(0.0, (height - rail) / 2.0)
+                .radius(rail / 2.0)
+                .fill(k.c.bg_accent)
+                .motion(k.motion.control)
+                .a11y_hidden(),
+        )
+        .child(k.elevate(knob, &k.elevation.knob));
+    track = if disabled {
+        track.layer_opacity(0.5)
     } else {
-        control
+        track
+            .focus_ring(2.0, 2.0, k.c.border_focus)
+            .on_step(move |s: &mut App, steps, _| {
+                set(s, range.snap(get(s) + steps as f32 * range.step));
+                s.save_preferences();
+            })
+            .on_step_limit(move |s: &mut App, end, _| {
+                set(s, if end { range.max } else { range.min });
+                s.save_preferences();
+            })
+            .on_drag(
+                move |s: &mut App, d: &mut Drag, tx: &mut Tx| match d.phase {
+                    Phase::Down => {
+                        d.data = get(s);
+                        if !on_knob(d.x, d.data) {
+                            set(s, value_at(d.x));
+                        }
+                    }
+                    Phase::Move => {
+                        let grab = if on_knob(d.start_x, d.data) {
+                            d.start_x - knob_at(d.data)
+                        } else {
+                            0.0
+                        };
+                        set(s, value_at(d.x - grab));
+                        tx.instant();
+                    }
+                    Phase::Up => {
+                        if d.cancelled() {
+                            set(s, d.data);
+                        }
+                        s.save_preferences();
+                    }
+                },
+            )
     };
-    setting(k, key, label, Some(&description), control)
+    let control = row()
+        .key(format!("slider-row-{key}"))
+        .gap(12.0)
+        .center_y()
+        .child(track)
+        .child(
+            text(readout)
+                .key("readout")
+                .w(44.0)
+                .align(Align::End)
+                .font(TextStyle {
+                    features: "'tnum' 1",
+                    ..k.ty.ui
+                })
+                .color(if disabled {
+                    k.c.text_faint
+                } else {
+                    k.c.text_muted
+                })
+                .a11y_hidden(),
+        );
+    setting(k, key, label, Some(description), control)
 }

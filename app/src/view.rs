@@ -4,8 +4,7 @@ use rune_kit::shell::{
     TabOrientation, TabOverflow, TabStrip, Toolbar,
 };
 use rune_kit::{
-    Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Menu, MenuItem,
-    Spinner, Switch,
+    Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Spinner, Switch,
 };
 
 use crate::app::{App, Capture, Page, Preview, VIEWPORT, title};
@@ -33,9 +32,8 @@ const SETTINGS_SHORTCUT: &str = if cfg!(target_os = "macos") {
 
 pub(crate) fn view(s: &App, cx: &mut Cx<App>) -> El {
     let kit = Kit::neutral(s.preferences.theme.is_dark(cx.system_dark()));
-    let mut layer = Vec::new();
     let base = match s.page {
-        Page::Viewer => split(s, cx, &kit, &mut layer),
+        Page::Viewer => split(s, cx, &kit),
         Page::Preferences => page_shell(s, cx, &kit, "Preferences", preferences_ui::view(s, &kit)),
         Page::TexturePacks => page_shell(s, cx, &kit, "Texture Packs", texture_packs(s, &kit)),
     };
@@ -73,18 +71,16 @@ pub(crate) fn view(s: &App, cx: &mut Cx<App>) -> El {
                 ),
         );
     }
-    rune_kit::root(base, layer)
+    rune_kit::root(base, Vec::new())
 }
 
-fn split(s: &App, cx: &mut Cx<App>, kit: &Kit, layer: &mut Vec<El>) -> El {
+fn split(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
     let main = viewer(s, cx, kit);
-    let mut toolbar = Toolbar::new()
-        .title(
-            s.active_tab()
-                .map(|tab| title(&tab.path))
-                .unwrap_or_else(|| "Litematica Preview".into()),
-        )
-        .leading(open_controls(s, kit, layer));
+    let mut toolbar = Toolbar::new().title(
+        s.active_tab()
+            .map(|tab| title(&tab.path))
+            .unwrap_or_else(|| "Litematica Preview".into()),
+    );
     if !s.sidebar.is_open() {
         toolbar = toolbar
             .trailing(
@@ -125,80 +121,6 @@ fn split(s: &App, cx: &mut Cx<App>, kit: &Kit, layer: &mut Vec<El>) -> El {
         )
         .reduced_motion(cx.is_reduced_motion())
         .build(kit)
-}
-
-fn open_controls(s: &App, kit: &Kit, layer: &mut Vec<El>) -> El {
-    let open = Button::new("Open Files…")
-        .icon(Icon::OpenFiles.glyph())
-        .variant(ButtonVariant::Contrast)
-        .shortcut("cmd+o")
-        .disabled(s.choosing)
-        .on_press(|s: &mut App| s.open_dialog())
-        .build(kit)
-        .key("open-files");
-    let more = IconButton::new(Icon::ChevronDown.glyph())
-        .variant(IconButtonVariant::GhostMuted)
-        .label("More open options")
-        .help("Open files or a folder")
-        .on_press(|s: &mut App| s.file_menu_open = !s.file_menu_open)
-        .build(kit);
-    let menu = Menu::new("file-menu")
-        .trigger(more)
-        .item(
-            MenuItem::new("Open Files…")
-                .icon(Icon::OpenFiles.glyph())
-                .shortcut("cmd+o")
-                .disabled(s.choosing)
-                .on_select(|s: &mut App| {
-                    s.file_menu_open = false;
-                    s.open_dialog();
-                }),
-        )
-        .item(
-            MenuItem::new("Open Folder…")
-                .icon(Icon::OpenFolder.glyph())
-                .shortcut("cmd+shift+o")
-                .disabled(s.choosing)
-                .on_select_tx(|s: &mut App, tx| {
-                    s.file_menu_open = false;
-                    s.open_folder(tx);
-                }),
-        )
-        .separator()
-        .item(
-            MenuItem::new("Home")
-                .icon(Icon::Home.glyph())
-                .on_select(|s: &mut App| {
-                    s.file_menu_open = false;
-                    s.home();
-                }),
-        )
-        .item(
-            MenuItem::new("Texture Packs…")
-                .icon(Icon::BoxMultiple.glyph())
-                .on_select(|s: &mut App| {
-                    s.file_menu_open = false;
-                    s.open_page(Page::TexturePacks);
-                }),
-        )
-        .item(
-            MenuItem::new("Preferences…")
-                .icon(Icon::Settings.glyph())
-                .shortcut("cmd+,")
-                .on_select(|s: &mut App| {
-                    s.file_menu_open = false;
-                    s.open_page(Page::Preferences);
-                }),
-        )
-        .open(s.file_menu_open)
-        .on_close(|s: &mut App| s.file_menu_open = false)
-        .build(kit, layer);
-    row()
-        .key("open-controls")
-        .gap(2.0)
-        .center_y()
-        .child(open)
-        .child(menu)
 }
 
 fn viewer(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {

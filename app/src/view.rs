@@ -535,9 +535,7 @@ fn stage(s: &App, kit: &Kit) -> El {
                 .pin(Some(8.0), None, Some(12.0), Some(8.0))
                 .gap(12.0)
                 .center_y()
-                .child(view_controls(s, kit))
-                .child(el().grow(1.0).a11y_hidden())
-                .child(navigation_hint(s, kit)),
+                .child(view_controls(s, kit)),
         )
 }
 
@@ -739,20 +737,6 @@ fn preview_metadata(s: &App, kit: &Kit) -> El {
         .key("preview-metadata")
         .font(kit.ty.small)
         .color(kit.c.text_weak)
-}
-
-fn navigation_hint(s: &App, kit: &Kit) -> El {
-    let hint = if s.spectator {
-        "Spectator · move the pointer to look around"
-    } else {
-        "Orbit: drag · Pan: Shift-drag · Zoom: scroll"
-    };
-    text(hint)
-        .key("navigation-hint")
-        .font(kit.ty.small)
-        .color(kit.c.text_faint)
-        .min_w(0.0)
-        .truncate()
 }
 
 fn toasts(s: &App, kit: &Kit) -> El {

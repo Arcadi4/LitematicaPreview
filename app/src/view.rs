@@ -210,7 +210,7 @@ fn tabs(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
 }
 
 fn welcome(s: &App, kit: &Kit) -> El {
-    let extensions = formats::EXTENSIONS.join("  ·  ");
+    let extensions = formats::EXTENSIONS.join("    ");
     let logo = s.logo.as_ref().expect("logo is loaded in setup");
     let mark = el().size(56.0, 56.0).pixels(logo.pixels()).a11y_hidden();
     let actions = row()
@@ -300,8 +300,15 @@ fn sidebar(s: &App, kit: &Kit) -> El {
         .header_gap(2.0)
         .header_padding(0.0, 8.0)
         .row_gap(2.0);
-    let nearby = s.nearby();
-    if let Some((all, index)) = nearby {
+    if let Some((all, _)) = s.nearby() {
+        sidebar = sidebar.header(
+            SidebarRow::new("Home")
+                .icon(Icon::Home.glyph())
+                .height(32.0)
+                .on_select(|s: &mut App, _| s.home())
+                .build(kit)
+                .key("sidebar-home"),
+        );
         let (label, detail) = s.nearby_directory().map_or_else(
             || {
                 (
@@ -331,9 +338,6 @@ fn sidebar(s: &App, kit: &Kit) -> El {
             |_: &App, at| format!("browse-{at}").into(),
             move |s: &App, at| browse_row(s, at, &rows),
         );
-        if all.len() > 1 {
-            sidebar = sidebar.footer(nearby_nav(index, all.len(), kit));
-        }
     } else {
         sidebar = sidebar
             .header(
@@ -353,14 +357,6 @@ fn sidebar(s: &App, kit: &Kit) -> El {
                     .on_select(|s: &mut App, tx| s.open_folder(tx))
                     .build(kit)
                     .key("sidebar-open-folder"),
-            )
-            .header(
-                SidebarRow::new("Home")
-                    .icon(Icon::Home.glyph())
-                    .height(32.0)
-                    .on_select(|s: &mut App, _| s.home())
-                    .build(kit)
-                    .key("sidebar-home"),
             );
     }
     sidebar = sidebar
@@ -410,40 +406,6 @@ fn browse_row(s: &App, at: usize, kit: &Kit) -> El {
         .h(32.0)
         .pb(2.0)
         .child(row.build(kit).w_full().help(path.display().to_string()))
-}
-
-fn nearby_nav(index: usize, count: usize, kit: &Kit) -> El {
-    let previous = Button::new("Previous")
-        .variant(ButtonVariant::GhostMuted)
-        .control_size(ControlSize::Small)
-        .help("Open the previous schematic")
-        .disabled(index == 0)
-        .on_press_tx(move |s: &mut App, tx: &mut Tx| s.browse_at(index.saturating_sub(1), tx))
-        .build(kit)
-        .key("browse-previous");
-    let next = Button::new("Next")
-        .variant(ButtonVariant::GhostMuted)
-        .control_size(ControlSize::Small)
-        .help("Open the next schematic")
-        .disabled(index + 1 >= count)
-        .on_press_tx(move |s: &mut App, tx: &mut Tx| s.browse_at(index + 1, tx))
-        .build(kit)
-        .key("browse-next");
-    row()
-        .key("browse-nav")
-        .w_full()
-        .h(28.0)
-        .px(2.0)
-        .gap(4.0)
-        .center_y()
-        .child(previous)
-        .child(
-            text(format!("{} of {}", index + 1, count))
-                .font(kit.ty.small)
-                .color(kit.c.text_faint)
-                .grow(1.0),
-        )
-        .child(next)
 }
 
 fn stage(s: &App, kit: &Kit) -> El {

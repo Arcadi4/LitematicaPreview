@@ -520,6 +520,7 @@ impl App {
     }
 
     pub(crate) fn home(&mut self) {
+        self.tabs.clear();
         self.active = None;
         self.page = Page::Viewer;
         self.begin_preview();

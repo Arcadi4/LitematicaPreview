@@ -129,6 +129,7 @@ pub(crate) struct App {
     loader: Loader,
     thumbnail_loader: Loader,
     images: Option<rune::ImageCache>,
+    pub(crate) logo: Option<rune::Image>,
     cache_dir: PathBuf,
     pack_library: TexturePackLibrary,
     send: Sender<Handler>,
@@ -204,6 +205,7 @@ impl App {
             scene_factory: None,
             thumbnail_loader: Loader::new(),
             images: None,
+            logo: None,
             cache_dir,
             pack_library,
             send,
@@ -222,7 +224,9 @@ impl App {
     }
 
     pub(crate) fn setup(&mut self, wake: Waker) {
-        self.images = Some(rune::ImageCache::new(wake.clone()));
+        let images = rune::ImageCache::new(wake.clone());
+        self.logo = Some(images.load(resources::APP_ICON));
+        self.images = Some(images);
         self.dispatch = Some(Dispatch {
             send: self.send.clone(),
             wake,

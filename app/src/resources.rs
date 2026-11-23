@@ -12,6 +12,8 @@ macro_rules! asset {
 /// read an adjacent pack path, so relocatable and self-updated installs work.
 pub const VANILLA_PACK: &[u8] = asset!("assets/pack.zip");
 
+pub(crate) const APP_ICON: &[u8] = asset!("assets/icon.png");
+
 const DEMOS: &[(&str, &[u8])] = &[
     (
         "Cottage.litematic",

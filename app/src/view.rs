@@ -211,17 +211,8 @@ fn tabs(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
 
 fn welcome(s: &App, kit: &Kit) -> El {
     let extensions = formats::EXTENSIONS.join("  ·  ");
-    let mark = el()
-        .w(44.0)
-        .h(44.0)
-        .radius(12.0)
-        .fill(kit.c.layer_02)
-        .center()
-        .child(
-            icon(Icon::Cube.glyph(), 24.0)
-                .color(kit.c.text_base)
-                .a11y_hidden(),
-        );
+    let logo = s.logo.as_ref().expect("logo is loaded in setup");
+    let mark = el().size(56.0, 56.0).pixels(logo.pixels()).a11y_hidden();
     let actions = row()
         .gap(8.0)
         .center_y()

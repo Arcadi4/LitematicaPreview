@@ -316,6 +316,8 @@ impl App {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
                     .unwrap_or_else(|_| Err("The background task stopped unexpectedly.".into()));
                 dispatch.update(move |s, tx| {
+                    // Rune lands commits no input caused at once; these answer the user's action.
+                    tx.animated();
                     apply(s, result, tx);
                     true
                 });

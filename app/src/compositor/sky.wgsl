@@ -177,8 +177,10 @@ fn relief(p: vec2f, r: vec4f, radius: f32, height: f32, source: vec2f) -> vec4f 
     let d = rounded(p,r,radius);
     let light = source - p;
     let lamp_z = max(80.0, ui.pane.w * 0.25);
-    let eye = ui.aim.xy*0.85;
-    let offset = height * (light / max(lamp_z, length(light)*0.62) + eye);
+    let center = ui.pane.xy + 0.5*ui.pane.zw;
+    // Track the sun's pan, not ui.aim, so the glint stays anchored to the light.
+    let eye = (source - center) / max(min(MAX_PAN, ui.pane.zw*0.038), vec2f(1.0)) * 0.85;
+    let offset = height * light / max(lamp_z, length(light)*0.62);
     let penumbra = 1.8 + length(offset)*0.74;
     let penumbra_mask = 1.0 - smoothstep(-penumbra, penumbra, rounded(p + offset, r, radius));
     let contact = 1.0 - smoothstep(-0.8, 2.0, d);
@@ -214,7 +216,9 @@ fn relief(p: vec2f, r: vec4f, radius: f32, height: f32, source: vec2f) -> vec4f 
         if inside == 1.0 {
             return over(relief(p,ui.selection,6.0,2.0,source), relief(p,ui.dock,10.0,5.0,source));
         }
-        let reflection = source + ui.aim.xy * (0.16*min(size.x,size.y));
+        let center = ui.pane.xy + 0.5*size;
+        // Amplify the sun's pan so the pane glow still sweeps with the camera turn.
+        let reflection = source + (source - center) * 3.0;
         let delta = (p-reflection) / max(180.0,min(size.x,size.y)*0.56);
         let distance = max(0.0,edge);
         let rim = 0.58*exp(-distance*0.52) + 0.19*exp(-distance/27.0);

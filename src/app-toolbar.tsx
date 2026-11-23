@@ -15,7 +15,7 @@ import {
   Airplane20Regular,
   ArrowExpand20Regular,
   Copy20Regular,
-  Folder20Regular,
+  DocumentMultiple20Regular,
   FolderOpen20Regular,
   Grid20Regular,
   Home20Regular,
@@ -67,27 +67,45 @@ export function PreviewToolbar({
       className="border-border bg-surface flex min-h-14 flex-none items-center gap-1.5 border-b px-3 py-2 sm:gap-2 sm:px-5 sm:py-2.5 [&>button]:h-9! [&>button]:shrink-0 [&>button:has(span.hidden)]:gap-2! [&>button:has(span.hidden)]:px-3! [&>button:not(:has(span.hidden))]:w-9! [&>button:not(:has(span.hidden))]:min-w-9!"
       aria-label="Preview commands"
     >
-      <Button
-        appearance="primary"
-        icon={<FolderOpen20Regular />}
-        disabled={busy}
-        onClick={onOpenFile}
-        title="Open schematic (Ctrl+O)"
-        aria-keyshortcuts="Control+O"
-      >
-        Open<span className="ml-1 hidden text-xs font-normal opacity-75 sm:inline">Ctrl+O</span>
-      </Button>
-      <Tooltip content="Open folder (Ctrl+Shift+O)" relationship="label">
-        <Button
-          appearance="subtle"
-          icon={<Folder20Regular />}
-          disabled={busy}
-          onClick={onOpenFolder}
-          aria-label="Open folder"
-          aria-keyshortcuts="Control+Shift+O"
-          title="Open folder (Ctrl+Shift+O)"
-        />
-      </Tooltip>
+      <Menu>
+        <MenuTrigger disableButtonEnhancement>
+          {(triggerProps) => (
+            <SplitButton
+              appearance="primary"
+              className="h-9! shrink-0 [&>button]:h-9!"
+              disabled={busy}
+              icon={<DocumentMultiple20Regular />}
+              menuButton={{ ...triggerProps, "aria-label": "More open options" }}
+              primaryActionButton={{
+                "aria-keyshortcuts": "Control+O",
+                onClick: onOpenFile,
+                title: "Open schematics (Ctrl+O)",
+              }}
+            >
+              Open
+              <span className="ml-1 hidden text-xs font-normal opacity-75 sm:inline">Ctrl+O</span>
+            </SplitButton>
+          )}
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList>
+            <MenuItem
+              icon={<DocumentMultiple20Regular />}
+              onClick={onOpenFile}
+              secondaryContent="Ctrl+O"
+            >
+              Open files…
+            </MenuItem>
+            <MenuItem
+              icon={<FolderOpen20Regular />}
+              onClick={onOpenFolder}
+              secondaryContent="Ctrl+Shift+O"
+            >
+              Open folder…
+            </MenuItem>
+          </MenuList>
+        </MenuPopover>
+      </Menu>
       <Tooltip content="Return home" relationship="label">
         <Button appearance="subtle" icon={<Home20Regular />} onClick={onHome} aria-label="Home" />
       </Tooltip>

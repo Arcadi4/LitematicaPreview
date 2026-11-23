@@ -3,13 +3,14 @@ import {
   ChevronLeft20Regular,
   ChevronRight20Regular,
   Document20Regular,
+  Folder16Regular,
 } from "@fluentui/react-icons"
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { useEffect, useRef, useState, type KeyboardEvent } from "react"
 
 import { fileName } from "./app-model"
-import type { BrowseSelection } from "./browse-model"
+import { browseSource, type BrowseSelection } from "./browse-model"
 
 const ITEM_WIDTH = 104
 const ITEM_GAP = 4
@@ -212,12 +213,20 @@ export function BrowseStrip({ onNext, onPrevious, onSelect, selection }: BrowseS
   }
 
   const totalWidth = paths.length * ITEM_WIDTH + (paths.length - 1) * ITEM_GAP
+  const source = browseSource(paths)
 
   return (
     <nav
       className="border-border bg-surface flex flex-none items-center gap-1.5 border-t px-2 py-2 sm:gap-2 sm:px-3"
       aria-label="Schematic browser"
     >
+      <span
+        className="text-muted hidden max-w-40 shrink-0 items-center gap-1 text-xs md:flex"
+        title={source.title}
+      >
+        <Folder16Regular className="shrink-0" />
+        <span className="overflow-hidden text-ellipsis whitespace-nowrap">{source.label}</span>
+      </span>
       <div className="flex shrink-0 items-center gap-0.5">
         <Button
           appearance="subtle"

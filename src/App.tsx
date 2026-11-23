@@ -232,6 +232,7 @@ export default function App({ initialError }: { initialError?: string }) {
           hidden={stageActive}
           onLoadDemo={loadDemo}
           onOpenFile={openFile}
+          onOpenFolder={openFolder}
         />
 
         <PreviewStage

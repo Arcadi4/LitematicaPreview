@@ -525,6 +525,7 @@ fn stage_caption(s: &App, kit: &Kit) -> Option<El> {
         .absolute(12.0, 12.0)
         .padding(8.0)
         .gap(8.0)
+        .center_y()
         .radius(6.0)
         .fill(kit.c.bg_base)
         .border(1.0, kit.c.border_base);

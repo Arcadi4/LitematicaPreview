@@ -337,14 +337,6 @@ fn sidebar(s: &App, kit: &Kit) -> El {
         .header_padding(0.0, 8.0)
         .row_gap(2.0);
     if let Some((all, _)) = s.nearby() {
-        sidebar = sidebar.header(
-            SidebarRow::new("Home")
-                .icon(Icon::Home.glyph())
-                .height(32.0)
-                .on_select(|s: &mut App, _| s.home())
-                .build(kit)
-                .key("sidebar-home"),
-        );
         let (label, detail) = s.nearby_directory().map_or_else(
             || {
                 (
@@ -394,6 +386,16 @@ fn sidebar(s: &App, kit: &Kit) -> El {
                     .build(kit)
                     .key("sidebar-open-folder"),
             );
+    }
+    if s.nearby().is_some() {
+        sidebar = sidebar.footer(
+            SidebarRow::new("Home")
+                .icon(Icon::Home.glyph())
+                .height(32.0)
+                .on_select(|s: &mut App, _| s.home())
+                .build(kit)
+                .key("sidebar-home"),
+        );
     }
     sidebar = sidebar
         .footer(
@@ -752,13 +754,9 @@ fn preferences(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
         .sidebar(
             &pane,
             |s: &mut App| &mut s.sidebar,
-            preferences_ui::sidebar(s, kit),
+            preferences_ui::sidebar(s, kit, back_row(kit)),
         )
-        .toolbar(
-            Toolbar::new()
-                .leading(back(kit))
-                .title(s.preferences_section.title()),
-        )
+        .toolbar(Toolbar::new().title(s.preferences_section.title()))
         .titlebar_inset(cx.titlebar_inset())
         .frame_inset(8.0)
         .sidebar_padding(16.0, 12.0)
@@ -780,6 +778,15 @@ fn page_shell(cx: &mut Cx<App>, kit: &Kit, title: &str, body: El) -> El {
         .titlebar_inset(cx.titlebar_inset())
         .frame_inset(8.0)
         .build(kit)
+}
+
+fn back_row(kit: &Kit) -> El {
+    SidebarRow::new("Back")
+        .icon(Icon::Back.glyph())
+        .height(32.0)
+        .on_select(|s: &mut App, _| s.open_page(Page::Viewer))
+        .build(kit)
+        .key("back")
 }
 
 fn back(kit: &Kit) -> El {

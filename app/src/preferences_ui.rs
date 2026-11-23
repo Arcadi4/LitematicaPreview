@@ -72,8 +72,8 @@ impl PreferencesSection {
     }
 }
 
-/// The section list for the window's sidebar, with the reset action at its foot.
-pub fn sidebar(s: &App, k: &Kit) -> El {
+/// The section list for the window's sidebar, with the return action and reset at its foot.
+pub fn sidebar(s: &App, k: &Kit, footer: El) -> El {
     let mut sidebar = Sidebar::new()
         .label("Preferences sections")
         .inset(0.0)
@@ -140,7 +140,7 @@ pub fn sidebar(s: &App, k: &Kit) -> El {
                 .build(k),
         )
     };
-    sidebar.footer(reset.key(key)).build(k)
+    sidebar.footer(reset.key(key)).footer(footer).build(k)
 }
 
 fn reset_all(s: &mut App) {

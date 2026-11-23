@@ -51,7 +51,7 @@ pub(crate) fn view(s: &App, cx: &mut Cx<App>) -> El {
         Page::Preferences => "page-preferences",
         Page::TexturePacks => "page-texture-packs",
     };
-    let mut base = match s.page {
+    let base = match s.page {
         Page::Viewer => split(s, cx, &kit),
         Page::Preferences => preferences(s, cx, &kit),
         Page::TexturePacks => page_shell(cx, &kit, "Texture Packs", texture_packs(s, &kit)),
@@ -64,36 +64,35 @@ pub(crate) fn view(s: &App, cx: &mut Cx<App>) -> El {
         s.dropping = false;
         s.open_paths(paths.to_vec());
     });
-    if s.dropping {
-        base = base.child(
-            col()
-                .key("drop-overlay")
-                .transition(Transition::opacity().springs(OVERLAY_SPRINGS))
-                .absolute(0.0, 0.0)
-                .w_full()
-                .h_full()
-                .center()
-                .gap(10.0)
-                .inert()
-                .fill(kit.alpha(kit.c.bg_base, 0.94))
-                .child(
-                    icon(Icon::OpenFiles.glyph(), 28.0)
-                        .color(kit.c.icon_muted)
-                        .a11y_hidden(),
-                )
-                .child(
-                    text("Drop schematics to open them")
-                        .font(kit.ty.body_medium)
-                        .color(kit.c.text_base),
-                )
-                .child(
-                    text("They open in a tab beside this one")
-                        .font(kit.ty.small)
-                        .color(kit.c.text_muted),
-                ),
-        );
-    }
     rune_kit::root(base, [toasts(s, &kit)])
+}
+
+fn drop_overlay(kit: &Kit) -> El {
+    col()
+        .key("drop-overlay")
+        .transition(Transition::opacity().springs(OVERLAY_SPRINGS))
+        .absolute(0.0, 0.0)
+        .w_full()
+        .h_full()
+        .center()
+        .gap(10.0)
+        .inert()
+        .fill(kit.alpha(kit.c.bg_base, 0.94))
+        .child(
+            icon(Icon::OpenFiles.glyph(), 28.0)
+                .color(kit.c.icon_muted)
+                .a11y_hidden(),
+        )
+        .child(
+            text("Drop schematics to open them")
+                .font(kit.ty.body_medium)
+                .color(kit.c.text_base),
+        )
+        .child(
+            text("They open in a tab beside this one")
+                .font(kit.ty.small)
+                .color(kit.c.text_muted),
+        )
 }
 
 fn split(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
@@ -172,6 +171,9 @@ fn viewer(s: &App, kit: &Kit) -> El {
                 .unwrap_or_else(|| preview_metadata(s, kit))
                 .absolute(12.0, 12.0),
         );
+    }
+    if s.dropping {
+        viewer = viewer.child(drop_overlay(kit));
     }
     viewer
 }
@@ -960,4 +962,49 @@ fn thumbnail(image: &rune::Image) -> El {
     el().size(16.0, 16.0)
         .radius(3.0)
         .pixels_fit(image.pixels(), rune::SurfaceFit::Fill)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rune::{Env, Runtime};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    #[test]
+    fn drop_hover_anywhere_shows_the_overlay_only_in_the_main_panel() {
+        let mut app = App::new();
+        app.setup(Arc::new(|| {}));
+        app.logo
+            .as_ref()
+            .expect("logo loads")
+            .wait()
+            .expect("logo decodes");
+        let mut rt = Runtime::new(app, view, (1120.0, 740.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+
+        let files = vec![PathBuf::from("/tmp/example.schem")];
+        rt.drag_files(files.clone(), Some((30.0, 400.0)));
+        rt.frame(1.0 / 60.0);
+        assert!(
+            rt.state.dropping,
+            "the window still accepts drops everywhere"
+        );
+
+        let (overlay, _) = rt.presented("drop-overlay").expect("overlay is drawn");
+        let (main, _) = rt.presented("main-pane").expect("main pane is drawn");
+        assert!(
+            overlay[0] >= main[0] - 1.0
+                && overlay[1] >= main[1] - 1.0
+                && overlay[0] + overlay[2] <= main[0] + main[2] + 1.0
+                && overlay[1] + overlay[3] <= main[1] + main[3] + 1.0,
+            "overlay {overlay:?} must stay inside main pane {main:?}"
+        );
+
+        rt.drop_files(files, Some((30.0, 400.0)));
+        rt.frame(2.0 / 60.0);
+        assert!(
+            !rt.state.dropping,
+            "dropping outside the panel still opens files"
+        );
+    }
 }

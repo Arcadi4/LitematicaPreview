@@ -17,7 +17,7 @@ mod notes;
 
 const BUCKET: &str = "apps-download";
 const RELEASES_PREFIX: &str = "litematica-preview/releases";
-const FEED_KEY: &str = "litematica-preview/rune/latest.json";
+const FEED_KEY: &str = "litematica-preview/v1/latest.json";
 const CHECKSUM_FILE: &str = "SHA256SUMS.txt";
 
 const WINDOWS_BINARY: &str = "LitematicaPreview-windows-x86_64.exe";

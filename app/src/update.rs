@@ -23,7 +23,7 @@ const GITHUB_OWNER: &str = "Arcadi4";
 const GITHUB_REPO: &str = "LitematicaPreview";
 const GITHUB_API: &str = "https://api.github.com";
 const CLOUDFLARE_HOST: &str = "download.tanh.moe";
-const CLOUDFLARE_LATEST: &str = "https://download.tanh.moe/litematica-preview/rune/latest.json";
+const CLOUDFLARE_LATEST: &str = "https://download.tanh.moe/litematica-preview/v1/latest.json";
 const CLOUDFLARE_RELEASES: &str = "https://download.tanh.moe/litematica-preview/releases";
 
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);

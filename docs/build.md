@@ -78,7 +78,7 @@ Rotating the signing key needs a transitional release: apt verifies `InRelease` 
 
 ## Release publication
 
-The release workflow validates the version tag against `app/Cargo.toml`, builds all platforms, and publishes versioned artifacts and `SHA256SUMS.txt` to GitHub and the `apps-download` R2 bucket via `cf`. Stable releases update the Cloudflare manifest last at `https://download.tanh.moe/litematica-preview/rune/latest.json`. Prereleases do not change the stable manifest, apt repository, or Homebrew Cask.
+The release workflow validates the version tag against `app/Cargo.toml`, builds all platforms, and publishes versioned artifacts and `SHA256SUMS.txt` to GitHub and the `apps-download` R2 bucket via `cf`. Stable releases update the Cloudflare manifest last at `https://download.tanh.moe/litematica-preview/v1/latest.json`. Prereleases do not change the stable manifest, apt repository, or Homebrew Cask.
 
 The existing `update.tanh.moe` Worker and `litematica-preview/windows/` objects remain live for Velopack clients. Rune does not use or publish to that endpoint. See [#65](https://github.com/Arcadi4/LitematicaPreview/issues/65) for retirement.
 

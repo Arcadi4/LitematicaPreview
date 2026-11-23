@@ -14,9 +14,8 @@ the main window beneath a transparent WebView2 layer.
 The shipped app does not use .NET, OpenTK, GLFW, or a Node.js runtime.
 
 See ThirdParty/ for bundled dependency license texts and dependency inventories.
-The historical OpenTK and GLFW license files are retained as provenance; those
-components are not part of the current executable. WebView2 is a separately
-installed Microsoft runtime and remains subject to Microsoft's license terms.
+WebView2 is a separately installed Microsoft runtime and remains subject to
+Microsoft's license terms.
 
 Primary upstream license sources:
   Tauri: https://github.com/tauri-apps/tauri/blob/dev/LICENSE-MIT

@@ -102,6 +102,7 @@ pub(crate) struct App {
     pub(crate) update_mode: update::Mode,
     pub(crate) update_state: update::State,
     pub(crate) recording: Option<Action>,
+    pub(crate) reset_confirming: bool,
     pub(crate) notice: Option<String>,
     /// The notice on screen and the poll clock time it appeared, which starts its timeout.
     notice_shown: Option<(String, f64)>,
@@ -179,6 +180,7 @@ impl App {
             update_mode: update::Mode::current(),
             update_state: update::State::Idle,
             recording: None,
+            reset_confirming: false,
             notice,
             notice_shown: None,
             page: Page::Viewer,
@@ -846,6 +848,7 @@ impl App {
         self.stop_flying();
         self.page = page;
         self.recording = None;
+        self.reset_confirming = false;
     }
 
     pub(crate) fn save_preferences(&mut self) {

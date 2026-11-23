@@ -10,8 +10,8 @@
 //! logical key event so typed characters follow the active keyboard layout.
 
 use rune::{
-    Align, Anim, Drag, El, Key, KeyEvent, LiveRegion, Mods, Phase, PhysicalInput, PhysicalKeyCode,
-    Shadow, Spring, SpringPair, TextStyle, Transition, Tx, col, el, icon, row, text,
+    col, el, icon, row, text, Align, Anim, Drag, El, Key, KeyEvent, LiveRegion, Mods, Phase,
+    PhysicalInput, PhysicalKeyCode, Shadow, Spring, SpringPair, TextStyle, Transition, Tx,
 };
 use rune_kit::shell::{Sidebar, SidebarRow};
 use rune_kit::{Button, ButtonVariant, ControlSize, Divider, Kit, SegmentedControl, Switch};
@@ -19,8 +19,8 @@ use rune_kit::{Button, ButtonVariant, ControlSize, Divider, Kit, SegmentedContro
 use crate::app::App;
 use crate::icons::Icon;
 use crate::preferences::{
-    Action, Conflict, KeyChord, MAX_FOV_DEGREES, MAX_SENSITIVITY, MIN_FOV_DEGREES, MIN_SENSITIVITY,
-    Mode, PreviewSettings, Theme, key_chord, key_chord_from_physical,
+    key_chord, key_chord_from_physical, Action, Conflict, KeyChord, Mode, PreviewSettings, Theme,
+    MAX_FOV_DEGREES, MAX_SENSITIVITY, MIN_FOV_DEGREES, MIN_SENSITIVITY,
 };
 use crate::update::{Source, State as UpdateState};
 
@@ -88,6 +88,7 @@ pub fn sidebar(s: &App, k: &Kit) -> El {
                 .on_select(move |s: &mut App, tx: &mut Tx| {
                     if s.preferences_section != section {
                         s.preferences_section = section;
+                        s.reset_confirming = false;
                         tx.scroll_to_instant("preferences-scroll", 0.0, 0.0);
                     }
                 })
@@ -95,22 +96,60 @@ pub fn sidebar(s: &App, k: &Kit) -> El {
                 .key(format!("section-{}", section.title())),
         );
     }
-    sidebar
-        .footer(
+    let (key, reset) = if s.reset_confirming {
+        let confirm = row()
+            .label("Confirm")
+            .w_full()
+            .h(32.0)
+            .pl(8.0)
+            .pr(8.0)
+            .gap(6.0)
+            .center_y()
+            .radius(k.radius.md)
+            .motion(k.motion.control)
+            .hover_group()
+            .hover_motion(Anim::INSTANT, Anim::INSTANT)
+            .child(
+                icon(Icon::Refresh.glyph(), 16.0)
+                    .color(k.c.danger.fg)
+                    .a11y_hidden(),
+            )
+            .child(
+                text("Confirm")
+                    .key("confirm-label")
+                    .font(k.ty.ui)
+                    .color(k.c.danger.fg)
+                    .truncate()
+                    .grow(1.0)
+                    .shrink()
+                    .a11y_hidden(),
+            );
+        (
+            "confirm-reset-settings",
+            k.interactive(confirm)
+                .on_press(|s: &mut App| reset_all(s))
+                .role("button"),
+        )
+    } else {
+        (
+            "reset-settings",
             SidebarRow::new("Reset All Settings")
                 .icon(Icon::Refresh.glyph())
                 .height(32.0)
-                .on_select(|s: &mut App, _: &mut Tx| {
-                    s.preferences.reset();
-                    s.preferences_section = PreferencesSection::default();
-                    s.recording = None;
-                    s.notice = Some("Settings reset to defaults.".to_owned());
-                    s.save_preferences();
-                })
-                .build(k)
-                .key("reset-settings"),
+                .on_select(|s: &mut App, _: &mut Tx| s.reset_confirming = true)
+                .build(k),
         )
-        .build(k)
+    };
+    sidebar.footer(reset.key(key)).build(k)
+}
+
+fn reset_all(s: &mut App) {
+    s.preferences.reset();
+    s.reset_confirming = false;
+    s.preferences_section = PreferencesSection::default();
+    s.recording = None;
+    s.notice = Some("Settings reset to defaults.".to_owned());
+    s.save_preferences();
 }
 
 /// The selected section, in a scrolling column centred in the main pane. The shell supplies
@@ -1153,11 +1192,10 @@ mod tests {
         };
         assert!(record_physical_input(&mut app, &tab, &mut tx));
         assert_eq!(app.recording, None);
-        assert!(
-            app.preferences
-                .binding(Action::Fit)
-                .matches(&key_event(Key::Tab), &tx)
-        );
+        assert!(app
+            .preferences
+            .binding(Action::Fit)
+            .matches(&key_event(Key::Tab), &tx));
 
         app.recording = Some(Action::FlyForward);
         let shift = PhysicalInput::Key {
@@ -1206,12 +1244,69 @@ mod tests {
 
         assert_eq!(runtime.state.recording, None);
         let colemak_w = key_event(Key::Text(",".into()));
-        assert!(
-            runtime
-                .state
-                .preferences
-                .binding(Action::FlyForward)
-                .matches(&colemak_w, &Tx::default())
-        );
+        assert!(runtime
+            .state
+            .preferences
+            .binding(Action::FlyForward)
+            .matches(&colemak_w, &Tx::default()));
+    }
+
+    #[test]
+    fn reset_asks_for_confirmation_before_restoring_defaults() {
+        use rune::{Env, Runtime};
+
+        use crate::app::Page;
+
+        let mut app = test_app();
+        app.page = Page::Preferences;
+        app.preferences.set_fov(40.0);
+        let mut runtime =
+            Runtime::new(app, crate::view::view, (1120.0, 740.0), Env::new(true, 1.0));
+        runtime.frame(0.0);
+        let idle = runtime
+            .elements()
+            .into_iter()
+            .find(|e| {
+                e.key.as_deref() == Some("label") && e.text.as_deref() == Some("Reset All Settings")
+            })
+            .expect("reset label is drawn");
+        let idle_x = idle.rect[0];
+        let idle_color = idle.text_color;
+
+        let press_reset = |runtime: &mut Runtime<App>| {
+            let key = if runtime.state.reset_confirming {
+                "confirm-reset-settings"
+            } else {
+                "reset-settings"
+            };
+            let (x, y) = runtime.find(key).expect("reset action is in view");
+            runtime.pointer_down(x, y);
+            runtime.pointer_up(x, y);
+            runtime.frame(0.0);
+            for _ in 0..30 {
+                runtime.frame(1.0 / 60.0);
+            }
+        };
+
+        press_reset(&mut runtime);
+        assert!(runtime.state.reset_confirming);
+        assert_eq!(runtime.state.preferences.fov, 40.0);
+        let confirm = runtime
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("confirm-reset-settings"))
+            .expect("confirm action is in view");
+        assert_eq!(confirm.label.as_deref(), Some("Confirm"));
+        let label = runtime
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("confirm-label"))
+            .expect("confirm label is drawn");
+        assert!((label.rect[0] - idle_x).abs() < 1.0);
+        assert_ne!(label.text_color, idle_color);
+
+        press_reset(&mut runtime);
+        assert!(!runtime.state.reset_confirming);
+        assert_eq!(runtime.state.preferences.fov, Preferences::default().fov);
     }
 }

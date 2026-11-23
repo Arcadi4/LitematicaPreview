@@ -12,7 +12,9 @@ pub(super) struct Sky {
     bake: wgpu::ComputePipeline,
     heights: wgpu::TextureView,
     bodies: wgpu::TextureView,
+    sampler: wgpu::Sampler,
     horizon: Option<Horizon>,
+    aim: [f32; 2],
     pub(super) moving: bool,
 }
 
@@ -39,21 +41,28 @@ impl Sky {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("celestial scene"),
             entries: &[
-                entry(
-                    0,
-                    wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                ),
+                wgpu::BindGroupLayoutEntry {
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ..entry(
+                        0,
+                        wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                    )
+                },
                 entry(
                     1,
                     sampled(wgpu::TextureSampleType::Float { filterable: false }),
                 ),
                 entry(
                     4,
-                    sampled(wgpu::TextureSampleType::Float { filterable: false }),
+                    sampled(wgpu::TextureSampleType::Float { filterable: true }),
+                ),
+                entry(
+                    5,
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 ),
             ],
         });
@@ -68,7 +77,7 @@ impl Sky {
         });
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("celestial layout"),
-            size: size_of::<[[f32; 4]; 6]>() as u64,
+            size: size_of::<[[f32; 4]; 7]>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -119,7 +128,13 @@ impl Sky {
             bake,
             heights: terrain,
             bodies,
+            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            }),
             horizon: None,
+            aim: [0.0; 2],
             moving: false,
         }
     }
@@ -130,6 +145,29 @@ impl Sky {
         let scale = rt.env.scale;
         let night = rt.state.preferences.theme.is_dark(rt.env.system_dark);
         self.moving = !rt.reduced_motion;
+        if self.moving {
+            let [x, y, w, h] = pane;
+            let target = rt
+                .pointer()
+                .filter(|&(px, py)| {
+                    px >= 0.0 && px < rt.viewport.0 && py >= 0.0 && py < rt.viewport.1
+                })
+                .map_or([0.0; 2], |(px, py)| {
+                    let aim = |p: f32, center: f32, span: f32| {
+                        (p - center) / (if p < center { center } else { span - center }).max(1.0)
+                    };
+                    [
+                        aim(px, x + 0.5 * w, rt.viewport.0),
+                        aim(py, y + 0.5 * h, rt.viewport.1),
+                    ]
+                });
+            let follow = (-(-18.0 * frame.dt).exp_m1()) as f32;
+            for (aim, target) in self.aim.iter_mut().zip(target) {
+                *aim += (target - *aim) * follow;
+            }
+        } else {
+            self.aim = [0.0; 2];
+        }
         let uniforms = [
             [
                 frame.size.0 as f32 / scale,
@@ -142,6 +180,7 @@ impl Sky {
             rect("theme-dock/indicator"),
             rect("section-Appearance"),
             rect("back"),
+            [self.aim[0], self.aim[1], 0.0, 0.0],
         ];
         let bytes = uniforms.map(|v| v.map(f32::to_ne_bytes));
         frame.write_buffer(&self.uniforms, 0, bytes.as_flattened().as_flattened());
@@ -188,24 +227,19 @@ impl Sky {
                 view_formats: &[],
             })
             .create_view(&Default::default());
-        let bind = |layout, (first, a), (second, b)| {
+        let uniform = wgpu::BindGroupEntry {
+            binding: 0,
+            resource: self.uniforms.as_entire_binding(),
+        };
+        let texture = |binding, view| wgpu::BindGroupEntry {
+            binding,
+            resource: wgpu::BindingResource::TextureView(view),
+        };
+        let bind = |layout, entries| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("overworld horizon"),
                 layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.uniforms.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: first,
-                        resource: wgpu::BindingResource::TextureView(a),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: second,
-                        resource: wgpu::BindingResource::TextureView(b),
-                    },
-                ],
+                entries,
             })
         };
         Horizon {
@@ -213,10 +247,24 @@ impl Sky {
             night: None,
             write: bind(
                 &self.bake.get_bind_group_layout(0),
-                (2, &self.heights),
-                (3, &view),
+                &[
+                    uniform.clone(),
+                    texture(2, &self.heights),
+                    texture(3, &view),
+                ],
             ),
-            read: bind(&self.layout, (1, &self.bodies), (4, &view)),
+            read: bind(
+                &self.layout,
+                &[
+                    uniform,
+                    texture(1, &self.bodies),
+                    texture(4, &view),
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            ),
         }
     }
 }

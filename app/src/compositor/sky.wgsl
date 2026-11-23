@@ -5,23 +5,37 @@ struct Layout {
     selection: vec4f,
     nav: vec4f,
     back: vec4f,
+    aim: vec4f,
 }
 @group(0) @binding(0) var<uniform> ui: Layout;
 @group(0) @binding(1) var bodies: texture_2d<f32>;
 @group(0) @binding(2) var heights: texture_2d<u32>;
 @group(0) @binding(3) var horizon_out: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(4) var horizon: texture_2d<f32>;
+@group(0) @binding(5) var horizon_sampler: sampler;
 
 const SKYLINE: f32 = 0.625;
+const MAX_PAN: vec2f = vec2f(20.0, 14.0);
 
 struct Vertex {
     @builtin(position) pos: vec4f,
     @location(0) uv: vec2f,
     @location(1) @interpolate(flat) layer: u32,
+    @location(2) ray: vec3f,
+    @location(3) @interpolate(flat) source: vec2f,
 }
 @vertex fn vs(@builtin(vertex_index) i: u32, @builtin(instance_index) layer: u32) -> Vertex {
     let uv = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
-    return Vertex(vec4f(uv * vec2f(2,-2) + vec2f(-1,1), 0, 1), uv, layer);
+    let size = ui.pane.zw;
+    let focal = max(size.x, size.y);
+    let look = ui.aim.xy * min(MAX_PAN, size*0.038) / focal;
+    let forward = normalize(vec3f(look, 1.0));
+    let right = normalize(vec3f(1.0, 0.0, -look.x));
+    let down = cross(forward, right);
+    let film = (uv - 0.5) * size / focal;
+    let ray = forward + film.x*right + film.y*down;
+    let source = ui.pane.xy + 0.5*size + focal*vec2f(right.z, down.z)/forward.z;
+    return Vertex(vec4f(uv * vec2f(2,-2) + vec2f(-1,1), 0, 1), uv, layer, ray, source);
 }
 
 fn linear(c: vec3f) -> vec3f { return c * (c * (0.3053 * c + 0.6822) + 0.0125); }
@@ -124,12 +138,20 @@ fn landscape(uv: vec2f) -> vec4f {
     return vec4f(0);
 }
 
+// Overscan keeps camera turns inside the cached terrain, including at the corners.
+fn horizon_rect() -> vec4f {
+    let guard = 2.0*max(MAX_PAN.x, MAX_PAN.y);
+    let top = SKYLINE*ui.pane.w;
+    return vec4f(-guard, top, ui.pane.z + 2.0*guard, ui.pane.w - top + guard);
+}
+
 @compute @workgroup_size(8, 8)
 fn bake_horizon(@builtin(global_invocation_id) id: vec3u) {
     let size = textureDimensions(horizon_out);
     if any(id.xy >= size) { return; }
     let uv = (vec2f(id.xy) + 0.5) / vec2f(size);
-    textureStore(horizon_out, id.xy, landscape(vec2f(uv.x, mix(SKYLINE,1.0,uv.y))));
+    let rect = horizon_rect();
+    textureStore(horizon_out, id.xy, landscape((rect.xy + uv*rect.zw)/ui.pane.zw));
 }
 
 fn rounded(p: vec2f, r: vec4f, radius: f32) -> f32 {
@@ -153,7 +175,8 @@ fn relief(p: vec2f, r: vec4f, radius: f32, height: f32, source: vec2f) -> vec4f 
     let d = rounded(p,r,radius);
     let light = source - p;
     let lamp_z = max(80.0, ui.pane.w * 0.25);
-    let offset = light * height / max(lamp_z, length(light)*0.62);
+    let eye = ui.aim.xy*0.85;
+    let offset = height * (light / max(lamp_z, length(light)*0.62) + eye);
     let penumbra = 1.8 + length(offset)*0.74;
     let penumbra_mask = 1.0 - smoothstep(-penumbra, penumbra, rounded(p + offset, r, radius));
     let contact = 1.0 - smoothstep(-0.8, 2.0, d);
@@ -167,7 +190,10 @@ fn relief(p: vec2f, r: vec4f, radius: f32, height: f32, source: vec2f) -> vec4f 
     let falloff = 1.0 / (1.0 + dot(light,light)/(lamp_z*lamp_z*8.0));
     let incident = falloff * (0.70 + 0.65*shafts(atan2(-light.y,-light.x)));
     let diffuse = (0.09 + 0.49*max(facing,0.0)*bevel) * incident;
-    let specular = (0.12 + 1.4*pow(max(facing,0.0),2.0)) * edge * incident;
+    let normal = normalize(vec3f(0.32*v/(0.5*r.zw) + 0.68*bevel*outward, 1.0));
+    let halfway = normalize(normalize(vec3f(light,lamp_z)) + normalize(vec3f(eye,1.0)));
+    let reflection = pow(max(dot(normal,halfway),0.0),24.0) * (0.16 + 0.60*bevel);
+    let specular = ((0.12 + 1.4*pow(max(facing,0.0),2.0))*edge + reflection) * incident;
     let bounce = palette(vec3f(1.0,0.69,0.30),vec3f(0.49,0.70,1.0));
     let highlight = over(ink(mix(light_color(),vec3f(1.0),0.45), min(0.95,specular)),
                          ink(bounce, diffuse)) * coverage;
@@ -178,7 +204,7 @@ fn relief(p: vec2f, r: vec4f, radius: f32, height: f32, source: vec2f) -> vec4f 
 
 @fragment fn fs(v: Vertex) -> @location(0) vec4f {
     let size = ui.pane.zw;
-    let source = ui.pane.xy + size*0.5;
+    let source = v.source;
     if v.layer == 1u {
         let p = v.uv * ui.window.xy;
         let edge = pane_edge(p);
@@ -186,20 +212,21 @@ fn relief(p: vec2f, r: vec4f, radius: f32, height: f32, source: vec2f) -> vec4f 
         if inside == 1.0 {
             return over(relief(p,ui.selection,6.0,2.0,source), relief(p,ui.dock,10.0,5.0,source));
         }
-        let delta = (p-source) / max(180.0,min(size.x,size.y)*0.56);
-        let distance = max(0.0,rounded(p,ui.pane,8.0));
+        let reflection = source + ui.aim.xy * (0.16*min(size.x,size.y));
+        let delta = (p-reflection) / max(180.0,min(size.x,size.y)*0.56);
+        let distance = max(0.0,edge);
         let rim = 0.58*exp(-distance*0.52) + 0.19*exp(-distance/27.0);
         let spill = ink(light_color(), (1.0-inside)*(0.28 + rim)*exp(-0.91*dot(delta,delta)));
         return over(relief(p,ui.back,6.0,2.8,source),over(relief(p,ui.nav,6.0,3.2,source),spill));
     }
     let p = v.uv * size;
-    let centered = p - 0.5*size;
+    let centered = v.ray.xy/v.ray.z * max(size.x,size.y);
+    let world_px = centered + 0.5*size;
     let body_size = clamp(min(size.x,size.y)*0.110, 36.0, 80.0);
-    var color = sky(v.uv,centered,body_size);
-    if v.uv.y >= SKYLINE {
-        let uv = vec2f(v.uv.x, (v.uv.y-SKYLINE)/(1.0-SKYLINE));
-        let dims = vec2i(textureDimensions(horizon));
-        let land = textureLoad(horizon,min(vec2i(uv * vec2f(dims)),dims-1),0);
+    var color = sky(world_px/size,centered,body_size);
+    let rect = horizon_rect();
+    if world_px.y >= rect.y {
+        let land = textureSampleLevel(horizon,horizon_sampler,(world_px-rect.xy)/rect.zw,0.0);
         color = land.rgb + (1.0-land.a) * color;
     }
     color *= 1.0 - 0.60*smoothstep(0.76, 1.0, v.uv.y);

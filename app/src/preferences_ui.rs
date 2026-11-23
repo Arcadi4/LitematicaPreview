@@ -1,9 +1,9 @@
 //! The preferences page: appearance, camera feel, key bindings, preview workers, and update
 //! behaviour. Every change saves immediately through `App::save_preferences`.
 //!
-//! The page is split into focused sections behind a kit segmented nav, so a long controls list
-//! never becomes one unstructured scroll. Each group is a [`Card`] of kit rows; controls use the
-//! packaged switch, segmented, button, keybind and divider widgets.
+//! The window's sidebar lists the [`PreferencesSection`]s and the main pane shows the selected
+//! one, so a long controls list never becomes one unstructured scroll. A section is a stack of
+//! [`group`]s of [`setting`] rows.
 //!
 //! Key recording uses two paths so it works with every key. The recorder control receives
 //! physical input before focus navigation (so Space, Return and modifiers can be recorded),
@@ -14,16 +14,25 @@ use rune::{
     El, Key, KeyEvent, LiveRegion, Mods, PhysicalInput, PhysicalKeyCode, Tx, col, el, icon, row,
     text,
 };
+use rune_kit::shell::{Sidebar, SidebarRow};
 use rune_kit::{
-    Button, ButtonVariant, Card, ControlSize, Divider, Keybind, Kit, SegmentedControl, State,
-    Switch,
+    Button, ButtonVariant, ControlSize, Divider, Keybind, Kit, SegmentedControl, State, Switch,
 };
 
+use crate::app::App;
 use crate::icons::Icon;
 use crate::preferences::{
     Action, Conflict, KeyChord, Mode, PreviewSettings, Theme, key_chord, key_chord_from_physical,
 };
 use crate::update::{Source, State as UpdateState};
+
+/// The widest a section's column grows, its side padding included.
+const CONTENT_WIDTH: f32 = 680.0;
+/// Points from a group's edge to its rows' text. Group titles and notes share it, so every
+/// line of copy in a section starts at the same x.
+const ROW_INSET: f32 = 14.0;
+/// A single-line row's height; rows with an explanation grow past it.
+const ROW_HEIGHT: f32 = 44.0;
 
 /// A focused area of the preferences page.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -43,184 +52,185 @@ impl PreferencesSection {
         PreferencesSection::Updates,
     ];
 
-    const LABELS: [&'static str; 4] = ["Appearance", "Controls", "Performance", "Updates"];
-
-    fn index(self) -> usize {
+    pub(crate) fn title(self) -> &'static str {
         match self {
-            PreferencesSection::Appearance => 0,
-            PreferencesSection::Controls => 1,
-            PreferencesSection::Performance => 2,
-            PreferencesSection::Updates => 3,
+            PreferencesSection::Appearance => "Appearance",
+            PreferencesSection::Controls => "Controls",
+            PreferencesSection::Performance => "Performance",
+            PreferencesSection::Updates => "Updates",
         }
     }
 
-    fn from_index(index: usize) -> PreferencesSection {
-        Self::ALL.get(index).copied().unwrap_or_default()
+    fn glyph(self) -> &'static rune::Icon {
+        match self {
+            PreferencesSection::Appearance => Icon::Color.glyph(),
+            PreferencesSection::Controls => Icon::Keyboard.glyph(),
+            PreferencesSection::Performance => Icon::Gauge.glyph(),
+            PreferencesSection::Updates => Icon::ArrowDownload.glyph(),
+        }
     }
 }
 
-/// Draws the body of the preferences page. The shell supplies the page frame and title.
-pub fn view(s: &crate::app::App, kit: &Kit) -> El {
-    let k = kit;
-    let nav = SegmentedControl::new(
-        &PreferencesSection::LABELS,
-        Some(s.preferences_section.index()),
-    )
-    .label("Preferences sections")
-    .fit()
-    .on_pick(|s: &mut crate::app::App, index, tx| {
-        s.preferences_section = PreferencesSection::from_index(index);
-        tx.scroll_to_instant("preferences-scroll", 0.0, 0.0);
-    })
-    .build(k)
-    .key("preferences-nav")
-    .focus_group();
+/// The section list for the window's sidebar, with the reset action at its foot.
+pub fn sidebar(s: &App, k: &Kit) -> El {
+    let mut sidebar = Sidebar::new()
+        .label("Preferences sections")
+        .inset(0.0)
+        .header_gap(2.0)
+        .row_gap(2.0);
+    for section in PreferencesSection::ALL {
+        sidebar = sidebar.child(
+            SidebarRow::new(section.title())
+                .icon(section.glyph())
+                .height(32.0)
+                .selected(s.preferences_section == section)
+                .on_select(move |s: &mut App, tx: &mut Tx| {
+                    if s.preferences_section != section {
+                        s.preferences_section = section;
+                        tx.scroll_to_instant("preferences-scroll", 0.0, 0.0);
+                    }
+                })
+                .build(k)
+                .key(format!("section-{}", section.title())),
+        );
+    }
+    sidebar
+        .footer(
+            SidebarRow::new("Reset All Settings")
+                .icon(Icon::Refresh.glyph())
+                .height(32.0)
+                .on_select(|s: &mut App, _: &mut Tx| {
+                    s.preferences.reset();
+                    s.preferences_section = PreferencesSection::default();
+                    s.recording = None;
+                    s.notice = Some("Settings reset to defaults.".to_owned());
+                    s.save_preferences();
+                })
+                .build(k)
+                .key("reset-settings"),
+        )
+        .build(k)
+}
 
-    let body = match s.preferences_section {
+/// The selected section, in a scrolling column centred in the main pane. The shell supplies
+/// the sidebar and the title.
+pub fn view(s: &App, k: &Kit) -> El {
+    let groups = match s.preferences_section {
         PreferencesSection::Appearance => appearance(s, k),
         PreferencesSection::Controls => controls(s, k),
         PreferencesSection::Performance => performance(s, k),
         PreferencesSection::Updates => updates(s, k),
     };
-
-    col()
-        .key("preferences")
-        .w_full()
-        .h_full()
-        .min_h(0.0)
-        .child(
-            row()
-                .key("preferences-nav-row")
-                .w_full()
-                .justify_center()
-                .px(24.0)
-                .pt(18.0)
-                .pb(10.0)
-                .child(nav),
-        )
-        .child(
-            col()
-                .key("preferences-scroll")
-                .w_full()
-                .grow(1.0)
-                .min_h(0.0)
-                .scroll(rune::ScrollSpec {
-                    stick_bottom: false,
-                })
-                .items_center()
-                .child(
-                    col()
-                        .key("preferences-content")
-                        .w_full()
-                        .max_w(720.0)
-                        .gap(18.0)
-                        .px(28.0)
-                        .pt(4.0)
-                        .pb(24.0)
-                        .child(body),
-                ),
-        )
-        .child(Divider::horizontal().build(k))
-        .child(footer(k))
-}
-
-fn section(
-    k: &Kit,
-    key: &str,
-    title: &str,
-    glyph: &'static rune::Icon,
-    description: &str,
-    body: Vec<El>,
-) -> El {
-    col()
-        .key(key)
-        .w_full()
-        .gap(14.0)
-        .child(
-            col()
-                .key("heading")
-                .w_full()
-                .gap(2.0)
-                .child(
-                    row()
-                        .gap(8.0)
-                        .center_y()
-                        .child(icon(glyph, 16.0).color(k.c.icon_muted).a11y_hidden())
-                        .child(
-                            text(title)
-                                .role("heading")
-                                .level(2)
-                                .font(k.ty.body_medium)
-                                .color(k.c.text_base),
-                        ),
-                )
-                .child(
-                    text(description)
-                        .font(k.ty.caption())
-                        .color(k.c.text_muted)
-                        .wrap(),
-                ),
-        )
-        .children(body)
-}
-
-/// A titled card whose rows are separated by kit dividers. The subhead sits below the section
-/// heading, so the page keeps a clear three-level hierarchy.
-fn group(k: &Kit, key: &str, title: &str, rows: Vec<El>) -> El {
-    let mut card = Card::new().child(
-        text(title)
-            .key("group-title")
-            .role("heading")
-            .level(3)
+    k.scroll_bar(
+        col()
+            .key("preferences-scroll")
             .w_full()
-            .pb(6.0)
-            .font(k.ty.small_medium)
-            .color(k.c.text_muted),
-    );
-    card = card.child(Divider::horizontal().build(k));
+            .h_full()
+            .min_h(0.0)
+            .scroll(rune::ScrollSpec {
+                stick_bottom: false,
+            })
+            .items_center()
+            .child(
+                col()
+                    .key(s.preferences_section.title())
+                    .w_full()
+                    .max_w(CONTENT_WIDTH)
+                    .gap(24.0)
+                    .px(28.0)
+                    .pt(24.0)
+                    .pb(28.0)
+                    .children(groups),
+            ),
+    )
+}
+
+/// Rows on one outlined surface, ruled apart, under an optional title and over an optional
+/// note.
+fn group(k: &Kit, key: &str, title: Option<&str>, rows: Vec<El>, note: Option<El>) -> El {
+    let mut surface = col()
+        .key("rows")
+        .w_full()
+        .radius(k.radius.lg)
+        .border(1.0, k.c.border_base);
     for (index, entry) in rows.into_iter().enumerate() {
         if index > 0 {
-            card = card.child(Divider::horizontal().build(k));
+            surface = surface.child(
+                el().key(format!("rule-{index}"))
+                    .w_full()
+                    .px(ROW_INSET)
+                    .child(Divider::horizontal().build(k)),
+            );
         }
-        card = card.child(entry);
+        surface = surface.child(entry);
     }
-    card.build(k)
-        .key(key)
-        .fill(k.c.layer_01)
-        .border(1.0, k.c.border_base)
-        .radius(k.radius.lg)
+    let mut group = col().key(key).role("group").w_full().gap(8.0);
+    if let Some(title) = title {
+        group = group.label(title).child(
+            text(title)
+                .key("title")
+                .role("heading")
+                .level(2)
+                .px(ROW_INSET)
+                .font(k.ty.small_medium)
+                .color(k.c.text_muted),
+        );
+    }
+    group.child(surface).children(note)
 }
 
-/// One setting: a label and explanation on the left, the control on the right. The visual copy
-/// is hidden from accessibility because the control owns its name and description.
-fn setting(k: &Kit, key: &str, label: &str, description: &str, control: El) -> El {
+/// Muted copy under a group: what its rows share, or how to use them.
+fn note(k: &Kit, copy: &str) -> El {
+    text(copy)
+        .key("note")
+        .w_full()
+        .px(ROW_INSET)
+        .font(k.ty.caption())
+        .color(k.c.text_muted)
+        .wrap()
+}
+
+fn copy(k: &Kit, label: &str, description: Option<&str>) -> El {
+    let mut copy = col().key("copy").gap(2.0).child(
+        text(label)
+            .key("label")
+            .font(k.ty.ui)
+            .color(k.c.text_base)
+            .wrap(),
+    );
+    if let Some(description) = description {
+        copy = copy.child(
+            text(description)
+                .key("description")
+                .font(k.ty.caption())
+                .color(k.c.text_muted)
+                .wrap(),
+        );
+    }
+    copy
+}
+
+fn setting_row(key: &str, copy: El, control: Option<El>) -> El {
     row()
         .key(format!("setting-{key}"))
         .w_full()
-        .gap(20.0)
+        .min_h(ROW_HEIGHT)
+        .px(ROW_INSET)
+        .py(8.0)
+        .gap(24.0)
         .center_y()
-        .py(6.0)
-        .child(
-            col()
-                .key("copy")
-                .grow(1.0)
-                .min_w(0.0)
-                .gap(2.0)
-                .child(
-                    text(label)
-                        .font(k.ty.ui_medium)
-                        .color(k.c.text_base)
-                        .a11y_hidden(),
-                )
-                .child(
-                    text(description)
-                        .font(k.ty.caption())
-                        .color(k.c.text_muted)
-                        .wrap()
-                        .a11y_hidden(),
-                ),
-        )
-        .child(control)
+        .child(copy.grow(1.0).min_w(0.0))
+        .children(control)
+}
+
+/// One setting. The copy is hidden from accessibility because the control owns its name and
+/// description.
+fn setting(k: &Kit, key: &str, label: &str, description: Option<&str>, control: El) -> El {
+    setting_row(
+        key,
+        copy(k, label, description).a11y_hidden(),
+        Some(control),
+    )
 }
 
 fn toggle_setting(
@@ -230,7 +240,7 @@ fn toggle_setting(
     description: &str,
     checked: bool,
     disabled: bool,
-    toggle: impl Fn(&mut crate::app::App) + 'static,
+    toggle: impl Fn(&mut App) + 'static,
 ) -> El {
     let control = Switch::new(checked)
         .label(label)
@@ -239,10 +249,10 @@ fn toggle_setting(
         .on_toggle(toggle)
         .build(k)
         .description(description);
-    setting(k, key, label, description, control)
+    setting(k, key, label, Some(description), control)
 }
 
-fn appearance(s: &crate::app::App, k: &Kit) -> El {
+fn appearance(s: &App, k: &Kit) -> Vec<El> {
     let selected = match s.preferences.theme {
         Theme::System => 0,
         Theme::Light => 1,
@@ -253,7 +263,7 @@ fn appearance(s: &crate::app::App, k: &Kit) -> El {
     let theme = SegmentedControl::new(&["System", "Light", "Dark"], Some(selected))
         .label("Theme")
         .width(Some(232.0))
-        .on_pick(|s: &mut crate::app::App, index, _| {
+        .on_pick(|s: &mut App, index, _| {
             s.preferences.set_theme(match index {
                 1 => Theme::Light,
                 2 => Theme::Dark,
@@ -264,37 +274,32 @@ fn appearance(s: &crate::app::App, k: &Kit) -> El {
         .build(k)
         .description(theme_description)
         .focus_group();
-    section(
+    vec![group(
         k,
-        "appearance",
-        "Appearance",
-        Icon::Color.glyph(),
-        "How the window looks around your schematic.",
-        vec![group(
+        "appearance-theme",
+        None,
+        vec![setting(k, "theme", "Theme", Some(theme_description), theme)],
+        None,
+    )]
+}
+
+fn controls(s: &App, k: &Kit) -> Vec<El> {
+    vec![
+        camera(s, k),
+        bindings(
+            s,
             k,
-            "appearance-theme",
-            "Interface theme",
-            vec![setting(k, "theme", "Theme", theme_description, theme)],
-        )],
-    )
+            Mode::Preview,
+            Some(note(
+                k,
+                "Click a shortcut, then press any key or modifier. Escape cancels; Backspace clears the binding.",
+            )),
+        ),
+        bindings(s, k, Mode::Spectator, None),
+    ]
 }
 
-fn controls(s: &crate::app::App, k: &Kit) -> El {
-    section(
-        k,
-        "controls",
-        "Controls",
-        Icon::Keyboard.glyph(),
-        "Camera feel and every viewer action for the orbit preview and free-flight spectator cameras.",
-        vec![
-            camera(s, k),
-            bindings(s, k, Mode::Preview),
-            bindings(s, k, Mode::Spectator),
-        ],
-    )
-}
-
-fn camera(s: &crate::app::App, k: &Kit) -> El {
+fn camera(s: &App, k: &Kit) -> El {
     let sensitivity = s.preferences.sensitivity;
     let fov = s.preferences.fov;
     let sensitivity_value = format!("{:.0}%", sensitivity * 100.0);
@@ -302,7 +307,7 @@ fn camera(s: &crate::app::App, k: &Kit) -> El {
     group(
         k,
         "controls-camera",
-        "Camera feel",
+        Some("Camera feel"),
         vec![
             stepper_setting(
                 k,
@@ -335,27 +340,20 @@ fn camera(s: &crate::app::App, k: &Kit) -> El {
                 |s| s.preferences.set_fov(s.preferences.fov + 1.0),
             ),
         ],
+        None,
     )
 }
 
-fn bindings(s: &crate::app::App, k: &Kit, mode: Mode) -> El {
+fn bindings(s: &App, k: &Kit, mode: Mode, note: Option<El>) -> El {
     let title = format!("{} camera", mode.title());
-    let mut body = vec![
-        text("Press a keycap, then press any key or modifier. Escape cancels; Backspace clears the binding.")
-            .font(k.ty.small)
-            .color(k.c.text_muted)
-            .wrap()
-            .py(4.0),
-    ];
-    body.extend(
-        Action::all(mode)
-            .iter()
-            .map(|action| binding_row(s, k, *action)),
-    );
-    group(k, &format!("controls-{mode:?}"), &title, body)
+    let rows = Action::all(mode)
+        .iter()
+        .map(|action| binding_row(s, k, *action))
+        .collect();
+    group(k, &format!("controls-{mode:?}"), Some(&title), rows, note)
 }
 
-fn binding_row(s: &crate::app::App, k: &Kit, action: Action) -> El {
+fn binding_row(s: &App, k: &Kit, action: Action) -> El {
     let binding = s.preferences.binding(action);
     let recording = s.recording == Some(action);
     let keys = if recording {
@@ -370,12 +368,7 @@ fn binding_row(s: &crate::app::App, k: &Kit, action: Action) -> El {
     } else {
         keys.join(" / ")
     };
-    let border = if recording {
-        k.c.border_focus
-    } else {
-        k.c.border_base
-    };
-    let mut control = el()
+    let mut control = row()
         .key(format!("record-{}", action.key()))
         .role("button")
         .label(action.title())
@@ -386,15 +379,17 @@ fn binding_row(s: &crate::app::App, k: &Kit, action: Action) -> El {
             "Press to record a key for this action."
         })
         .focusable(true)
-        .h(30.0)
-        .px(10.0)
-        .min_w(112.0)
-        .center()
+        .h(26.0)
+        .min_w(64.0)
+        .px(6.0)
+        // Hangs past the row's inset by its own padding, so the keycaps line up with the other
+        // rows' controls.
+        .mr(-6.0)
+        .justify_end()
+        .center_y()
         .radius(k.radius.md)
-        .fill(k.c.bg_base)
-        .border(1.0, border)
         .focus_ring(2.0, 2.0, k.c.border_focus)
-        .on_press_tx(move |s: &mut crate::app::App, tx: &mut Tx| {
+        .on_press_tx(move |s: &mut App, tx: &mut Tx| {
             if s.recording == Some(action) {
                 s.recording = None;
                 s.notice = None;
@@ -411,9 +406,12 @@ fn binding_row(s: &crate::app::App, k: &Kit, action: Action) -> El {
                 );
             }
         })
-        .on_physical_input(move |s: &mut crate::app::App, input, tx| {
-            record_physical_input(s, input, tx)
-        });
+        .on_physical_input(move |s: &mut App, input, tx| record_physical_input(s, input, tx));
+    control = if recording {
+        control.fill(k.c.layer_01).border(1.0, k.c.border_focus)
+    } else {
+        k.interactive(control)
+    };
     control = control.child(
         if recording {
             text("Press a key…")
@@ -424,29 +422,19 @@ fn binding_row(s: &crate::app::App, k: &Kit, action: Action) -> El {
                 .font(k.ty.ui_compact)
                 .color(k.c.text_faint)
         } else {
-            Keybind::new(&keys).build(k)
+            row()
+                .gap(6.0)
+                .center_y()
+                .children(keys.iter().map(|key| Keybind::new(&[key]).build(k)))
         }
         .a11y_hidden(),
     );
-    row()
-        .key(format!("binding-{}", action.key()))
-        .w_full()
-        .gap(16.0)
-        .center_y()
-        .py(2.0)
-        .child(
-            text(action.title())
-                .grow(1.0)
-                .font(k.ty.ui)
-                .color(k.c.text_base)
-                .a11y_hidden(),
-        )
-        .child(control)
+    setting(k, action.key(), action.title(), None, control)
 }
 
 /// Records a key the settings page receives before focus navigation. Returns true while
 /// recording, so the viewer never sees a key meant for the recorder.
-pub fn record_physical_input(s: &mut crate::app::App, input: &PhysicalInput, tx: &mut Tx) -> bool {
+pub fn record_physical_input(s: &mut App, input: &PhysicalInput, tx: &mut Tx) -> bool {
     let Some(action) = s.recording else {
         return false;
     };
@@ -484,7 +472,7 @@ pub fn record_physical_input(s: &mut crate::app::App, input: &PhysicalInput, tx:
 
 /// Records a key from the window's key handler. This is the fallback for a recorder that does
 /// not hold focus; the settings page's recorder usually takes the physical path first.
-pub fn recording_key(s: &mut crate::app::App, event: &KeyEvent, tx: &mut Tx) -> bool {
+pub fn recording_key(s: &mut App, event: &KeyEvent, tx: &mut Tx) -> bool {
     let Some(action) = s.recording else {
         return false;
     };
@@ -505,7 +493,7 @@ pub fn recording_key(s: &mut crate::app::App, event: &KeyEvent, tx: &mut Tx) -> 
     true
 }
 
-fn assign(s: &mut crate::app::App, action: Action, key: KeyChord, tx: &mut Tx) {
+fn assign(s: &mut App, action: Action, key: KeyChord, tx: &mut Tx) {
     match s.preferences.assign_binding(action, key) {
         Ok(()) => {
             let message = format!(
@@ -526,7 +514,7 @@ fn assign(s: &mut crate::app::App, action: Action, key: KeyChord, tx: &mut Tx) {
     }
 }
 
-fn cancel(s: &mut crate::app::App, action: Action, tx: &mut Tx) {
+fn cancel(s: &mut App, action: Action, tx: &mut Tx) {
     s.recording = None;
     s.notice = None;
     tx.announce(
@@ -535,7 +523,7 @@ fn cancel(s: &mut crate::app::App, action: Action, tx: &mut Tx) {
     );
 }
 
-fn clear(s: &mut crate::app::App, action: Action, tx: &mut Tx) {
+fn clear(s: &mut App, action: Action, tx: &mut Tx) {
     s.preferences.clear_binding(action);
     s.recording = None;
     let message = format!("{} cleared.", action.title());
@@ -544,7 +532,7 @@ fn clear(s: &mut crate::app::App, action: Action, tx: &mut Tx) {
     tx.announce(message, LiveRegion::Polite);
 }
 
-fn performance(s: &crate::app::App, k: &Kit) -> El {
+fn performance(s: &App, k: &Kit) -> Vec<El> {
     let preview = s.preferences.preview;
     let chunking_description = if preview.multithreading_enabled {
         "Smaller chunks reduce peak meshing memory and allow cancellation between chunks. Turn off multithreading to change this."
@@ -558,7 +546,7 @@ fn performance(s: &crate::app::App, k: &Kit) -> El {
         chunking_description,
         preview.chunking_enabled,
         preview.multithreading_enabled,
-        |s: &mut crate::app::App| {
+        |s: &mut App| {
             let enabled = !s.preferences.preview.chunking_enabled;
             s.preferences.set_chunking(enabled);
             s.save_preferences();
@@ -572,8 +560,9 @@ fn performance(s: &crate::app::App, k: &Kit) -> El {
         .iter()
         .position(|size| *size == preview.chunk_size);
     let mut chunk_size = SegmentedControl::new(&sizes, selected)
+        .fit()
         .label("Chunk size")
-        .on_pick(|s: &mut crate::app::App, index, _| {
+        .on_pick(|s: &mut App, index, _| {
             if let Some(size) = PreviewSettings::CHUNK_SIZES.get(index) {
                 s.preferences.set_chunk_size(*size);
                 s.save_preferences();
@@ -584,10 +573,17 @@ fn performance(s: &crate::app::App, k: &Kit) -> El {
             chunk_size = chunk_size.segment_state(index, State::Disabled);
         }
     }
-    let chunk_size = chunk_size
-        .build(k)
-        .description("The edge length, in blocks, of each geometry chunk.")
-        .focus_group();
+    let chunk_size_description = "The edge length, in blocks, of each geometry chunk.";
+    let chunk_size = setting(
+        k,
+        "chunk-size",
+        "Chunk size",
+        Some(chunk_size_description),
+        chunk_size
+            .build(k)
+            .description(chunk_size_description)
+            .focus_group(),
+    );
     let multithreading_description = if preview.chunking_enabled {
         "Uses more CPU cores while preparing and meshing a schematic."
     } else {
@@ -600,7 +596,7 @@ fn performance(s: &crate::app::App, k: &Kit) -> El {
         multithreading_description,
         preview.multithreading_enabled,
         !preview.chunking_enabled,
-        |s: &mut crate::app::App| {
+        |s: &mut App| {
             let enabled = !s.preferences.preview.multithreading_enabled;
             s.preferences.set_multithreading(enabled);
             s.save_preferences();
@@ -625,65 +621,52 @@ fn performance(s: &crate::app::App, k: &Kit) -> El {
                 .set_thread_count(s.preferences.preview.thread_count.saturating_add(1));
         },
     );
-    let reset = row().w_full().justify_end().py(2.0).child(
-        Button::new("Reset preview settings")
-            .icon(Icon::Refresh.glyph())
-            .variant(ButtonVariant::Ghost)
-            .control_size(ControlSize::Mini)
-            .on_press(|s: &mut crate::app::App| {
-                s.preferences.preview = PreviewSettings::default();
-                s.notice = Some("Preview settings reset.".to_owned());
-                s.save_preferences();
-            })
-            .build(k)
-            .key("reset-preview-settings"),
-    );
-    section(
+    let footer = row()
+        .key("preview-footer")
+        .w_full()
+        .gap(16.0)
+        .center_y()
+        .child(
+            note(k, "Changes apply the next time you open a schematic.")
+                .grow(1.0)
+                .min_w(0.0),
+        )
+        .child(
+            Button::new("Reset preview settings")
+                .icon(Icon::Refresh.glyph())
+                .variant(ButtonVariant::Ghost)
+                .control_size(ControlSize::Small)
+                .on_press(|s: &mut App| {
+                    s.preferences.preview = PreviewSettings::default();
+                    s.notice = Some("Preview settings reset.".to_owned());
+                    s.save_preferences();
+                })
+                .build(k)
+                .key("reset-preview-settings"),
+        );
+    vec![group(
         k,
-        "performance",
-        "Performance",
-        Icon::Gauge.glyph(),
-        "How the preview pipeline uses memory and CPU. Changes apply the next time you open a schematic.",
-        vec![group(
-            k,
-            "preview",
-            "Preview preparation",
-            vec![
-                chunking,
-                setting(
-                    k,
-                    "chunk-size",
-                    "Chunk size",
-                    "The edge length, in blocks, of each geometry chunk.",
-                    chunk_size,
-                ),
-                multithreading,
-                thread_count,
-                reset,
-            ],
-        )],
-    )
+        "preview",
+        Some("Preview preparation"),
+        vec![chunking, chunk_size, multithreading, thread_count],
+        Some(footer),
+    )]
 }
 
 const APPIMAGE_UPDATE_URL: &str = "https://github.com/AppImageCommunity/AppImageUpdate/issues";
 
-fn updates(s: &crate::app::App, k: &Kit) -> El {
-    let mut body = Vec::new();
-    let title = match &s.update_mode {
-        crate::update::Mode::SelfUpdate => "Automatic updates",
-        crate::update::Mode::AppImage => "AppImage updates",
-        _ => "Managed updates",
-    };
+fn updates(s: &App, k: &Kit) -> Vec<El> {
+    let mut rows = Vec::new();
     match &s.update_mode {
         crate::update::Mode::SelfUpdate => {
-            body.push(toggle_setting(
+            rows.push(toggle_setting(
                 k,
                 "auto-update",
                 "Check for updates automatically",
                 "When off, no update check runs at launch and the download source is hidden.",
                 s.preferences.auto_update,
                 false,
-                |s: &mut crate::app::App| {
+                |s: &mut App| {
                     let enabled = !s.preferences.auto_update;
                     s.preferences.set_auto_update(enabled);
                     s.save_preferences();
@@ -698,7 +681,7 @@ fn updates(s: &crate::app::App, k: &Kit) -> El {
                 let source = SegmentedControl::new(&["GitHub", "Cloudflare"], Some(selected))
                     .label("Update source")
                     .width(Some(232.0))
-                    .on_pick(|s: &mut crate::app::App, index, _| {
+                    .on_pick(|s: &mut App, index, _| {
                         s.preferences.set_update_source(if index == 1 {
                             Source::Cloudflare
                         } else {
@@ -709,25 +692,22 @@ fn updates(s: &crate::app::App, k: &Kit) -> El {
                     .build(k)
                     .description(source_description)
                     .focus_group();
-                body.push(setting(
+                rows.push(setting(
                     k,
                     "source",
                     "Update source",
-                    source_description,
+                    Some(source_description),
                     source,
                 ));
-                if let Some(status) = update_status(s, k) {
-                    body.push(status);
-                }
                 let in_flight = matches!(
                     &s.update_state,
                     UpdateState::Checking | UpdateState::Installing
                 );
-                let mut actions = row().w_full().gap(8.0).center_y().child(
+                let mut actions = row().gap(8.0).center_y().child(
                     Button::new("Check for updates")
                         .icon(Icon::Refresh.glyph())
                         .disabled(in_flight)
-                        .on_press(|s: &mut crate::app::App| s.check_update())
+                        .on_press(|s: &mut App| s.check_update())
                         .build(k)
                         .key("check-updates"),
                 );
@@ -736,64 +716,57 @@ fn updates(s: &crate::app::App, k: &Kit) -> El {
                         Button::new("Install update")
                             .icon(Icon::ArrowDownload.glyph())
                             .variant(ButtonVariant::Contrast)
-                            .on_press(|s: &mut crate::app::App| s.install_update())
+                            .on_press(|s: &mut App| s.install_update())
                             .build(k)
                             .key("install-update"),
                     );
                 }
-                body.push(actions);
-            } else {
-                body.push(
-                    text("Automatic updates are off. No update check or install action runs.")
-                        .font(k.ty.small)
-                        .color(k.c.text_muted)
-                        .wrap()
-                        .py(4.0),
-                );
+                rows.push(version_row(s, k, None, Some(actions)));
             }
         }
-        crate::update::Mode::AppImage => {
-            if let Some(status) = update_status(s, k) {
-                body.push(status);
-            }
-            body.push(
-                text("This build is an AppImage. Updates are installed with AppImageUpdate; the download source is not configurable here.")
-                    .font(k.ty.ui)
-                    .color(k.c.text_muted)
-                    .wrap()
-                    .py(4.0),
-            );
-            body.push(
+        crate::update::Mode::AppImage => rows.push(version_row(
+            s,
+            k,
+            Some(
+                "This build is an AppImage. Updates are installed with AppImageUpdate; the download source is not configurable here.",
+            ),
+            Some(
                 Button::new("Check with AppImageUpdate")
                     .icon(Icon::ArrowDownload.glyph())
-                    .on_press_tx(|_: &mut crate::app::App, tx: &mut Tx| {
+                    .on_press_tx(|_: &mut App, tx: &mut Tx| {
                         let _ = tx.open_url(APPIMAGE_UPDATE_URL);
                     })
                     .build(k)
                     .key("check-appimage-update"),
-            );
-        }
-        _ => {
-            body.push(
-                text("Updates are managed by your package manager. Update actions and the download source are unavailable in this build.")
-                    .font(k.ty.ui)
-                    .color(k.c.text_muted)
-                    .wrap()
-                    .py(4.0),
-            );
-        }
+            ),
+        )),
+        _ => rows.push(version_row(
+            s,
+            k,
+            Some(
+                "Updates are managed by your package manager. Update actions and the download source are unavailable in this build.",
+            ),
+            None,
+        )),
     }
-    section(
-        k,
-        "updates",
-        "Updates",
-        Icon::ArrowDownload.glyph(),
-        "How Litematica Preview checks for and installs new versions.",
-        vec![group(k, "updates-card", title, body)],
-    )
+    vec![group(k, "updates-card", None, rows, None)]
 }
 
-fn update_status(s: &crate::app::App, k: &Kit) -> Option<El> {
+/// The running version, the latest check's outcome and `description` under it, and the update
+/// actions this build offers beside it.
+fn version_row(s: &App, k: &Kit, description: Option<&str>, actions: Option<El>) -> El {
+    let mut copy = copy(
+        k,
+        &format!("Litematica Preview {}", crate::update::current_version()),
+        description,
+    );
+    if let Some(status) = update_status(s, k) {
+        copy = copy.child(status);
+    }
+    setting_row("version", copy, actions)
+}
+
+fn update_status(s: &App, k: &Kit) -> Option<El> {
     let (message, color, glyph) = match &s.update_state {
         UpdateState::Idle => return None,
         UpdateState::Checking => (
@@ -832,48 +805,18 @@ fn update_status(s: &crate::app::App, k: &Kit) -> Option<El> {
             .key("update-status")
             .role("status")
             .w_full()
-            .gap(6.0)
+            .gap(4.0)
+            .pt(2.0)
             .center_y()
-            .py(4.0)
-            .child(icon(glyph, 14.0).color(color).a11y_hidden())
-            .child(text(message).font(k.ty.ui).color(color).wrap().grow(1.0)),
+            .child(icon(glyph, 12.0).color(color).a11y_hidden())
+            .child(
+                text(message)
+                    .font(k.ty.caption())
+                    .color(color)
+                    .wrap()
+                    .grow(1.0),
+            ),
     )
-}
-
-fn footer(k: &Kit) -> El {
-    row()
-        .key("preferences-footer")
-        .w_full()
-        .justify_center()
-        .px(28.0)
-        .py(12.0)
-        .child(
-            row()
-                .w_full()
-                .max_w(720.0)
-                .gap(16.0)
-                .justify_between()
-                .center_y()
-                .child(
-                    text("Settings are saved automatically.")
-                        .font(k.ty.caption())
-                        .color(k.c.text_muted),
-                )
-                .child(
-                    Button::new("Reset all settings")
-                        .icon(Icon::Refresh.glyph())
-                        .variant(ButtonVariant::Outline)
-                        .on_press(|s: &mut crate::app::App| {
-                            s.preferences.reset();
-                            s.preferences_section = PreferencesSection::default();
-                            s.recording = None;
-                            s.notice = Some("Settings reset to defaults.".to_owned());
-                            s.save_preferences();
-                        })
-                        .build(k)
-                        .key("reset-settings"),
-                ),
-        )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -886,8 +829,8 @@ fn stepper_setting(
     decrease: &str,
     increase: &str,
     disabled: bool,
-    lower: impl Fn(&mut crate::app::App) + 'static,
-    higher: impl Fn(&mut crate::app::App) + 'static,
+    lower: impl Fn(&mut App) + 'static,
+    higher: impl Fn(&mut App) + 'static,
 ) -> El {
     let down = Icon::ChevronDown.glyph();
     let up = down;
@@ -896,7 +839,7 @@ fn stepper_setting(
         .control_size(ControlSize::Mini)
         .help(decrease)
         .disabled(disabled)
-        .on_press(move |s: &mut crate::app::App| {
+        .on_press(move |s: &mut App| {
             lower(s);
             s.save_preferences();
         })
@@ -906,7 +849,7 @@ fn stepper_setting(
         .control_size(ControlSize::Mini)
         .help(increase)
         .disabled(disabled)
-        .on_press(move |s: &mut crate::app::App| {
+        .on_press(move |s: &mut App| {
             higher(s);
             s.save_preferences();
         })
@@ -938,5 +881,5 @@ fn stepper_setting(
     } else {
         control
     };
-    setting(k, key, label, &description, control)
+    setting(k, key, label, Some(&description), control)
 }

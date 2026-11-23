@@ -38,7 +38,7 @@ pub(crate) fn view(s: &App, cx: &mut Cx<App>) -> El {
     let kit = Kit::neutral(s.preferences.theme.is_dark(cx.system_dark()));
     let base = match s.page {
         Page::Viewer => split(s, cx, &kit),
-        Page::Preferences => page_shell(cx, &kit, "Preferences", preferences_ui::view(s, &kit)),
+        Page::Preferences => preferences(s, cx, &kit),
         Page::TexturePacks => page_shell(cx, &kit, "Texture Packs", texture_packs(s, &kit)),
     };
     let mut base = base
@@ -770,6 +770,30 @@ fn toasts(s: &App, kit: &Kit) -> El {
     region.build(kit)
 }
 
+/// The preferences page keeps the viewer's frame: its sections take the window's sidebar, at
+/// the sidebar's width, shown even where the viewer hides it.
+fn preferences(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
+    let mut pane = s.sidebar;
+    pane.set_open(true);
+    SplitView::new(preferences_ui::view(s, kit))
+        .sidebar(
+            &pane,
+            |s: &mut App| &mut s.sidebar,
+            preferences_ui::sidebar(s, kit),
+        )
+        .toolbar(
+            Toolbar::new()
+                .leading(back(kit))
+                .title(s.preferences_section.title()),
+        )
+        .titlebar_inset(cx.titlebar_inset())
+        .frame_inset(8.0)
+        .sidebar_padding(16.0, 12.0)
+        .hide_sidebar_toggle()
+        .reduced_motion(cx.is_reduced_motion())
+        .build(kit)
+}
+
 fn page_shell(cx: &mut Cx<App>, kit: &Kit, title: &str, body: El) -> El {
     let content = col()
         .key("page")
@@ -777,20 +801,23 @@ fn page_shell(cx: &mut Cx<App>, kit: &Kit, title: &str, body: El) -> El {
         .h_full()
         .min_h(0.0)
         .child(col().w_full().grow(1.0).min_h(0.0).child(body));
-    let back = Button::new("Back")
+    ShellPage::new(content)
+        .title(title)
+        .leading(back(kit))
+        .titlebar_inset(cx.titlebar_inset())
+        .frame_inset(8.0)
+        .build(kit)
+}
+
+fn back(kit: &Kit) -> El {
+    Button::new("Back")
         .icon(Icon::Back.glyph())
         .variant(ButtonVariant::Ghost)
         .control_size(ControlSize::Regular)
         .help("Back to the preview")
         .on_press(|s: &mut App| s.open_page(Page::Viewer))
         .build(kit)
-        .key("back");
-    ShellPage::new(content)
-        .title(title)
-        .leading(back)
-        .titlebar_inset(cx.titlebar_inset())
-        .frame_inset(8.0)
-        .build(kit)
+        .key("back")
 }
 
 fn texture_packs(s: &App, kit: &Kit) -> El {

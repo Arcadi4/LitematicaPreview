@@ -10,8 +10,8 @@
 //! logical key event so typed characters follow the active keyboard layout.
 
 use rune::{
-    col, el, icon, row, text, Align, Anim, Drag, El, Key, KeyEvent, LiveRegion, Mods, Phase,
-    PhysicalInput, PhysicalKeyCode, Shadow, Spring, SpringPair, TextStyle, Transition, Tx,
+    Align, Anim, Drag, El, Key, KeyEvent, LiveRegion, Mods, Phase, PhysicalInput, PhysicalKeyCode,
+    Shadow, Spring, SpringPair, TextStyle, Transition, Tx, col, el, icon, row, text,
 };
 use rune_kit::shell::{Sidebar, SidebarRow};
 use rune_kit::{Button, ButtonVariant, ControlSize, Divider, Kit, SegmentedControl, Switch};
@@ -19,8 +19,8 @@ use rune_kit::{Button, ButtonVariant, ControlSize, Divider, Kit, SegmentedContro
 use crate::app::App;
 use crate::icons::Icon;
 use crate::preferences::{
-    key_chord, key_chord_from_physical, Action, Conflict, KeyChord, Mode, PreviewSettings, Theme,
-    MAX_FOV_DEGREES, MAX_SENSITIVITY, MIN_FOV_DEGREES, MIN_SENSITIVITY,
+    Action, Conflict, KeyChord, MAX_FOV_DEGREES, MAX_SENSITIVITY, MIN_FOV_DEGREES, MIN_SENSITIVITY,
+    Mode, PreviewSettings, Theme, key_chord, key_chord_from_physical,
 };
 use crate::update::{Source, State as UpdateState};
 
@@ -174,6 +174,7 @@ pub fn view(s: &App, k: &Kit) -> El {
             .child(
                 col()
                     .key(s.preferences_section.title())
+                    .transition(Transition::offset(0.0, 10.0).combined(Transition::opacity()))
                     .w_full()
                     .max_w(CONTENT_WIDTH)
                     .gap(24.0)
@@ -1192,10 +1193,11 @@ mod tests {
         };
         assert!(record_physical_input(&mut app, &tab, &mut tx));
         assert_eq!(app.recording, None);
-        assert!(app
-            .preferences
-            .binding(Action::Fit)
-            .matches(&key_event(Key::Tab), &tx));
+        assert!(
+            app.preferences
+                .binding(Action::Fit)
+                .matches(&key_event(Key::Tab), &tx)
+        );
 
         app.recording = Some(Action::FlyForward);
         let shift = PhysicalInput::Key {
@@ -1244,11 +1246,13 @@ mod tests {
 
         assert_eq!(runtime.state.recording, None);
         let colemak_w = key_event(Key::Text(",".into()));
-        assert!(runtime
-            .state
-            .preferences
-            .binding(Action::FlyForward)
-            .matches(&colemak_w, &Tx::default()));
+        assert!(
+            runtime
+                .state
+                .preferences
+                .binding(Action::FlyForward)
+                .matches(&colemak_w, &Tx::default())
+        );
     }
 
     #[test]

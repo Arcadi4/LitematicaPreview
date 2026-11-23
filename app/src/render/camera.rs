@@ -32,6 +32,27 @@ const FLY_LOOK_SPEED: f32 = 0.0026;
 /// Narrowest and widest accepted spectator sensitivity multiplier.
 const MIN_SENSITIVITY: f32 = 0.05;
 const MAX_SENSITIVITY: f32 = 10.0;
+/// Duration of the animated Fit command in seconds.
+const FIT_DURATION: f64 = 0.3;
+/// Duration of an animated zoom button or key in seconds.
+const ZOOM_DURATION: f64 = 0.18;
+
+#[derive(Clone, Copy)]
+struct Pose {
+    yaw: f32,
+    pitch: f32,
+    target: Vec3,
+    distance: f32,
+    fitted_distance: f32,
+}
+
+#[derive(Clone, Copy)]
+struct Motion {
+    from: Pose,
+    to: Pose,
+    start: f64,
+    duration: f64,
+}
 
 /// Per-frame camera uniforms. `offset` centres the model; the grid uses zero.
 #[repr(C)]
@@ -63,6 +84,7 @@ impl FrameCamera {
 /// to the eye, and a distance. Free flight reuses the same state: looking moves
 /// the target around a fixed eye, and moving translates the target (and thus
 /// the eye) through the world.
+#[derive(Clone)]
 pub struct Camera {
     yaw: f32,
     pitch: f32,
@@ -80,6 +102,7 @@ pub struct Camera {
     /// Spectator look multiplier applied to free-flight mouse deltas.
     look_sensitivity: f32,
     grid_visible: bool,
+    motion: Option<Motion>,
     has_model: bool,
 }
 
@@ -99,12 +122,14 @@ impl Camera {
             fov_degrees: DEFAULT_FOV_DEGREES,
             look_sensitivity: 1.0,
             grid_visible: true,
+            motion: None,
             has_model: false,
         }
     }
 
     /// Adopt the default orientation and fit the camera to the model bounds.
     pub fn set_model_bounds(&mut self, min: [f32; 3], max: [f32; 3]) {
+        self.motion = None;
         self.centre = [
             (min[0] + max[0]) * 0.5,
             (min[1] + max[1]) * 0.5,
@@ -118,6 +143,7 @@ impl Camera {
 
     /// Updates final geometry bounds without moving the world-space eye or target.
     pub(crate) fn update_model_bounds(&mut self, min: Vec3, max: Vec3) {
+        self.motion = None;
         let centre = std::array::from_fn(|axis| (min[axis] + max[axis]) * 0.5);
         self.target = add3(self.target, sub3(self.centre, centre));
         self.centre = centre;
@@ -134,6 +160,7 @@ impl Camera {
         if width <= 0.0 || height <= 0.0 {
             return;
         }
+        self.motion = None;
         let aspect = width / height;
         self.viewport_height = height;
         if aspect != self.aspect {
@@ -148,6 +175,7 @@ impl Camera {
 
     /// Apply an orbit delta in pixels.
     pub fn orbit(&mut self, dx: f32, dy: f32) {
+        self.motion = None;
         self.yaw = (self.yaw - dx * ORBIT_SPEED) % (std::f32::consts::PI * 2.0);
         self.pitch = (self.pitch + dy * ORBIT_SPEED).clamp(-PITCH_LIMIT, PITCH_LIMIT);
     }
@@ -157,6 +185,7 @@ impl Camera {
         if !self.has_model {
             return;
         }
+        self.motion = None;
         let (right, up) = self.plane();
         let scale = 2.0 * self.distance * self.half_fov_tan() / self.viewport_height;
         self.target = scale_and_add3(self.target, right, -dx * scale);
@@ -184,6 +213,7 @@ impl Camera {
         if !self.has_model || !factor.is_finite() || factor <= 0.0 {
             return;
         }
+        self.motion = None;
         let scale = self.fitted_distance;
         // Final geometry may shrink around a deliberately preserved distant
         // view. Let zoom approach the normal range without snapping into it.
@@ -210,6 +240,7 @@ impl Camera {
         if !dx.is_finite() || !dy.is_finite() {
             return;
         }
+        self.motion = None;
         let eye = self.eye();
         let look = FLY_LOOK_SPEED * self.look_sensitivity;
         self.yaw = (self.yaw - dx * look) % (std::f32::consts::PI * 2.0);
@@ -231,6 +262,7 @@ impl Camera {
         {
             return;
         }
+        self.motion = None;
         let forward = forward.clamp(-1.0, 1.0);
         let right = right.clamp(-1.0, 1.0);
         let up = up.clamp(-1.0, 1.0);
@@ -250,12 +282,103 @@ impl Camera {
 
     /// Reset the orientation and refit.
     pub fn fit(&mut self) {
+        self.motion = None;
         self.yaw = DEFAULT_YAW;
         self.pitch = DEFAULT_PITCH;
         self.target = [0.0; 3];
         let fit = self.fitting_distance();
         self.fitted_distance = fit;
         self.distance = fit;
+    }
+
+    /// Glide to the fitted view over [`FIT_DURATION`] seconds.
+    pub fn animate_fit(&mut self, now: f64) {
+        let mut to = self.clone();
+        to.fit();
+        self.animate_to(to.pose(), now, FIT_DURATION);
+    }
+
+    /// Glide by a multiplicative zoom over [`ZOOM_DURATION`] seconds.
+    pub fn animate_zoom(&mut self, factor: f32, now: f64) {
+        let mut to = self.clone();
+        to.zoom(factor);
+        self.animate_to(to.pose(), now, ZOOM_DURATION);
+    }
+
+    /// Advance a running command. Returns true on the frame it lands as well.
+    pub fn advance(&mut self, now: f64) -> bool {
+        let Some(motion) = self.motion else {
+            return false;
+        };
+        let elapsed = if motion.duration > 0.0 {
+            ((now - motion.start) / motion.duration).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        if elapsed >= 1.0 {
+            self.motion = None;
+            self.apply_pose(motion.to);
+            return true;
+        }
+        let t = (1.0 - (1.0 - elapsed).powi(3)) as f32;
+        self.apply_pose(Pose {
+            yaw: lerp_angle(motion.from.yaw, motion.to.yaw, t),
+            pitch: lerp(motion.from.pitch, motion.to.pitch, t),
+            target: std::array::from_fn(|axis| {
+                lerp(motion.from.target[axis], motion.to.target[axis], t)
+            }),
+            distance: lerp(motion.from.distance, motion.to.distance, t),
+            fitted_distance: lerp(motion.from.fitted_distance, motion.to.fitted_distance, t),
+        });
+        true
+    }
+
+    pub fn is_animating(&self) -> bool {
+        self.motion.is_some()
+    }
+
+    /// Land a running command at its destination, for a tab that loses focus.
+    pub fn settle_motion(&mut self) {
+        if let Some(motion) = self.motion.take() {
+            self.apply_pose(motion.to);
+        }
+    }
+
+    fn pose(&self) -> Pose {
+        Pose {
+            yaw: self.yaw,
+            pitch: self.pitch,
+            target: self.target,
+            distance: self.distance,
+            fitted_distance: self.fitted_distance,
+        }
+    }
+
+    fn apply_pose(&mut self, pose: Pose) {
+        self.yaw = pose.yaw;
+        self.pitch = pose.pitch;
+        self.target = pose.target;
+        self.distance = pose.distance;
+        self.fitted_distance = pose.fitted_distance;
+    }
+
+    fn animate_to(&mut self, to: Pose, now: f64, duration: f64) {
+        let from = self.pose();
+        if from.yaw == to.yaw
+            && from.pitch == to.pitch
+            && from.target == to.target
+            && from.distance == to.distance
+            && from.fitted_distance == to.fitted_distance
+        {
+            self.motion = None;
+            return;
+        }
+        self.motion = Some(Motion {
+            from,
+            to,
+            start: now,
+            duration,
+        });
     }
 
     /// Set the vertical field of view in degrees, clamped to a usable range.
@@ -270,6 +393,7 @@ impl Camera {
         if degrees == self.fov_degrees {
             return;
         }
+        self.motion = None;
         let ratio = if self.fitted_distance > 0.0 {
             self.distance / self.fitted_distance
         } else {
@@ -406,6 +530,19 @@ impl Camera {
         }
         fit
     }
+}
+
+fn lerp(from: f32, to: f32, t: f32) -> f32 {
+    from + (to - from) * t
+}
+
+fn lerp_angle(from: f32, to: f32, t: f32) -> f32 {
+    let turn = std::f32::consts::TAU;
+    let mut delta = (to - from).rem_euclid(turn);
+    if delta > std::f32::consts::PI {
+        delta -= turn;
+    }
+    from + delta * t
 }
 
 impl Default for Camera {
@@ -802,5 +939,66 @@ mod tests {
         let target = camera.target;
         camera.fly_look(f32::NAN, 0.0);
         assert_eq!(camera.target, target, "non-finite look must be ignored");
+    }
+
+    fn assert_pose_eq(left: Pose, right: Pose) {
+        assert_eq!(left.yaw, right.yaw);
+        assert_eq!(left.pitch, right.pitch);
+        assert_eq!(left.target, right.target);
+        assert_eq!(left.distance, right.distance);
+        assert_eq!(left.fitted_distance, right.fitted_distance);
+    }
+
+    #[test]
+    fn fit_command_glides_to_the_fitted_view() {
+        let mut camera = model_camera();
+        camera.orbit(180.0, -40.0);
+        let start = camera.pose();
+        camera.animate_fit(0.0);
+        assert!(camera.is_animating());
+        assert_pose_eq(camera.pose(), start);
+
+        assert!(camera.advance(FIT_DURATION * 0.5));
+        let mid = camera.pose();
+        assert!(mid.yaw != start.yaw || mid.distance != start.distance);
+
+        let mut fitted = camera.clone();
+        fitted.fit();
+
+        assert!(camera.advance(FIT_DURATION + 0.01));
+        assert!(!camera.is_animating());
+        assert_pose_eq(camera.pose(), fitted.pose());
+        assert!(!camera.advance(FIT_DURATION + 1.0));
+    }
+
+    #[test]
+    fn zoom_command_lands_at_the_instant_zoom_distance() {
+        let mut animated = model_camera();
+        let mut instant = model_camera();
+        animated.animate_zoom(0.88, 1.0);
+        instant.zoom(0.88);
+        assert!(animated.advance(1.0 + ZOOM_DURATION + 0.01));
+        assert!(!animated.is_animating());
+        assert_eq!(animated.pose().distance, instant.pose().distance);
+        assert!(!animated.advance(2.0));
+    }
+
+    #[test]
+    fn direct_input_cancels_and_settles_a_running_command() {
+        let mut camera = model_camera();
+        camera.animate_zoom(0.5, 0.0);
+        camera.orbit(10.0, 0.0);
+        let pose = camera.pose();
+        assert!(!camera.is_animating());
+        assert!(!camera.advance(1.0));
+        assert_pose_eq(camera.pose(), pose);
+
+        let mut settled = camera.clone();
+        settled.animate_zoom(0.5, 0.0);
+        settled.settle_motion();
+        let mut instant = camera.clone();
+        instant.zoom(0.5);
+        assert!(!settled.is_animating());
+        assert_pose_eq(settled.pose(), instant.pose());
     }
 }

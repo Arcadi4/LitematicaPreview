@@ -1,4 +1,7 @@
-use rune::{Cx, El, Phase, PointerButton, Tx, col, el, icon, row, text};
+use rune::{
+    Cx, El, Phase, PointerButton, Spring, SpringPair, Stagger, Transition, Tx, col, el, icon, row,
+    text,
+};
 use rune_kit::shell::{
     Page as ShellPage, Sidebar, SidebarHeader, SidebarRow, SidebarToggle, SplitView, TabItem,
     TabOrientation, TabOverflow, TabStrip, Toolbar,
@@ -17,6 +20,12 @@ use crate::{preferences_ui, preview, update};
 pub(crate) const SCENE_EFFECT: u32 = 1;
 /// Rune Kit's tab pill radius, so the active tab's wash sits flush in its surface.
 const TAB_RADIUS: f32 = 6.0;
+const PAGE_SPRINGS: SpringPair = SpringPair::new(Spring::new(0.2, 0.0), Spring::new(0.16, 0.0));
+const OVERLAY_SPRINGS: SpringPair = SpringPair::new(Spring::new(0.14, 0.0), Spring::new(0.10, 0.0));
+
+fn reveal() -> Transition {
+    Transition::offset(0.0, 10.0).combined(Transition::opacity())
+}
 
 const OPEN_SHORTCUT: &str = if cfg!(target_os = "macos") {
     "⌘O"
@@ -35,22 +44,31 @@ const SETTINGS_SHORTCUT: &str = if cfg!(target_os = "macos") {
 };
 
 pub(crate) fn view(s: &App, cx: &mut Cx<App>) -> El {
+    s.reduced_motion.set(cx.is_reduced_motion());
     let kit = Kit::neutral(s.preferences.theme.is_dark(cx.system_dark()));
-    let base = match s.page {
+    let page_key = match s.page {
+        Page::Viewer => "page-viewer",
+        Page::Preferences => "page-preferences",
+        Page::TexturePacks => "page-texture-packs",
+    };
+    let mut base = match s.page {
         Page::Viewer => split(s, cx, &kit),
         Page::Preferences => preferences(s, cx, &kit),
         Page::TexturePacks => page_shell(cx, &kit, "Texture Packs", texture_packs(s, &kit)),
-    };
-    let mut base = base
-        .on_key_up(App::key_up)
-        .on_drop_hover(|s: &mut App, inside, _| s.dropping = inside)
-        .on_drop_files(|s: &mut App, paths, _| {
-            s.dropping = false;
-            s.open_paths(paths.to_vec());
-        });
+    }
+    .key(page_key)
+    .transition(Transition::opacity().springs(PAGE_SPRINGS))
+    .on_key_up(App::key_up)
+    .on_drop_hover(|s: &mut App, inside, _| s.dropping = inside)
+    .on_drop_files(|s: &mut App, paths, _| {
+        s.dropping = false;
+        s.open_paths(paths.to_vec());
+    });
     if s.dropping {
         base = base.child(
             col()
+                .key("drop-overlay")
+                .transition(Transition::opacity().springs(OVERLAY_SPRINGS))
                 .absolute(0.0, 0.0)
                 .w_full()
                 .h_full()
@@ -211,8 +229,14 @@ fn tabs(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
 
 fn welcome(s: &App, kit: &Kit) -> El {
     let extensions = formats::EXTENSIONS.join("    ");
+    let stagger = Stagger::new(0.05);
     let logo = s.logo.as_ref().expect("logo is loaded in setup");
-    let mark = el().size(56.0, 56.0).pixels(logo.pixels()).a11y_hidden();
+    let mark = el()
+        .size(56.0, 56.0)
+        .pixels(logo.pixels())
+        .transition(reveal())
+        .enter_delay(stagger.delay(0, 5))
+        .a11y_hidden();
     let actions = row()
         .gap(8.0)
         .center_y()
@@ -236,7 +260,9 @@ fn welcome(s: &App, kit: &Kit) -> El {
                 .on_press_tx(App::open_folder)
                 .build(kit)
                 .key("welcome-open-folder"),
-        );
+        )
+        .transition(reveal())
+        .enter_delay(stagger.delay(2, 5));
     let mut content = col()
         .w_full()
         .max_w(640.0)
@@ -263,8 +289,16 @@ fn welcome(s: &App, kit: &Kit) -> El {
                         .color(kit.c.text_muted),
                 ),
         )
+        .transition(reveal())
+        .enter_delay(stagger.delay(1, 5))
         .child(actions)
-        .child(text(extensions).font(kit.ty.small).color(kit.c.text_faint));
+        .child(
+            text(extensions)
+                .font(kit.ty.small)
+                .color(kit.c.text_faint)
+                .transition(reveal())
+                .enter_delay(stagger.delay(3, 5)),
+        );
     if !s.demos.is_empty() {
         let demos = s.demos.clone();
         content = content.child(
@@ -273,7 +307,9 @@ fn welcome(s: &App, kit: &Kit) -> El {
                 .variant(ButtonVariant::GhostMuted)
                 .on_press(move |s: &mut App| s.open_paths(demos.clone()))
                 .build(kit)
-                .key("welcome-examples"),
+                .key("welcome-examples")
+                .transition(reveal())
+                .enter_delay(stagger.delay(4, 5)),
         );
     }
     col()
@@ -494,6 +530,8 @@ fn stage(s: &App, kit: &Kit) -> El {
 
 fn stage_caption(s: &App, kit: &Kit) -> Option<El> {
     let mut caption = row()
+        .key("stage-caption")
+        .transition(Transition::offset(0.0, -8.0).combined(Transition::opacity()))
         .padding(8.0)
         .gap(8.0)
         .center_y()
@@ -561,11 +599,7 @@ fn view_controls(s: &App, kit: &Kit) -> El {
                 .label("Fit")
                 .help("Fit the schematic in view")
                 .shortcut(shortcut(Action::Fit))
-                .on_press(|s: &mut App| {
-                    if let Some(camera) = s.camera_mut() {
-                        camera.fit();
-                    }
-                })
+                .on_press_tx(|s: &mut App, tx| s.fit_camera(tx))
                 .build(kit)
                 .key("fit"),
         )
@@ -576,11 +610,7 @@ fn view_controls(s: &App, kit: &Kit) -> El {
                 .label("Zoom out")
                 .help("Zoom out")
                 .shortcut(shortcut(Action::ZoomOut))
-                .on_press(|s: &mut App| {
-                    if let Some(camera) = s.camera_mut() {
-                        camera.zoom(1.12);
-                    }
-                })
+                .on_press_tx(|s: &mut App, tx| s.zoom_camera(1.12, tx))
                 .build(kit)
                 .key("zoom-out"),
         )
@@ -591,11 +621,7 @@ fn view_controls(s: &App, kit: &Kit) -> El {
                 .label("Zoom in")
                 .help("Zoom in")
                 .shortcut(shortcut(Action::ZoomIn))
-                .on_press(|s: &mut App| {
-                    if let Some(camera) = s.camera_mut() {
-                        camera.zoom(0.88);
-                    }
-                })
+                .on_press_tx(|s: &mut App, tx| s.zoom_camera(0.88, tx))
                 .build(kit)
                 .key("zoom-in"),
         )
@@ -793,6 +819,8 @@ fn texture_packs(s: &App, kit: &Kit) -> El {
     if s.packs.is_empty() {
         content = content.child(
             col()
+                .key("no-packs")
+                .transition(reveal())
                 .w_full()
                 .padding(18.0)
                 .gap(4.0)
@@ -827,6 +855,7 @@ fn texture_packs(s: &App, kit: &Kit) -> El {
         content = content.child(
             row()
                 .key(&pack.id)
+                .transition(reveal())
                 .w_full()
                 .padding(10.0)
                 .gap(8.0)

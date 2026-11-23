@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -104,6 +105,7 @@ pub(crate) struct App {
     pub(crate) recording: Option<Action>,
     pub(crate) reset_confirming: bool,
     pub(crate) notice: Option<String>,
+    pub(crate) reduced_motion: Cell<bool>,
     /// The notice on screen and the poll clock time it appeared, which starts its timeout.
     notice_shown: Option<(String, f64)>,
     pub(crate) preferences_section: preferences_ui::PreferencesSection,
@@ -182,6 +184,7 @@ impl App {
             recording: None,
             reset_confirming: false,
             notice,
+            reduced_motion: Cell::new(false),
             notice_shown: None,
             page: Page::Viewer,
             tabs: Vec::new(),
@@ -293,6 +296,12 @@ impl App {
             }
             tx.wake_after(std::time::Duration::from_millis(16));
         }
+        if let Some(camera) = self.active_tab_mut().map(|tab| &mut tab.camera) {
+            changed |= camera.advance(now);
+            if camera.is_animating() {
+                tx.wake_after(std::time::Duration::from_millis(16));
+            }
+        }
         changed
     }
 
@@ -364,6 +373,32 @@ impl App {
         let tab = self.active_tab_mut()?;
         tab.interacted = true;
         Some(&mut tab.camera)
+    }
+
+    pub(crate) fn fit_camera(&mut self, tx: &mut Tx) {
+        let reduced = self.reduced_motion.get();
+        let Some(camera) = self.camera_mut() else {
+            return;
+        };
+        if reduced {
+            camera.fit();
+        } else {
+            camera.animate_fit(tx.clock());
+            tx.wake_after(std::time::Duration::from_millis(16));
+        }
+    }
+
+    pub(crate) fn zoom_camera(&mut self, factor: f32, tx: &mut Tx) {
+        let reduced = self.reduced_motion.get();
+        let Some(camera) = self.camera_mut() else {
+            return;
+        };
+        if reduced {
+            camera.zoom(factor);
+        } else {
+            camera.animate_zoom(factor, tx.clock());
+            tx.wake_after(std::time::Duration::from_millis(16));
+        }
     }
 
     pub(crate) fn open_dialog(&mut self) {
@@ -569,6 +604,9 @@ impl App {
     }
 
     fn begin_preview(&mut self) {
+        for tab in &mut self.tabs {
+            tab.camera.settle_motion();
+        }
         self.loader.cancel();
         self.thumbnail_loader.cancel();
         self.stop_flying();
@@ -1023,16 +1061,12 @@ impl App {
             return true;
         }
         if bound(Fit) {
-            if let Some(camera) = self.camera_mut() {
-                camera.fit();
-            }
+            self.fit_camera(tx);
             return true;
         }
         if bound(ZoomIn) || bound(ZoomOut) {
             let factor = if bound(ZoomIn) { 0.88 } else { 1.12 };
-            if let Some(camera) = self.camera_mut() {
-                camera.zoom(factor);
-            }
+            self.zoom_camera(factor, tx);
             return true;
         }
         if tx.focused().is_some_and(|key| key != VIEWPORT) {

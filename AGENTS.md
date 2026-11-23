@@ -29,16 +29,6 @@ Platform build, signing, packaging, and apt publishing steps: [`docs/build.md`](
 
 The app uses Fluent UI's icons. We vendor them in the repo since JavaScript is not involved. Feel free to pull new icons if your work requires them.
 
-## Architecture & Operational Constraints
-
-- **Renderer**: Consume Core's upload-ready batches without geometry copies, vertex conversion, or index rebasing. Keep opaque, cutout, and transparent draws separate. Clamp the atlas and repeat greedy textures.
-- **Loading**: Decode off the UI thread. Pending requests collapse to the latest. Clear obsolete scenes, do not wait for GPU upload credits under the renderer lock, and preserve a camera the user has moved when the final bounds arrive.
-- **Tabs**: Keep document identity and camera state per tab. Keep the active preview's GPU geometry only. Browser thumbnails use bundled textures and a persistent content-hash cache.
-- **Registry & Windows Integration**: Register file associations under `HKCU`. Quote executable and file paths separately. Never overwrite Windows `UserChoice` or unregister another installed app's ProgID.
-- **Updates**: Windows and macOS use GitHub or the Cloudflare mirror. macOS replaces the whole signed app. AppImage uses bundled AppImageUpdate. Debian and Nix packages disable in-app updates.
-- **Linux integration**: Register MIME types without overriding default applications.
-- **Verification**: Native presentation and OS dialogs require the platform's desktop. A cross-compile or headless screenshot is not evidence of a live Windows, X11, or Wayland session.
-
 ## Comments
 
 Code explains itself: a reader learns what a function does from its name, parameters, and types, not from prose above the call site. The default is no comment.

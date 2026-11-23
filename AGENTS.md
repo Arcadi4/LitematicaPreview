@@ -6,14 +6,22 @@ Windows, macOS, and Linux desktop app for offline Minecraft schematic viewing.
 - **Shared Core**: `litematica-preview-core` owns geometry decoding and meshing. Use `LP_CORE_PATH` with the `just` developer recipes to test a local Core checkout. Resolve with the crates.io dependency before committing `Cargo.lock`.
 - **Formats**: Source of truth is `app/src/formats.rs`. Vanilla textures and demos are embedded from `assets/pack.zip` and `fixtures/demos/`.
 
+## Rune
+
+[Rune](https://github.com/anomalyco/rune) is a native GPU-rendered framework. Rune apps can be ran headless, therefore you don't need computer use for debugging.
+
+- [Docs](https://github.com/anomalyco/rune/blob/dev/crates/rune/README.md)
+- [Components](https://github.com/anomalyco/rune/blob/dev/crates/rune-kit/README.md)
+- [Examples](https://github.com/anomalyco/rune/tree/dev/examples)
+
 ## Commands
 
-| Task | Command |
-| --- | --- |
-| Run the app | `just dev` |
-| Build | `just build` |
-| Tests | `just test` |
-| Local gate | `just check` |
+| Task        | Command      |
+| ----------- | ------------ |
+| Run the app | `just dev`   |
+| Build       | `just build` |
+| Tests       | `just test`  |
+| Local gate  | `just check` |
 
 Platform build, signing, packaging, and apt publishing steps: [`docs/build.md`](./docs/build.md).
 

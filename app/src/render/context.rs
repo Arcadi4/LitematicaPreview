@@ -121,7 +121,13 @@ impl LiveScene {
         Self {
             device: device.clone(),
             queue: queue.clone(),
-            pipelines: Arc::new(Pipelines::new(device, samples, TARGET_FORMAT, DEPTH_FORMAT)),
+            pipelines: Arc::new(Pipelines::new(
+                device,
+                queue,
+                samples,
+                TARGET_FORMAT,
+                DEPTH_FORMAT,
+            )),
             format: TARGET_FORMAT,
             samples,
             scene: None,

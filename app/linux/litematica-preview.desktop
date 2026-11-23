@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Litematica Preview
+GenericName=Minecraft Schematic Viewer
+Comment=View Minecraft schematics and structures offline
+Exec=LitematicaPreview --open %F
+Icon=dev.litematica.preview
+Terminal=false
+Categories=Graphics;3DGraphics;
+MimeType=application/x-litematic;application/x-schematic;application/x-nbt;application/x-snbt;application/x-mcstructure;application/x-mca;application/x-nusn;
+StartupWMClass=LitematicaPreview
+Keywords=minecraft;schematic;litematic;nbt;structure;

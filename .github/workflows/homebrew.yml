@@ -1,0 +1,73 @@
+# The release workflow calls this reusable job explicitly after it creates the
+# GitHub release: a release created with GITHUB_TOKEN does not emit an event that
+# starts another workflow.
+name: Homebrew Cask
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Stable release tag to publish (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+      repair:
+        description: Replace a same-version Cask whose digests differ
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      HOMEBREW_TAP_TOKEN:
+        description: Fine-grained token with Contents read/write on Arcadi4/homebrew-tap
+        required: true
+    outputs:
+      version:
+        description: Published application version
+        value: ${{ jobs.publish.outputs.version }}
+      result:
+        description: One of created, updated, unchanged, or skipped
+        value: ${{ jobs.publish.outputs.result }}
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Stable release tag to publish or repair (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+      repair:
+        description: Replace a same-version Cask whose digests differ
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: homebrew-cask
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish Cask
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.repository == 'Arcadi4/LitematicaPreview'
+    outputs:
+      version: ${{ steps.publish.outputs.version }}
+      result: ${{ steps.publish.outputs.result }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: extractions/setup-just@v4
+
+      - name: Publish Cask to homebrew-tap
+        id: publish
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: just publish-homebrew "$TAG" ${{ inputs.repair && '--repair' || '' }}

@@ -1,11 +1,9 @@
 <div align="center">
   <img src="Assets/icon.png" alt="Litematica Preview icon" width="200"/>
   <h1>Litematica Preview</h1>
-  <p><strong>Minecraft schematic viewer for Windows and Linux</strong></p>
+  <p><strong>Minecraft schematic viewer for Windows, macOS, and Linux</strong></p>
 
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%26%20Linux%20x64-0078d4?style=flat-square)](https://github.com/Arcadi4/LitematicaPreview)
-[![Tauri 2](https://img.shields.io/badge/Tauri-v2-24c8db?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
-[![Fluent UI](https://img.shields.io/badge/Fluent%20UI-React%20v9-0078d4?style=flat-square&logo=react)](https://react.fluentui.dev)
+[![Rune](https://img.shields.io/badge/UI-Rune-5546eb?style=flat-square)](https://github.com/anomalyco/rune)
 [![Nucleation](https://img.shields.io/badge/Powered%20by-Nucleation-ff8c00?style=flat-square)](https://github.com/Schem-at/Nucleation)
 
 </div>
@@ -16,19 +14,14 @@
 
 <!-- README-I18N:END -->
 
-Litematica Preview is a Windows and Linux desktop viewer for Minecraft schematics and structures. It previews `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, `.mca`, and `.nusn` files locally in 3D.
-
-If you are on **macOS**, check out the sister project **[LitematicaQL](https://github.com/Arcadi4/LitematicaQL)** for the same speed and smooth Quick Look integration!
+Litematica Preview is a native desktop viewer for Windows, macOS, and Linux. It previews `.litematic`, `.schem`, `.schematic`, `.nbt`, `.snbt`, `.mcstructure`, `.mca`, and `.nusn` files locally in 3D.
 
 ## Highlights
 
-- Preview eight Minecraft schematic and structure formats offline in textured 3D with native wgpu (Direct3D 12 on Windows, Vulkan on Linux) and Nucleation.
-- Browse a batch or folder: **Open Files** selects several schematics, **Open Folder** opens a directory, and opening one file also lists supported schematics in the same directory (not subfolders). The list sorts alphabetically by filename, the arrow keys switch previews while the preview is focused and stop at the ends, nearby files preload within a bounded internal budget, and thumbnails persist locally keyed by content hash, rendered with bundled textures.
-- Import Minecraft Java resource packs, keep them locally, and arrange an enabled stack by priority. Missing resources fall back to lower packs, then bundled vanilla.
-- Load large `.litematic` files with compact decoding and chunked previews that avoid retaining the full decompressed file.
-- Generate and upload geometry concurrently with 32-block chunks by default, configurable chunk sizes and worker counts, progressive rendering, and cancellable loading progress.
-- Decode in a reusable isolated worker capped at 2 GiB on Windows. Home and cancellation terminate the worker and release its cached resources; wide unchunked models currently use Core 0.1.4's compact-position precision.
-- Choose a Windows installer or portable ZIP, or Linux Debian and AppImage packages.
+- Open several schematics in one window with tabs. Open a folder or a single file to browse nearby schematics with cached thumbnails.
+- Orbit, pan, zoom, or fly through the preview. Set key bindings for both modes and adjust spectator field of view and mouse sensitivity in Preferences.
+- Copy the preview or save it as PNG or JPEG. Stack Minecraft Java resource packs in priority order, with bundled textures as the fallback.
+- Preview large schematics progressively with configurable chunk sizes and worker counts.
 
 ## Install
 
@@ -36,22 +29,28 @@ Download the latest release from the [release page](https://github.com/Arcadi4/L
 
 ### Windows x64
 
-Pick the **installer** (`LitematicaPreview-<version>-x86_64-setup.exe`) for a one-click, per-user setup with updates from the About dialog, or the **portable ZIP** (`LitematicaPreview-<version>-x86_64-portable.zip`): extract it, run `LitematicaPreview.exe`, and keep its files together; portable copies also update in place.
+Choose the **installer** (`LitematicaPreview-<version>-x86_64-setup.exe`) to select an install directory and optionally register file types. Or extract the **portable ZIP** (`LitematicaPreview-<version>-x86_64-portable.zip`) and run `LitematicaPreview.exe`.
 
-Requires Windows 10 or 11 (x64). The installer adds the [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) if missing. After first launch the app asks once to register file types for Open with; it does not change your defaults. Change them later from the top-right menu, or use `.\current\LitematicaPreview.exe --register` / `--unregister` from the extracted portable directory.
+### macOS
+
+Open the `.dmg` for Apple silicon (`aarch64`) or Intel (`x86_64`), then drag Litematica Preview to Applications. You can also install it with `brew install --cask Arcadi4/tap/litematica-preview`. For Finder Quick Look, see [LitematicaQL](https://github.com/Arcadi4/LitematicaQL).
 
 ### Linux x64
 
 Install the **Debian package** (`LitematicaPreview-<version>-x86_64.deb`) with `sudo apt install ./LitematicaPreview-<version>-x86_64.deb`, or make the **AppImage** (`LitematicaPreview-<version>-x86_64.AppImage`) executable with `chmod +x` and run it.
 
-Releases target Ubuntu 22.04 and need GTK 3, WebKitGTK 4.1, a Vulkan loader and compatible driver, and `xdg-utils`; older distributions are not guaranteed to run the release binaries. Without a Vulkan device the app opens but cannot preview schematics. Debian packages declare these dependencies, install a desktop entry and MIME declarations, and leave your default applications unchanged — choose associations in your file manager.
-
-Debian packages built with the apt repository also enroll a signed source and keyring (removed with the package), so later releases arrive through apt:
+Linux requires a compatible Vulkan driver. AppImage updates use the bundled [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate/issues). Debian packages do not update from the app. Stable packages enroll a signed apt source for upgrades:
 
 ```bash
 sudo apt update
 sudo apt install litematica-preview
 ```
+
+### Update sources
+
+Windows and macOS, including Homebrew installations, can check for updates in Preferences. Choose **Cloudflare** if you are in mainland China, or **GitHub** otherwise. Turn off in-app updates to hide the source setting.
+
+To build from source, see [Build and release](docs/build.md).
 
 ## Acknowledgements
 

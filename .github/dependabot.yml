@@ -12,17 +12,6 @@ updates:
       - dependency-name: "nucleation"
       - dependency-name: "schematic-mesher"
 
-  - package-ecosystem: "npm"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    groups:
-      npm:
-        patterns:
-          - "*"
-    ignore:
-      - dependency-name: "vite-plus"
-
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

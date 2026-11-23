@@ -1,9 +1,9 @@
 [package]
 name = "litematica-preview"
 version = "0.7.3"
-rust-version = "1.100"
-edition = "2024"
-publish = false
+rust-version.workspace = true
+edition.workspace = true
+publish.workspace = true
 default-run = "LitematicaPreview"
 
 [[bin]]

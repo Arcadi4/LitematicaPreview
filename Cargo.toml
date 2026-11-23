@@ -2,6 +2,11 @@
 members = ["app", "xtask"]
 resolver = "2"
 
+[workspace.package]
+edition = "2024"
+rust-version = "1.100"
+publish = false
+
 # Debug info is the most expensive part of an unoptimized build. Line tables
 # keep the host's panic locations readable; dependency debug info is never
 # read, so none of it is generated. The release profile is unaffected.

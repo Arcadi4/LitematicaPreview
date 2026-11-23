@@ -5,10 +5,9 @@
 //! one, so a long controls list never becomes one unstructured scroll. A section is a stack of
 //! [`group`]s of [`setting`] rows.
 //!
-//! Key recording uses two paths so it works with every key. The recorder control receives
-//! physical input before focus navigation (so Space, Return and modifiers can be recorded),
-//! and `recording_key` handles the same job from a window-level key handler. Both write through
-//! the same preference API, so a recording cannot change the viewer while it runs.
+//! Key recording uses two paths. The recorder control captures keys focus navigation or button
+//! activation would take first, and `recording_key` records everything else from the window's
+//! logical key event so typed characters follow the active keyboard layout.
 
 use rune::{
     Align, Drag, El, Key, KeyEvent, LiveRegion, Mods, Phase, PhysicalInput, PhysicalKeyCode,
@@ -463,8 +462,42 @@ fn keycap(k: &Kit, label: &str) -> El {
         )
 }
 
-/// Records a key the settings page receives before focus navigation. Returns true while
-/// recording, so the viewer never sees a key meant for the recorder.
+/// Keys focus navigation or button activation would take before the app's key handler, plus
+/// modifiers. Typed characters are left to [`recording_key`] so the active layout decides them.
+fn needs_physical_capture(key: PhysicalKeyCode) -> bool {
+    use PhysicalKeyCode::*;
+    matches!(
+        key,
+        ControlLeft
+            | ControlRight
+            | ShiftLeft
+            | ShiftRight
+            | AltLeft
+            | AltRight
+            | SuperLeft
+            | SuperRight
+            | Fn
+            | FnLock
+            | CapsLock
+            | Space
+            | Enter
+            | NumpadEnter
+            | Tab
+            | Escape
+            | Backspace
+            | ArrowLeft
+            | ArrowRight
+            | ArrowUp
+            | ArrowDown
+            | Home
+            | End
+            | PageUp
+            | PageDown
+    )
+}
+
+/// Records a key the settings page receives before focus navigation. Returns true for the keys
+/// it captures, so the viewer never sees a key meant for the recorder.
 pub fn record_physical_input(s: &mut App, input: &PhysicalInput, tx: &mut Tx) -> bool {
     let Some(action) = s.recording else {
         return false;
@@ -494,6 +527,9 @@ pub fn record_physical_input(s: &mut App, input: &PhysicalInput, tx: &mut Tx) ->
         clear(s, action, tx);
         return true;
     }
+    if !needs_physical_capture(key) {
+        return false;
+    }
     let Some(key) = key_chord_from_physical(key, mods) else {
         return true;
     };
@@ -501,8 +537,8 @@ pub fn record_physical_input(s: &mut App, input: &PhysicalInput, tx: &mut Tx) ->
     true
 }
 
-/// Records a key from the window's key handler. This is the fallback for a recorder that does
-/// not hold focus; the settings page's recorder usually takes the physical path first.
+/// Records a typed key from the window's key handler, using its layout-dependent character.
+/// Physical capture handles the keys focus navigation takes before this handler runs.
 pub fn recording_key(s: &mut App, event: &KeyEvent, tx: &mut Tx) -> bool {
     let Some(action) = s.recording else {
         return false;
@@ -1030,4 +1066,125 @@ fn slider_setting(k: &Kit, slider: Slider) -> El {
                 .a11y_hidden(),
         );
     setting(k, key, label, Some(description), control)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::preferences::{HoldKey, Preferences};
+
+    fn test_app() -> App {
+        let mut app = App::new();
+        app.preferences = Preferences::default();
+        app.preferences_path = std::env::temp_dir().join(format!(
+            "litematica-preview-recording-{}.json",
+            std::process::id()
+        ));
+        app
+    }
+
+    fn key_event(key: Key) -> KeyEvent {
+        KeyEvent {
+            key,
+            mods: Mods::default(),
+        }
+    }
+
+    #[test]
+    fn a_typed_key_records_its_layout_character_not_the_physical_qwerty_one() {
+        let mut app = test_app();
+        app.recording = Some(Action::FlyForward);
+        let mut tx = Tx::default();
+        let w = PhysicalInput::Key {
+            key: PhysicalKeyCode::KeyW,
+            mods: Mods::default(),
+            pressed: true,
+            repeat: false,
+        };
+        assert!(!record_physical_input(&mut app, &w, &mut tx));
+        assert_eq!(app.recording, Some(Action::FlyForward));
+
+        // Colemak types `,` where QWERTY types `w`.
+        let colemak_w = key_event(Key::Text(",".into()));
+        assert!(recording_key(&mut app, &colemak_w, &mut tx));
+
+        let binding = app.preferences.binding(Action::FlyForward);
+        assert!(binding.matches(&colemak_w, &tx));
+        assert!(!binding.matches(&key_event(Key::Text("w".into())), &tx));
+    }
+
+    #[test]
+    fn focus_keys_and_modifiers_still_record_from_physical_input() {
+        let mut app = test_app();
+        let mut tx = Tx::default();
+        app.recording = Some(Action::Fit);
+        let tab = PhysicalInput::Key {
+            key: PhysicalKeyCode::Tab,
+            mods: Mods::default(),
+            pressed: true,
+            repeat: false,
+        };
+        assert!(record_physical_input(&mut app, &tab, &mut tx));
+        assert_eq!(app.recording, None);
+        assert!(
+            app.preferences
+                .binding(Action::Fit)
+                .matches(&key_event(Key::Tab), &tx)
+        );
+
+        app.recording = Some(Action::FlyForward);
+        let shift = PhysicalInput::Key {
+            key: PhysicalKeyCode::ShiftLeft,
+            mods: Mods::default(),
+            pressed: true,
+            repeat: false,
+        };
+        assert!(record_physical_input(&mut app, &shift, &mut tx));
+        assert_eq!(app.recording, None);
+        assert_eq!(
+            app.preferences.binding(Action::FlyForward).label(),
+            KeyChord::Hold(HoldKey::Shift).label()
+        );
+    }
+
+    #[test]
+    fn a_focused_recorder_records_the_logical_key_the_runtime_delivers() {
+        use rune::{Env, Runtime};
+
+        use crate::app::Page;
+
+        let mut app = test_app();
+        app.page = Page::Preferences;
+        app.preferences_section = PreferencesSection::Controls;
+        app.recording = Some(Action::FlyForward);
+        let mut runtime =
+            Runtime::new(app, crate::view::view, (1120.0, 740.0), Env::new(true, 1.0));
+        runtime.on_key = Some(App::key);
+        runtime.frame(0.0);
+        let (x, y) = runtime
+            .find("record-flyForward")
+            .expect("recorder is in view");
+        runtime.pointer_down(x, y);
+        runtime.pointer_up(x, y);
+        runtime.frame(0.0);
+
+        runtime.physical_input(PhysicalInput::Key {
+            key: PhysicalKeyCode::KeyW,
+            mods: Mods::default(),
+            pressed: true,
+            repeat: false,
+        });
+        runtime.key(key_event(Key::Text(",".into())));
+        runtime.frame(0.0);
+
+        assert_eq!(runtime.state.recording, None);
+        let colemak_w = key_event(Key::Text(",".into()));
+        assert!(
+            runtime
+                .state
+                .preferences
+                .binding(Action::FlyForward)
+                .matches(&colemak_w, &Tx::default())
+        );
+    }
 }

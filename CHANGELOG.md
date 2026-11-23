@@ -9,6 +9,10 @@
 - Select GitHub or Cloudflare for in-app updates on Windows and macOS. AppImage uses AppImageUpdate, and apt manages Debian package upgrades.
 - Render the preview with a transparent background. PNG and clipboard exports keep transparency; JPEG exports flatten over the dark backdrop.
 
+## Fixes
+
+- Record key bindings from the active keyboard layout, so non-QWERTY layouts no longer store a QWERTY key.
+
 # v0.7.0
 
 ## Features

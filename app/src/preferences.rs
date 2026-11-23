@@ -860,8 +860,8 @@ fn chord_from_key(key: ChordKey, mods: Mods) -> Chord {
     chord
 }
 
-/// A binding from a physical key, for the settings recorder, which sees keys before focus
-/// navigation and text editing.
+/// A binding from a physical key the settings recorder captures before focus navigation.
+/// Typed characters come from [`key_chord`] instead, so they follow the active layout.
 pub fn key_chord_from_physical(key: PhysicalKeyCode, mods: Mods) -> Option<KeyChord> {
     use PhysicalKeyCode::*;
     let hold = match key {
@@ -875,79 +875,9 @@ pub fn key_chord_from_physical(key: PhysicalKeyCode, mods: Mods) -> Option<KeyCh
     if let Some(hold) = hold {
         return Some(KeyChord::Hold(hold));
     }
-    let mut mods = mods;
-    if mods.shift {
-        if matches!(
-            key,
-            KeyA | KeyB
-                | KeyC
-                | KeyD
-                | KeyE
-                | KeyF
-                | KeyG
-                | KeyH
-                | KeyI
-                | KeyJ
-                | KeyK
-                | KeyL
-                | KeyM
-                | KeyN
-                | KeyO
-                | KeyP
-                | KeyQ
-                | KeyR
-                | KeyS
-                | KeyT
-                | KeyU
-                | KeyV
-                | KeyW
-                | KeyX
-                | KeyY
-                | KeyZ
-        ) {
-            mods.shift = false;
-        } else if let Some(character) = shifted_character(key) {
-            // Record the character Shift types, without Shift, as `Chord` matching expects.
-            mods.shift = false;
-            return Some(KeyChord::Chord(chord_from_key(
-                ChordKey::Char(character),
-                mods,
-            )));
-        }
-    }
     Shortcut::from_physical_key(key, mods)
         .ok()
         .and_then(|shortcut| KeyChord::parse(&shortcut.to_string()))
-}
-
-/// The US-layout character a Shift-held punctuation or digit key types, matching Rune's own
-/// fallback for chords on shifted characters.
-fn shifted_character(key: PhysicalKeyCode) -> Option<char> {
-    use PhysicalKeyCode::*;
-    Some(match key {
-        Backquote => '~',
-        Digit1 => '!',
-        Digit2 => '@',
-        Digit3 => '#',
-        Digit4 => '$',
-        Digit5 => '%',
-        Digit6 => '^',
-        Digit7 => '&',
-        Digit8 => '*',
-        Digit9 => '(',
-        Digit0 => ')',
-        Minus => '_',
-        Equal => '+',
-        BracketLeft => '{',
-        BracketRight => '}',
-        Backslash => '|',
-        Semicolon => ':',
-        Quote => '"',
-        Comma => '<',
-        Period => '>',
-        Slash => '?',
-        _ => return None,
-    })
 }
 
 #[cfg(test)]

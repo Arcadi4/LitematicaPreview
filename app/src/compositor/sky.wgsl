@@ -136,6 +136,12 @@ fn rounded(p: vec2f, r: vec4f, radius: f32) -> f32 {
     let q = abs(p - r.xy - r.zw*0.5) - r.zw*0.5 + radius;
     return length(max(q, vec2f(0.0))) + min(max(q.x,q.y),0.0) - radius;
 }
+fn pane_edge(p: vec2f) -> f32 {
+    return rounded(p,ui.pane,8.0);
+}
+fn pane_coverage(edge: f32) -> f32 {
+    return 1.0-smoothstep(-0.75,0.25,edge);
+}
 fn over(fg: vec4f, bg: vec4f) -> vec4f { return fg + bg * (1.0 - fg.a); }
 fn ink(c: vec3f, alpha: f32) -> vec4f { return vec4f(c * alpha, alpha); }
 
@@ -175,13 +181,15 @@ fn relief(p: vec2f, r: vec4f, radius: f32, height: f32, source: vec2f) -> vec4f 
     let source = ui.pane.xy + size*0.5;
     if v.layer == 1u {
         let p = v.uv * ui.window.xy;
-        if all(p >= ui.pane.xy) && all(p < ui.pane.xy + size) {
+        let edge = pane_edge(p);
+        let inside = pane_coverage(edge);
+        if inside == 1.0 {
             return over(relief(p,ui.selection,6.0,2.0,source), relief(p,ui.dock,10.0,5.0,source));
         }
         let delta = (p-source) / max(180.0,min(size.x,size.y)*0.56);
         let distance = max(0.0,rounded(p,ui.pane,8.0));
         let rim = 0.58*exp(-distance*0.52) + 0.19*exp(-distance/27.0);
-        let spill = ink(light_color(), (0.28 + rim)*exp(-0.91*dot(delta,delta)));
+        let spill = ink(light_color(), (1.0-inside)*(0.28 + rim)*exp(-0.91*dot(delta,delta)));
         return over(relief(p,ui.back,6.0,2.8,source),over(relief(p,ui.nav,6.0,3.2,source),spill));
     }
     let p = v.uv * size;
@@ -200,6 +208,5 @@ fn relief(p: vec2f, r: vec4f, radius: f32, height: f32, source: vec2f) -> vec4f 
         let metal = palette(vec3f(0.45,0.37,0.24),vec3f(0.17,0.21,0.32));
         color = mix(color,metal,1.0-smoothstep(-0.5,0.5,dock));
     }
-    let boundary = rounded(p,vec4f(0,0,size),8.0);
-    return ink(color, 1.0-smoothstep(-0.75,0.25,boundary));
+    return ink(color,pane_coverage(pane_edge(p + ui.pane.xy)));
 }

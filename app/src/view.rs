@@ -14,6 +14,8 @@ use crate::preferences::Action;
 use crate::{preferences_ui, preview, update};
 
 pub(crate) const SCENE_EFFECT: u32 = 1;
+/// Rune Kit's tab pill radius, so the active tab's wash sits flush in its surface.
+const TAB_RADIUS: f32 = 6.0;
 
 const OPEN_SHORTCUT: &str = if cfg!(target_os = "macos") {
     "⌘O"
@@ -165,6 +167,7 @@ fn viewer(s: &App, kit: &Kit) -> El {
 
 fn tabs(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
     let active = s.active_tab().map(|tab| tab.tab_token.as_str());
+    let (surface, edge) = (kit.c.bg_base, kit.c.border_muted);
     let items = s.tabs.iter().map(|tab| {
         let label = title(&tab.path);
         let help = tab.path.display().to_string();
@@ -175,7 +178,14 @@ fn tabs(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
         } else {
             item = item.icon(Icon::Cube.glyph());
         }
-        item.decorate(move |slot, _| slot.key(key).help(help))
+        item.decorate(move |slot, _| {
+            slot.key(key)
+                .help(help)
+                .radius(TAB_RADIUS)
+                .fill(surface)
+                .border(1.0, edge)
+                .clip_rounded(TAB_RADIUS)
+        })
     });
     TabStrip::new("tab-strip", TabOrientation::Horizontal)
         .tabs(items)
@@ -190,6 +200,7 @@ fn tabs(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
         .gap(4.0)
         .row_height(28.0)
         .close_tab_stop(true)
+        .fill(surface)
         .close_icon(Icon::Dismiss.glyph())
         .label("Open schematics")
         .on_select(|s: &mut App, id: &str, tx: &mut Tx| {

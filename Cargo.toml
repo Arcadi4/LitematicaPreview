@@ -21,7 +21,7 @@ lto = "thin"
 codegen-units = 1
 # A bad schematic must not terminate the window or poison the cached pack.
 panic = "unwind"
-strip = "debuginfo"
+strip = "symbols"
 
 # Rune's native backends require the patches from the same revision as its crates.
 [patch.crates-io]

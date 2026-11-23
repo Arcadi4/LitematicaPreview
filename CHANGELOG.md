@@ -8,6 +8,7 @@
 - Choose the install directory in Windows Setup ([#60](https://github.com/Arcadi4/LitematicaPreview/issues/60)).
 - Select GitHub or Cloudflare for in-app updates on Windows and macOS. AppImage uses AppImageUpdate, and apt manages Debian package upgrades.
 - Render the preview with a transparent background. PNG and clipboard exports keep transparency; JPEG exports flatten over the dark backdrop.
+- Strip symbols from release binaries to reduce download size.
 
 ## Fixes
 

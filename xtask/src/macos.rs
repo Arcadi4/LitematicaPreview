@@ -652,7 +652,7 @@ fn write_info_plist(root: &Path, version: &Version, destination: &Path) -> Resul
 }
 
 fn write_icon(root: &Path, destination: &Path) -> Result<()> {
-    let source = root.join("Assets/icon.png");
+    let source = root.join("assets/icon.png");
     if !source.is_file() {
         bail!("missing app icon {}", source.display());
     }

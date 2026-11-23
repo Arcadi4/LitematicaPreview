@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="Assets/icon.png" alt="Litematica Preview 图标" width="200"/>
+  <img src="assets/icon.png" alt="Litematica Preview 图标" width="200"/>
   <h1>Litematica Preview</h1>
   <p><strong>适用于 Windows、macOS 和 Linux 的 Minecraft 投影与结构查看器</strong></p>
 

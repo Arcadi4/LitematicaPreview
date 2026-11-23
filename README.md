@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="Assets/icon.png" alt="Litematica Preview icon" width="200"/>
+  <img src="assets/icon.png" alt="Litematica Preview icon" width="200"/>
   <h1>Litematica Preview</h1>
   <p><strong>Minecraft schematic viewer for Windows, macOS, and Linux</strong></p>
 

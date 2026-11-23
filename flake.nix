@@ -34,7 +34,7 @@
       postInstall = ''
         install -Dm644 app/linux/litematica-preview.desktop "$out/share/applications/dev.litematica.preview.desktop"
         install -Dm644 app/linux/dev.litematica.preview.xml "$out/share/mime/packages/dev.litematica.preview.xml"
-        install -Dm644 Assets/icon.png "$out/share/icons/hicolor/1024x1024/apps/dev.litematica.preview.png"
+        install -Dm644 assets/icon.png "$out/share/icons/hicolor/1024x1024/apps/dev.litematica.preview.png"
         install -Dm644 LICENSE "$out/share/licenses/litematica-preview/LICENSE"
         install -Dm644 app/icons/LICENSE "$out/share/licenses/litematica-preview/Fluent-UI-System-Icons-LICENSE"
         wrapProgram "$out/bin/LitematicaPreview" \

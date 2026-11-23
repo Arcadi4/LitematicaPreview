@@ -4,7 +4,7 @@ Windows, macOS, and Linux desktop app for offline Minecraft schematic viewing.
 
 - **Architecture**: `app/` uses Rune Kit for the UI and Rune for the native window and GPU device. The preview compositor draws into a texture on the same device and samples it at the Rune viewport slot. Only export, clipboard, and thumbnails read pixels back.
 - **Shared Core**: `litematica-preview-core` owns geometry decoding and meshing. Use `LP_CORE_PATH` with the `just` developer recipes to test a local Core checkout. Resolve with the crates.io dependency before committing `Cargo.lock`.
-- **Formats**: Source of truth is `app/src/formats.rs`. Vanilla textures and demos are embedded from `Assets/pack.zip` and `Fixtures/Demos/`.
+- **Formats**: Source of truth is `app/src/formats.rs`. Vanilla textures and demos are embedded from `assets/pack.zip` and `fixtures/demos/`.
 
 ## Commands
 

@@ -235,7 +235,7 @@ fn stage_and_build_deb(
         0o644,
     )?;
     install_file(
-        &root.join("Assets/icon.png"),
+        &root.join("assets/icon.png"),
         &staging
             .join("usr/share/icons/hicolor/1024x1024/apps")
             .join(format!("{ICON_NAME}.png")),
@@ -585,7 +585,7 @@ fn build_appimage(
             .join("usr/share/icons/hicolor/1024x1024/apps")
             .join(format!("{ICON_NAME}.png")),
     ] {
-        install_file(&root.join("Assets/icon.png"), &destination, 0o644)?;
+        install_file(&root.join("assets/icon.png"), &destination, 0o644)?;
     }
     install_file(
         &root.join("app/linux/dev.litematica.preview.xml"),

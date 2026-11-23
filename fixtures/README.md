@@ -1,6 +1,6 @@
 # Demos
 
-`Demos/` contains the seven original LitematicaQL sample builds, copied from
+`demos/` contains the seven original LitematicaQL sample builds, copied from
 commit `4bbeeae4ddfd5d4afa0280ba42f6a01bc8df7ab6`. They were authored by the
 source app's demo generator, not downloaded community builds. The Tauri app
 tracks these generated fixtures directly; they do not need to be regenerated.
@@ -20,7 +20,7 @@ same model seven times would say nothing about the formats:
 
 # Format fixtures
 
-`Formats/` holds one minimal file for each supported file format, used by the
+`formats/` holds one minimal file for each supported file format, used by the
 native format tests. Each is small enough to be read in full, and the tests
 assert what it decodes to rather than any upstream content.
 

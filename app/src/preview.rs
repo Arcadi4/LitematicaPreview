@@ -432,10 +432,10 @@ mod tests {
     #[test]
     fn stack_decodes_and_meshes_a_fixture() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let schematic = root.join("../Fixtures/Formats/Sponge.schem");
+        let schematic = root.join("../fixtures/formats/Sponge.schem");
         let layer = PackLayer {
             name: "Vanilla copy".into(),
-            path: root.join("../Assets/pack.zip"),
+            path: root.join("../assets/pack.zip"),
         };
         let mut packs = PackCache::default();
         let mut batches = 0;

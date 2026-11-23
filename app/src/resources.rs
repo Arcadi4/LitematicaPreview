@@ -10,25 +10,25 @@ macro_rules! asset {
 
 /// The vanilla block resource pack embedded in the executable. Previews never
 /// read an adjacent pack path, so relocatable and self-updated installs work.
-pub const VANILLA_PACK: &[u8] = asset!("Assets/pack.zip");
+pub const VANILLA_PACK: &[u8] = asset!("assets/pack.zip");
 
 const DEMOS: &[(&str, &[u8])] = &[
     (
         "Cottage.litematic",
-        asset!("Fixtures/Demos/Cottage.litematic"),
+        asset!("fixtures/demos/Cottage.litematic"),
     ),
-    ("Archway.schem", asset!("Fixtures/Demos/Archway.schem")),
+    ("Archway.schem", asset!("fixtures/demos/Archway.schem")),
     (
         "Watchtower.schematic",
-        asset!("Fixtures/Demos/Watchtower.schematic"),
+        asset!("fixtures/demos/Watchtower.schematic"),
     ),
-    ("Bloom.nbt", asset!("Fixtures/Demos/Bloom.nbt")),
-    ("Bridge.snbt", asset!("Fixtures/Demos/Bridge.snbt")),
+    ("Bloom.nbt", asset!("fixtures/demos/Bloom.nbt")),
+    ("Bridge.snbt", asset!("fixtures/demos/Bridge.snbt")),
     (
         "Pyramid.mcstructure",
-        asset!("Fixtures/Demos/Pyramid.mcstructure"),
+        asset!("fixtures/demos/Pyramid.mcstructure"),
     ),
-    ("Garden.nusn", asset!("Fixtures/Demos/Garden.nusn")),
+    ("Garden.nusn", asset!("fixtures/demos/Garden.nusn")),
 ];
 
 /// Materializes the embedded demos into `directory` and returns their real

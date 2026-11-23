@@ -359,7 +359,7 @@ mod tests {
 
         let fixture = Fixture::new();
         let library = fixture.library();
-        let bytes = fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../Assets/pack.zip"))
+        let bytes = fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/pack.zip"))
             .expect("bundled resource pack");
         let empty = ResourcePackSource::from_resource_pack(Default::default());
         let pack = library

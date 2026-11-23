@@ -6,7 +6,7 @@ use litematica_preview_core::{MeshBatch, PreviewOptions};
 #[test]
 fn texture_atlas_grows_within_device_limit() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let schematic = root.join("../Fixtures/Formats/Sponge.schem");
+    let schematic = root.join("../fixtures/formats/Sponge.schem");
     let mut packs = PackCache::default();
     let load =
         |packs: &mut PackCache, limit, consume: &mut dyn FnMut(MeshBatch) -> Result<(), String>| {

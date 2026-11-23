@@ -23,6 +23,7 @@ use crate::preferences::{
     Mode, PreviewSettings, Theme, key_chord, key_chord_from_physical,
 };
 use crate::update::{Source, State as UpdateState};
+use crate::view::instant_exit;
 
 /// The widest a section's column grows, its side padding included.
 const CONTENT_WIDTH: f32 = 680.0;
@@ -174,7 +175,9 @@ pub fn view(s: &App, k: &Kit) -> El {
             .child(
                 col()
                     .key(s.preferences_section.title())
-                    .transition(Transition::offset(0.0, 10.0).combined(Transition::opacity()))
+                    .transition(instant_exit(
+                        Transition::offset(0.0, 10.0).combined(Transition::opacity()),
+                    ))
                     .w_full()
                     .max_w(CONTENT_WIDTH)
                     .gap(24.0)

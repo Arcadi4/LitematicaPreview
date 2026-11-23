@@ -1,6 +1,6 @@
 use rune::{
-    Cx, El, Phase, PointerButton, Spring, SpringPair, Stagger, Transition, Tx, col, el, icon, row,
-    text,
+    Cx, Effect, El, Phase, PointerButton, Spring, SpringPair, Stagger, Transition, Tx, col, el,
+    icon, row, text,
 };
 use rune_kit::shell::{
     Page as ShellPage, Sidebar, SidebarHeader, SidebarRow, SidebarToggle, SplitView, TabItem,
@@ -25,6 +25,19 @@ const OVERLAY_SPRINGS: SpringPair = SpringPair::new(Spring::new(0.14, 0.0), Spri
 
 fn reveal() -> Transition {
     Transition::offset(0.0, 10.0).combined(Transition::opacity())
+}
+
+pub(crate) fn instant_exit(enter: Transition) -> Transition {
+    Transition {
+        insertion: enter.insertion,
+        removal: Effect::IDENTITY,
+        pop_layout: enter.pop_layout,
+        springs: SpringPair::new(enter.springs.enter, Spring::NONE),
+    }
+}
+
+fn replace() -> Transition {
+    instant_exit(reveal())
 }
 
 const OPEN_SHORTCUT: &str = if cfg!(target_os = "macos") {
@@ -57,7 +70,7 @@ pub(crate) fn view(s: &App, cx: &mut Cx<App>) -> El {
         Page::TexturePacks => page_shell(cx, &kit, "Texture Packs", texture_packs(s, &kit)),
     }
     .key(page_key)
-    .transition(Transition::opacity().springs(PAGE_SPRINGS))
+    .transition(instant_exit(Transition::opacity().springs(PAGE_SPRINGS)))
     .on_key_up(App::key_up)
     .on_drop_hover(|s: &mut App, inside, _| s.dropping = inside)
     .on_drop_files(|s: &mut App, paths, _| {
@@ -829,7 +842,7 @@ fn texture_packs(s: &App, kit: &Kit) -> El {
         content = content.child(
             col()
                 .key("no-packs")
-                .transition(reveal())
+                .transition(replace())
                 .w_full()
                 .padding(18.0)
                 .gap(4.0)
@@ -864,7 +877,7 @@ fn texture_packs(s: &App, kit: &Kit) -> El {
         content = content.child(
             row()
                 .key(&pack.id)
-                .transition(reveal())
+                .transition(replace())
                 .w_full()
                 .padding(10.0)
                 .gap(8.0)

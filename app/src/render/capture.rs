@@ -143,11 +143,39 @@ impl CaptureJob {
                 "The preview image uses an unsupported target format.",
             )));
         }
-        // Source-over blending leaves coverage in alpha; the stage itself is
-        // opaque and its RGB is already composited over the clear color.
-        for pixel in rgba.as_chunks_mut::<4>().0 {
-            pixel[3] = 255;
-        }
+        unpremultiply(&mut rgba);
         PreviewImage::new(self.width, self.height, rgba).map_err(RenderError::Capture)
+    }
+}
+
+/// Converts premultiplied stage pixels to the straight alpha PNG expects.
+/// Opaque thumbnails pass through unchanged.
+fn unpremultiply(rgba: &mut [u8]) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        let alpha = u16::from(pixel[3]);
+        if alpha == 0 {
+            pixel[..3].fill(0);
+        } else if alpha < 255 {
+            for channel in &mut pixel[..3] {
+                let value = u16::from(*channel) * 255 + alpha / 2;
+                *channel = (value / alpha).min(255) as u8;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unpremultiply;
+
+    #[test]
+    fn readback_recovers_straight_alpha_and_keeps_opaque_pixels() {
+        let mut pixels = vec![
+            64, 0, 0, 128, // half-covered red
+            0, 0, 0, 0, // uncovered
+            200, 40, 40, 255, // opaque
+        ];
+        unpremultiply(&mut pixels);
+        assert_eq!(pixels, [128, 0, 0, 128, 0, 0, 0, 0, 200, 40, 40, 255]);
     }
 }

@@ -20,8 +20,8 @@ use crate::render::upload::{DeviceStatus, UploadPermit, UploadWindow};
 use litematica_preview_core::{MeshBatch, PreviewInfo};
 use std::sync::Arc;
 
-/// Linear-space clear colour, identical to the preview stage background.
-const CLEAR_LINEAR: [f64; 3] = [0.00335, 0.00518, 0.00802];
+/// Opaque backdrop for browser thumbnails, which never expose transparency.
+const THUMBNAIL_CLEAR: [f64; 3] = [0.00335, 0.00518, 0.00802];
 
 /// Format of every presentation and capture target. The Rune compositor
 /// samples the same sRGB view, so its blit pipeline must declare this format.
@@ -247,13 +247,13 @@ impl LiveScene {
         self.model_bounds
     }
 
-    /// Encodes the scene at `size` and returns the sRGB texture view to blit.
+    /// Encodes the scene at `size` and returns the premultiplied sRGB view to
+    /// blit. Empty and loading scenes produce a transparent view, so the UI
+    /// backdrop shows through and readback can preserve coverage.
     ///
     /// The target has `TEXTURE_BINDING | COPY_SRC` usage, so the Rune
     /// compositor samples it directly and exports can still copy it. The
-    /// texture is reused while the size is unchanged. An empty or loading
-    /// scene still returns a cleared view, so the effect slot never shows a
-    /// stale frame.
+    /// texture is reused while the size is unchanged.
     ///
     /// If the size, both camera frames, grid visibility and [`Self::revision`]
     /// all match the last encoded frame, no commands are recorded and the
@@ -423,12 +423,7 @@ impl LiveScene {
                 depth_slice: None,
                 resolve_target: color.map(|_| target),
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: CLEAR_LINEAR[0],
-                        g: CLEAR_LINEAR[1],
-                        b: CLEAR_LINEAR[2],
-                        a: 1.0,
-                    }),
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                     store: if color.is_some() {
                         wgpu::StoreOp::Discard
                     } else {
@@ -556,7 +551,7 @@ fn preferred_samples(device: &wgpu::Device) -> u32 {
     }
 }
 
-/// Renders a scene into a square sRGB texture with the default fitted
+/// Renders a scene into an opaque square sRGB texture with the default fitted
 /// orientation and submits a copy for readback. The grid is omitted: browser
 /// thumbnails show only the model. Camera uniforms are left holding this
 /// canonical frame; callers sharing them with a live view must restore.
@@ -623,9 +618,9 @@ fn capture_scene_thumbnail(
                 resolve_target: multisample.as_ref().map(|_| &view),
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: CLEAR_LINEAR[0],
-                        g: CLEAR_LINEAR[1],
-                        b: CLEAR_LINEAR[2],
+                        r: THUMBNAIL_CLEAR[0],
+                        g: THUMBNAIL_CLEAR[1],
+                        b: THUMBNAIL_CLEAR[2],
                         a: 1.0,
                     }),
                     store: if multisample.is_some() {

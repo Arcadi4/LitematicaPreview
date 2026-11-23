@@ -1,8 +1,8 @@
 //! CPU preview snapshots, encoded as PNG or baseline JPEG.
 //!
-//! Pixels are tightly packed RGBA8 in sRGB. Snapshots are produced by
-//! [`crate::render::capture`]; this module owns file encoding and the
-//! clipboard-format bytes.
+//! Pixels are tightly packed straight-alpha RGBA8 in sRGB. Snapshots are
+//! produced by [`crate::render::capture`]; this module owns file encoding and
+//! the clipboard-format bytes.
 
 use std::ffi::OsStr;
 use std::fs::File;
@@ -14,11 +14,13 @@ use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 
-/// JPEG has no alpha channel; the preview stage is opaque, so quality alone
-/// controls loss.
+/// Quality used for JPEG exports.
 const JPEG_QUALITY: u8 = 90;
 
-/// One opaque preview stage image with four bytes per pixel.
+/// JPEG has no alpha channel; transparent pixels flatten to this backdrop.
+const JPEG_BACKDROP: [u8; 3] = [11, 16, 22];
+
+/// One preview stage image with four bytes per pixel of straight sRGBA.
 pub struct PreviewImage {
     width: u32,
     height: u32,
@@ -119,7 +121,15 @@ fn write_file(
                 .as_chunks::<4>()
                 .0
                 .iter()
-                .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
+                .flat_map(|pixel| {
+                    let alpha = u16::from(pixel[3]);
+                    let flattened: [u8; 3] = std::array::from_fn(|channel| {
+                        let backdrop = u16::from(JPEG_BACKDROP[channel]) * (255 - alpha);
+                        let value = u16::from(pixel[channel]) * alpha + backdrop + 127;
+                        (value / 255).min(255) as u8
+                    });
+                    flattened
+                })
                 .collect();
             JpegEncoder::new_with_quality(&mut writer, JPEG_QUALITY)
                 .write_image(&rgb, image.width, image.height, ExtendedColorType::Rgb8)
@@ -164,7 +174,7 @@ fn image_format(mut path: PathBuf) -> Result<(PathBuf, ImageFormat), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PreviewImage, save};
+    use super::{JPEG_BACKDROP, PreviewImage, save};
     use std::path::PathBuf;
 
     fn test_image() -> PreviewImage {
@@ -221,6 +231,21 @@ mod tests {
         assert!(save(&image, unsupported.clone()).is_err());
         assert_eq!(std::fs::read(unsupported).unwrap(), b"original");
 
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn jpeg_flattens_transparent_pixels_over_the_backdrop() {
+        let directory = scratch_dir();
+        let image = PreviewImage::new(8, 8, [0, 0, 0, 0].repeat(64)).unwrap();
+        let path = directory.join("transparent.jpg");
+        save(&image, path.clone()).unwrap();
+
+        let decoded = image::open(path).unwrap().to_rgb8();
+        let pixel = decoded.get_pixel(4, 4).0;
+        for (actual, expected) in pixel.into_iter().zip(JPEG_BACKDROP) {
+            assert!(actual.abs_diff(expected) <= 8, "flattened pixel: {pixel:?}");
+        }
         std::fs::remove_dir_all(&directory).unwrap();
     }
 }

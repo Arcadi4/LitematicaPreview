@@ -340,9 +340,7 @@ fn dx12_uploaded_meshes_render_with_wgsl_part_layout() {
             match alpha_mode {
                 1 => assert_eq!(pixel, &[0; 4], "Cutout should discard: {pixel:?}"),
                 2 => assert!(
-                    (150..=200).contains(&pixel[0])
-                        && pixel[1..3] == [0, 0]
-                        && (63..=65).contains(&pixel[3]),
+                    (150..=200).contains(&pixel[0]) && pixel[1..3] == [0, 0] && pixel[3] == 128,
                     "Blended part should preserve texture alpha: {pixel:?}"
                 ),
                 _ => assert!(
@@ -381,9 +379,7 @@ fn dx12_uploaded_meshes_render_with_wgsl_part_layout() {
         assert_eq!(pixel(26), &[0; 4], "Cutout must discard, compact={compact}");
         let blended = pixel(38);
         assert!(
-            (150..=200).contains(&blended[0])
-                && blended[1..3] == [0, 0]
-                && (63..=65).contains(&blended[3]),
+            (150..=200).contains(&blended[0]) && blended[1..3] == [0, 0] && blended[3] == 128,
             "Blended must retain its alpha mode: {blended:?}, compact={compact}",
         );
         let reused_opaque = pixel(50);
@@ -419,9 +415,7 @@ fn dx12_uploaded_meshes_render_with_wgsl_part_layout() {
                 continue;
             }
             assert!(
-                (150..=200).contains(&pixel[0])
-                    && pixel[1..3] == [0, 0]
-                    && (63..=65).contains(&pixel[3]),
+                (150..=200).contains(&pixel[0]) && pixel[1..3] == [0, 0] && pixel[3] == 128,
                 "A {label} blended surface must blend once: {pixel:?}, compact={compact}",
             );
             println!("Rendered {label} blend: compact={compact}");

@@ -239,7 +239,8 @@ impl Pipelines {
             mask: !0,
             alpha_to_coverage_enabled: false,
         };
-        // Straight-alpha source-over blending into the linear-space target.
+        // Straight-alpha source-over: stored RGB is premultiplied and alpha
+        // is coverage, so the view composites over any backdrop.
         let blend = wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::SrcAlpha,
@@ -247,7 +248,7 @@ impl Pipelines {
                 operation: wgpu::BlendOperation::Add,
             },
             alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::SrcAlpha,
+                src_factor: wgpu::BlendFactor::One,
                 dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
                 operation: wgpu::BlendOperation::Add,
             },

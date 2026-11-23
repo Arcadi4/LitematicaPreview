@@ -1,6 +1,6 @@
 use rune::{
-    Cx, Effect, El, Phase, PointerButton, Spring, SpringPair, Stagger, Transition, Tx, col, el,
-    icon, row, text,
+    Cx, Edge, Effect, El, Phase, PointerButton, Spring, SpringPair, Stagger, Transition, Tx, col,
+    el, icon, row, text,
 };
 use rune_kit::shell::{
     Page as ShellPage, Sidebar, SidebarHeader, SidebarRow, SidebarToggle, SplitView, TabItem,
@@ -20,6 +20,10 @@ use crate::{preferences_ui, preview, update};
 pub(crate) const SCENE_EFFECT: u32 = 1;
 /// Rune Kit's tab pill radius, so the active tab's wash sits flush in its surface.
 const TAB_RADIUS: f32 = 6.0;
+/// Rune Kit's title bar height, Large toggle size, and the gap to a control beside it.
+const TITLEBAR_HEIGHT: f32 = 48.0;
+const TOGGLE_SIZE: f32 = 28.0;
+const TOGGLE_GAP: f32 = 8.0;
 const PAGE_SPRINGS: SpringPair = SpringPair::new(Spring::new(0.2, 0.0), Spring::new(0.16, 0.0));
 const OVERLAY_SPRINGS: SpringPair = SpringPair::new(Spring::new(0.14, 0.0), Spring::new(0.10, 0.0));
 
@@ -402,16 +406,6 @@ fn sidebar(s: &App, kit: &Kit) -> El {
                     .key("sidebar-open-folder"),
             );
     }
-    if s.nearby().is_some() {
-        sidebar = sidebar.footer(
-            SidebarRow::new("Home")
-                .icon(Icon::Home.glyph())
-                .height(32.0)
-                .on_select(|s: &mut App, _| s.home())
-                .build(kit)
-                .key("sidebar-home"),
-        );
-    }
     sidebar = sidebar
         .footer(
             SidebarRow::new("Texture Packs")
@@ -430,12 +424,31 @@ fn sidebar(s: &App, kit: &Kit) -> El {
                 .build(kit)
                 .key("sidebar-preferences"),
         );
-    col()
+    let mut browser = col()
         .key("schematic-browser")
         .w_full()
         .h_full()
         .min_h(0.0)
-        .child(sidebar.build(kit))
+        .child(sidebar.build(kit));
+    if s.nearby().is_some() {
+        browser = browser.child(
+            IconButton::new(Icon::Home.glyph())
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(ControlSize::Large)
+                .label("Home")
+                .help("Return to home")
+                .on_press(|s: &mut App| s.home())
+                .build(kit)
+                .key("sidebar-home")
+                .pin(
+                    None,
+                    Some(-(TITLEBAR_HEIGHT + TOGGLE_SIZE) / 2.0),
+                    Some(TOGGLE_SIZE + TOGGLE_GAP),
+                    None,
+                ),
+        );
+    }
+    browser
 }
 
 fn browse_row(s: &App, at: usize, kit: &Kit) -> El {
@@ -741,7 +754,8 @@ fn toasts(s: &App, kit: &Kit) -> El {
         region = region.toast(
             Toast::new("notice", notice.as_str())
                 .on_close(|s: &mut App| s.notice = None)
-                .build(kit),
+                .build(kit)
+                .transition(Transition::move_edge(Edge::Trailing)),
         );
     }
     if s.page == Page::Viewer
@@ -754,7 +768,8 @@ fn toasts(s: &App, kit: &Kit) -> El {
                     s.preferences_section = preferences_ui::PreferencesSection::Updates;
                     s.open_page(Page::Preferences);
                 })
-                .build(kit),
+                .build(kit)
+                .transition(Transition::move_edge(Edge::Trailing)),
         );
     }
     region.build(kit)

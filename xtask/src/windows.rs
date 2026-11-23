@@ -164,13 +164,15 @@ pub fn run(args: &[OsString]) -> Result<()> {
         .context("create the installer license file")?;
     license_file.as_file_mut().write_all(&fs::read(&license)?)?;
     license_file.as_file_mut().flush()?;
+    // Windows opens temp files exclusively; ISCC can read the license only after the handle closes.
+    let license_file = license_file.into_temp_path();
     let status = Command::new(&iscc)
         .current_dir(&root)
         .arg(format!("/DAppVersion={version_text}"))
         .arg(format!("/DNumericVersion={numeric_version}"))
         .arg(format!("/DStageDir={}", stage.display()))
         .arg(format!("/DOutputDir={}", artifacts.display()))
-        .arg(format!("/DLicenseFile={}", license_file.path().display()))
+        .arg(format!("/DLicenseFile={}", license_file.display()))
         .arg(&script)
         .status()
         .with_context(|| format!("run {}", iscc.display()))?;

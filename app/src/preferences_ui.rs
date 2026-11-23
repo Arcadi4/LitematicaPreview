@@ -18,8 +18,8 @@ use rune_kit::{Button, ButtonVariant, ControlSize, Divider, Kit, SegmentedContro
 use crate::app::App;
 use crate::icons::Icon;
 use crate::preferences::{
-    Action, Conflict, KeyChord, MAX_FOV_DEGREES, MAX_SENSITIVITY, MIN_FOV_DEGREES, MIN_SENSITIVITY,
-    Mode, PreviewSettings, Theme, key_chord, key_chord_from_physical,
+    key_chord, key_chord_from_physical, Action, Conflict, KeyChord, Mode, PreviewSettings, Theme,
+    MAX_FOV_DEGREES, MAX_SENSITIVITY, MIN_FOV_DEGREES, MIN_SENSITIVITY,
 };
 use crate::update::{Source, State as UpdateState};
 use crate::view::instant_exit;
@@ -305,8 +305,7 @@ fn appearance(s: &App, k: &Kit) -> El {
         Theme::Light => 1,
         Theme::Dark => 2,
     };
-    let theme_description =
-        "Follow the system appearance, or pick a theme. The preview background stays dark.";
+    let theme_description = "Choose between light/dark theme.";
     let theme = SegmentedControl::new(&["System", "Light", "Dark"], Some(selected))
         .label("Theme")
         .width(Some(232.0))
@@ -324,12 +323,7 @@ fn appearance(s: &App, k: &Kit) -> El {
     let footer = col()
         .items_center()
         .gap(9.0)
-        .child(col().key(THEME_DOCK).px(5.0).py(5.0).child(theme))
-        .child(
-            text("The schematic preview stays dark.")
-                .font(k.ty.caption())
-                .color(rune::Color::WHITE),
-        );
+        .child(col().key(THEME_DOCK).px(5.0).py(5.0).child(theme));
     col()
         .w_full()
         .h_full()

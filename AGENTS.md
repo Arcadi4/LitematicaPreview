@@ -8,7 +8,7 @@ Windows, macOS, and Linux desktop app for offline Minecraft schematic viewing.
 
 ## Rune
 
-[Rune](https://github.com/anomalyco/rune) is a native GPU-rendered framework. Rune apps can be ran headless, therefore you don't need computer use for debugging.
+[Rune](https://github.com/anomalyco/rune) is a native GPU-rendered UI framework. Rune apps can be ran headless, therefore you don't need computer use for debugging.
 
 - [Docs](https://github.com/anomalyco/rune/blob/dev/crates/rune/README.md)
 - [Components](https://github.com/anomalyco/rune/blob/dev/crates/rune-kit/README.md)
@@ -24,6 +24,10 @@ Windows, macOS, and Linux desktop app for offline Minecraft schematic viewing.
 | Local gate  | `just check` |
 
 Platform build, signing, packaging, and apt publishing steps: [`docs/build.md`](./docs/build.md).
+
+## Design
+
+The app uses Fluent UI's icons. We vendor them in the repo since JavaScript is not involved. Feel free to pull new icons if your work requires them.
 
 ## Architecture & Operational Constraints
 

@@ -12,6 +12,11 @@ macro_rules! asset {
 /// read an adjacent pack path, so relocatable and self-updated installs work.
 pub const VANILLA_PACK: &[u8] = asset!("assets/pack.zip");
 
+/// Mojang sun and full moon, cropped to their luminous discs from the Minecraft Wiki
+/// [sun](https://minecraft.wiki/w/File:EnvSprite_sun.png) and
+/// [moon](https://minecraft.wiki/w/File:EnvSprite_full-moon.png) sprites.
+pub(crate) const SKY_BODIES: &[u8] = asset!("assets/sky-bodies.png");
+
 pub(crate) const APP_ICON: &[u8] = asset!("assets/icon.png");
 
 const DEMOS: &[(&str, &[u8])] = &[

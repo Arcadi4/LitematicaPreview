@@ -58,11 +58,13 @@ fn stars(p: vec2f) -> f32 {
 }
 
 fn shafts(angle: f32) -> f32 {
-    let a = angle + 0.023*sin(ui.window.w*0.21 + 2.0*angle)
-                  + 0.014*sin(ui.window.w*0.37 - 3.0*angle);
+    let t = ui.window.w * mix(1.0,0.65,ui.window.z);
+    let drift = 0.040*sin(0.34*t + 2.0*angle) + 0.019*sin(0.46*t - 3.0*angle);
+    let a = angle + drift;
     let fan = 0.5 + 0.5 * sin(17.0*a + 2.8*sin(5.0*a) + 1.1*cos(9.0*a));
     let streak = 0.5 + 0.5 * cos(31.0*a + 1.7*sin(7.0*a));
-    return 0.54*pow(fan, 2.8) + 0.28*pow(streak, 7.0);
+    let transmission = 1.0 + 0.11*sin(0.51*t + 4.0*angle);
+    return transmission * (0.54*pow(fan, 2.8) + 0.28*pow(streak, 7.0));
 }
 
 fn sky(uv: vec2f, p: vec2f, body_size: f32) -> vec3f {

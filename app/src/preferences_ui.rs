@@ -15,9 +15,7 @@ use rune::{
     Shadow, TextStyle, Tx, col, el, icon, row, text,
 };
 use rune_kit::shell::{Sidebar, SidebarRow};
-use rune_kit::{
-    Button, ButtonVariant, ControlSize, Divider, Keybind, Kit, SegmentedControl, Switch,
-};
+use rune_kit::{Button, ButtonVariant, ControlSize, Divider, Kit, SegmentedControl, Switch};
 
 use crate::app::App;
 use crate::icons::Icon;
@@ -391,12 +389,12 @@ fn binding_row(s: &App, k: &Kit, action: Action) -> El {
             "Press to record a key for this action."
         })
         .focusable(true)
-        .h(26.0)
+        .h(28.0)
         .min_w(64.0)
-        .px(6.0)
+        .px(3.0)
         // Hangs past the row's inset by its own padding, so the keycaps line up with the other
         // rows' controls.
-        .mr(-6.0)
+        .mr(-3.0)
         .justify_end()
         .center_y()
         .radius(k.radius.md)
@@ -437,11 +435,32 @@ fn binding_row(s: &App, k: &Kit, action: Action) -> El {
             row()
                 .gap(6.0)
                 .center_y()
-                .children(keys.iter().map(|key| Keybind::new(&[key]).build(k)))
+                .children(keys.iter().map(|key| keycap(k, key)))
         }
         .a11y_hidden(),
     );
     setting(k, action.key(), action.title(), None, control)
+}
+
+/// [`rune_kit::Keybind`]'s keycap at row scale: here the keys are a row's value, not a hint
+/// beside a command.
+fn keycap(k: &Kit, label: &str) -> El {
+    row()
+        .min_w(22.0)
+        .h(22.0)
+        .px(6.0)
+        .center()
+        .radius(k.radius.sm)
+        .fill(k.c.layer_03)
+        .child(
+            text(label)
+                .font(TextStyle {
+                    size: 12.0,
+                    line_height: 14.0,
+                    ..k.ty.small_medium
+                })
+                .color(k.c.text_base),
+        )
 }
 
 /// Records a key the settings page receives before focus navigation. Returns true while

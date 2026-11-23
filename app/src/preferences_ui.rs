@@ -18,8 +18,8 @@ use rune_kit::{Button, ButtonVariant, ControlSize, Divider, Kit, SegmentedContro
 use crate::app::App;
 use crate::icons::Icon;
 use crate::preferences::{
-    key_chord, key_chord_from_physical, Action, Conflict, KeyChord, Mode, PreviewSettings, Theme,
-    MAX_FOV_DEGREES, MAX_SENSITIVITY, MIN_FOV_DEGREES, MIN_SENSITIVITY,
+    Action, Conflict, KeyChord, MAX_FOV_DEGREES, MAX_SENSITIVITY, MIN_FOV_DEGREES, MIN_SENSITIVITY,
+    Mode, PreviewSettings, Theme, key_chord, key_chord_from_physical,
 };
 use crate::update::{Source, State as UpdateState};
 use crate::view::instant_exit;

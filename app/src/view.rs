@@ -76,12 +76,19 @@ pub(crate) fn view(s: &App, cx: &mut Cx<App>) -> El {
 }
 
 fn split(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
-    let main = viewer(s, cx, kit);
-    let mut toolbar = Toolbar::new().title(
-        s.active_tab()
-            .map(|tab| title(&tab.path))
-            .unwrap_or_else(|| "Litematica Preview".into()),
-    );
+    let main = viewer(s, kit);
+    let mut toolbar = Toolbar::new();
+    if !s.tabs.is_empty() {
+        let mut strip = tabs(s, cx, kit);
+        if s.sidebar.is_open() {
+            // SplitView pads its toolbar 12 past the sidebar, where the panel sits flush.
+            strip = strip.ml(-12.0);
+            if let Some([width, _]) = cx.layout_size("main-pane") {
+                strip = strip.w(width).min_w(width);
+            }
+        }
+        toolbar = toolbar.leading(strip);
+    }
     if !s.sidebar.is_open() {
         toolbar = toolbar
             .trailing(
@@ -105,12 +112,11 @@ fn split(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
             );
     }
     let sidebar = sidebar(s, kit);
-    SplitView::new(main)
+    let mut split = SplitView::new(main)
         .sidebar(&s.sidebar, |s: &mut App| &mut s.sidebar, sidebar)
         .toolbar(toolbar)
         .titlebar_inset(cx.titlebar_inset())
         .frame_inset(8.0)
-        .toolbar_in_panel()
         .sidebar_padding(16.0, 12.0)
         .sidebar_toggle(
             SidebarToggle::new()
@@ -120,40 +126,41 @@ fn split(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
                 .in_header()
                 .shortcut(""),
         )
-        .reduced_motion(cx.is_reduced_motion())
-        .build(kit)
+        .reduced_motion(cx.is_reduced_motion());
+    if s.tabs.is_empty() {
+        split = split.toolbar_in_panel();
+    }
+    split.build(kit)
 }
 
-fn viewer(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
-    let mut main = col().key("viewer").w_full().h_full().min_h(0.0);
+fn viewer(s: &App, kit: &Kit) -> El {
+    let content = if s.active.is_none() {
+        welcome(s, kit)
+    } else {
+        stage(s, kit)
+    };
+    let mut status = col()
+        .key("preview-status")
+        .absolute(12.0, 12.0)
+        .max_w(420.0)
+        .gap(8.0)
+        .items_start();
     if let Some(notice) = notice(s, kit) {
-        main = main.child(notice);
+        status = status.child(notice);
     }
     if matches!(s.update_state, update::State::Available(_)) && s.preferences.auto_update {
-        main = main.child(update_notice(kit));
-    }
-    if !s.tabs.is_empty() {
-        main = main.child(tab_band(s, cx, kit));
-    }
-    if s.active.is_none() {
-        main = main.child(welcome(s, kit));
-    } else {
-        main = main.child(stage(s, kit));
+        status = status.child(update_notice(kit));
     }
     if s.active.is_some() {
-        main = main.child(status_bar(s, kit));
+        status = status.child(stage_caption(s, kit).unwrap_or_else(|| preview_metadata(s, kit)));
     }
-    main
-}
-
-fn tab_band(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
-    el().key("tab-band")
+    col()
+        .key("viewer")
         .w_full()
-        .px(8.0)
-        .pt(6.0)
-        .pb(2.0)
-        .border_sides([0.0, 0.0, 0.5, 0.0], kit.c.border_muted)
-        .child(tabs(s, cx, kit))
+        .h_full()
+        .min_h(0.0)
+        .child(content)
+        .child(status)
 }
 
 fn tabs(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
@@ -184,7 +191,6 @@ fn tabs(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
         .row_height(28.0)
         .close_tab_stop(true)
         .close_icon(Icon::Dismiss.glyph())
-        .fill(kit.c.bg_base)
         .label("Open schematics")
         .on_select(|s: &mut App, id: &str, tx: &mut Tx| {
             if let Ok(id) = id.parse::<u64>() {
@@ -444,7 +450,6 @@ fn stage(s: &App, kit: &Kit) -> El {
         .w_full()
         .grow(1.0)
         .min_h(0.0)
-        .fill(kit.c.bg_deep)
         .pointer_buttons([PointerButton::Middle])
         .on_drag(|s: &mut App, drag, tx| {
             let now = [drag.dx, drag.dy];
@@ -503,26 +508,27 @@ fn stage(s: &App, kit: &Kit) -> El {
             }
             true
         });
-    let mut panel = col()
-        .key("preview-panel")
-        .grow(1.0)
+    col()
+        .key("preview")
+        .w_full()
+        .h_full()
         .min_h(0.0)
-        .mx(8.0)
-        .mt(8.0)
-        .radius(kit.radius.lg)
-        .border(1.0, kit.c.border_muted)
-        .clip_rounded(kit.radius.lg)
-        .fill(kit.c.bg_deep)
-        .child(model);
-    if let Some(caption) = stage_caption(s, kit) {
-        panel = panel.child(caption);
-    }
-    panel.child(preview_controls(s, kit))
+        .child(model)
+        .child(export_controls(s, kit))
+        .child(
+            row()
+                .key("preview-footer")
+                .pin(Some(8.0), None, Some(12.0), Some(8.0))
+                .gap(12.0)
+                .center_y()
+                .child(view_controls(s, kit))
+                .child(el().grow(1.0).a11y_hidden())
+                .child(navigation_hint(s, kit)),
+        )
 }
 
 fn stage_caption(s: &App, kit: &Kit) -> Option<El> {
     let mut caption = row()
-        .absolute(12.0, 12.0)
         .padding(8.0)
         .gap(8.0)
         .center_y()
@@ -576,19 +582,13 @@ fn stage_caption(s: &App, kit: &Kit) -> Option<El> {
     Some(caption)
 }
 
-fn preview_controls(s: &App, kit: &Kit) -> El {
+fn view_controls(s: &App, kit: &Kit) -> El {
     let loaded = matches!(s.preview, Preview::Ready(_));
     let shortcut = |action: Action| s.preferences.binding(action).label();
-    let mut bar = row()
-        .key("preview-controls")
-        .w_full()
-        .h(34.0)
-        .px(6.0)
+    row()
+        .key("view-controls")
         .gap(2.0)
         .center_y()
-        .fill(kit.c.bg_base)
-        .border_sides([0.5, 0.0, 0.0, 0.0], kit.c.border_muted);
-    bar = bar
         .child(
             IconButton::new(Icon::FullScreen.glyph())
                 .variant(IconButtonVariant::GhostMuted)
@@ -678,7 +678,15 @@ fn preview_controls(s: &App, kit: &Kit) -> El {
                 .build(kit)
                 .key("spectator"),
         )
-        .child(el().grow(1.0).a11y_hidden())
+}
+
+fn export_controls(s: &App, kit: &Kit) -> El {
+    let loaded = matches!(s.preview, Preview::Ready(_));
+    row()
+        .key("export-controls")
+        .pin(None, Some(8.0), Some(8.0), None)
+        .gap(2.0)
+        .center_y()
         .child(
             IconButton::new(Icon::Copy.glyph())
                 .variant(IconButtonVariant::GhostMuted)
@@ -700,11 +708,10 @@ fn preview_controls(s: &App, kit: &Kit) -> El {
                 .on_press_tx(App::save_image)
                 .build(kit)
                 .key("save-image"),
-        );
-    bar
+        )
 }
 
-fn status_bar(s: &App, kit: &Kit) -> El {
+fn preview_metadata(s: &App, kit: &Kit) -> El {
     let counts = match &s.preview {
         Preview::Ready(data) => format!(
             "{} blocks  ·  {} triangles",
@@ -714,34 +721,24 @@ fn status_bar(s: &App, kit: &Kit) -> El {
         Preview::Failed(_) => "Preview unavailable".into(),
         Preview::None => "Preparing preview…".into(),
     };
+    text(counts)
+        .key("preview-metadata")
+        .font(kit.ty.small)
+        .color(kit.c.text_weak)
+}
+
+fn navigation_hint(s: &App, kit: &Kit) -> El {
     let hint = if s.spectator {
         "Spectator · move the pointer to look around"
     } else {
         "Orbit: drag · Pan: Shift-drag · Zoom: scroll"
     };
-    row()
-        .key("status-bar")
-        .w_full()
-        .h(26.0)
-        .px(12.0)
-        .gap(12.0)
-        .center_y()
-        .child(
-            text(counts)
-                .key("preview-metadata")
-                .font(kit.ty.small)
-                .color(kit.c.text_weak)
-                .grow(1.0)
-                .min_w(0.0)
-                .truncate(),
-        )
-        .child(
-            text(hint)
-                .font(kit.ty.small)
-                .color(kit.c.text_faint)
-                .min_w(0.0)
-                .truncate(),
-        )
+    text(hint)
+        .key("navigation-hint")
+        .font(kit.ty.small)
+        .color(kit.c.text_faint)
+        .min_w(0.0)
+        .truncate()
 }
 
 fn notice(s: &App, kit: &Kit) -> Option<El> {
@@ -749,8 +746,6 @@ fn notice(s: &App, kit: &Kit) -> Option<El> {
     Some(
         row()
             .key("notice")
-            .mx(8.0)
-            .mt(8.0)
             .padding(8.0)
             .gap(8.0)
             .radius(6.0)
@@ -778,8 +773,6 @@ fn notice(s: &App, kit: &Kit) -> Option<El> {
 
 fn update_notice(kit: &Kit) -> El {
     row()
-        .mx(8.0)
-        .mt(8.0)
         .padding(8.0)
         .gap(8.0)
         .radius(6.0)
@@ -808,7 +801,7 @@ fn update_notice(kit: &Kit) -> El {
 fn page_shell(s: &App, cx: &mut Cx<App>, kit: &Kit, title: &str, body: El) -> El {
     let mut content = col().key("page").w_full().h_full().min_h(0.0);
     if let Some(notice) = notice(s, kit) {
-        content = content.child(notice);
+        content = content.child(notice.mx(8.0).mt(8.0));
     }
     content = content.child(col().w_full().grow(1.0).min_h(0.0).child(body));
     let back = Button::new("Back")
@@ -824,7 +817,6 @@ fn page_shell(s: &App, cx: &mut Cx<App>, kit: &Kit, title: &str, body: El) -> El
         .leading(back)
         .titlebar_inset(cx.titlebar_inset())
         .frame_inset(8.0)
-        .toolbar_in_panel()
         .build(kit)
 }
 

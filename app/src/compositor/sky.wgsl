@@ -4,7 +4,6 @@ struct Layout {
     dock: vec4f,
     selection: vec4f,
     nav: vec4f,
-    back: vec4f,
     aim: vec4f,
 }
 @group(0) @binding(0) var<uniform> ui: Layout;
@@ -223,7 +222,7 @@ fn relief(p: vec2f, r: vec4f, radius: f32, height: f32, source: vec2f) -> vec4f 
         let distance = max(0.0,edge);
         let rim = 0.58*exp(-distance*0.52) + 0.19*exp(-distance/27.0);
         let spill = ink(light_color(), (1.0-inside)*(0.28 + rim)*exp(-0.91*dot(delta,delta)));
-        return over(relief(p,ui.back,6.0,2.8,source),over(relief(p,ui.nav,6.0,3.2,source),spill));
+        return over(relief(p,ui.nav,6.0,3.2,source),spill);
     }
     let p = v.uv * size;
     let centered = v.ray.xy/v.ray.z * max(size.x,size.y);

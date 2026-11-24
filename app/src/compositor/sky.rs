@@ -77,7 +77,7 @@ impl Sky {
         });
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("celestial layout"),
-            size: size_of::<[[f32; 4]; 7]>() as u64,
+            size: size_of::<[[f32; 4]; 6]>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -179,7 +179,6 @@ impl Sky {
             rect(THEME_DOCK),
             rect("theme-dock/indicator"),
             rect("section-Appearance"),
-            rect("back"),
             [self.aim[0], self.aim[1], 0.0, 0.0],
         ];
         let bytes = uniforms.map(|v| v.map(f32::to_ne_bytes));

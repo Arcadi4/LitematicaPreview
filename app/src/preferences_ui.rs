@@ -9,8 +9,8 @@
 //! logical key event so typed characters follow the active keyboard layout.
 
 use rune::{
-    col, el, icon, row, text, Align, Anim, Drag, El, Key, KeyEvent, LiveRegion, Mods, Phase,
-    PhysicalInput, PhysicalKeyCode, Shadow, Spring, SpringPair, TextStyle, Transition, Tx,
+    Align, Anim, Drag, El, Key, KeyEvent, LiveRegion, Mods, Phase, PhysicalInput, PhysicalKeyCode,
+    Shadow, Spring, SpringPair, TextStyle, Transition, Tx, col, el, icon, row, text,
 };
 use rune_kit::shell::{Sidebar, SidebarRow};
 use rune_kit::{Button, ButtonVariant, ControlSize, Divider, Kit, SegmentedControl, Switch};
@@ -1376,10 +1376,11 @@ mod tests {
         };
         assert!(record_physical_input(&mut app, &tab, &mut tx));
         assert_eq!(app.recording, None);
-        assert!(app
-            .preferences
-            .binding(Action::Fit)
-            .matches(&key_event(Key::Tab), &tx));
+        assert!(
+            app.preferences
+                .binding(Action::Fit)
+                .matches(&key_event(Key::Tab), &tx)
+        );
 
         app.recording = Some(Action::FlyForward);
         let shift = PhysicalInput::Key {
@@ -1428,11 +1429,13 @@ mod tests {
 
         assert_eq!(runtime.state.recording, None);
         let colemak_w = key_event(Key::Text(",".into()));
-        assert!(runtime
-            .state
-            .preferences
-            .binding(Action::FlyForward)
-            .matches(&colemak_w, &Tx::default()));
+        assert!(
+            runtime
+                .state
+                .preferences
+                .binding(Action::FlyForward)
+                .matches(&colemak_w, &Tx::default())
+        );
     }
 
     #[test]

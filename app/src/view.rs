@@ -748,31 +748,36 @@ fn preview_metadata(s: &App, kit: &Kit) -> El {
         .color(kit.c.text_weak)
 }
 
+fn toast_entry(toast: El) -> El {
+    toast
+        .transition(Transition::move_edge(Edge::Trailing))
+        .animated_changes()
+}
+
 fn toasts(s: &App, kit: &Kit) -> El {
     let mut region = ToastRegion::new();
     if let Some(notice) = &s.notice {
-        region = region.toast(
+        region = region.toast(toast_entry(
             Toast::new("notice", notice.as_str())
                 .on_close(|s: &mut App| s.notice = None)
-                .build(kit)
-                .transition(Transition::move_edge(Edge::Trailing)),
-        );
+                .build(kit),
+        ));
     }
     if s.page == Page::Viewer
         && matches!(s.update_state, update::State::Available(_))
         && s.preferences.auto_update
     {
-        region = region.toast(
+        region = region.toast(toast_entry(
             Toast::new("update-available", "An update is available.")
                 .action(kit, "View update", true, |s: &mut App, _: &mut Tx| {
                     s.preferences_section = preferences_ui::PreferencesSection::Updates;
                     s.open_page(Page::Preferences);
                 })
-                .build(kit)
-                .transition(Transition::move_edge(Edge::Trailing)),
-        );
+                .build(kit),
+        ));
     }
-    region.build(kit)
+    // The region's height lands at once, so the toast's own entrance stays horizontal.
+    region.build(kit).instant_changes()
 }
 
 /// The preferences page keeps the viewer's frame: its sections take the window's sidebar, at

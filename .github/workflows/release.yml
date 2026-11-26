@@ -114,23 +114,9 @@ jobs:
         shell: pwsh
         run: choco install innosetup --no-progress --yes
 
-      - name: Install Artifact Signing client
-        if: env.ARTIFACT_SIGNING == 'true'
-        env:
-          ARTIFACT_SIGNING: ${{ secrets.LITEMATICA_WINDOWS_AZURE_SIGN_METADATA != '' }}
+      - name: Build installer and portable package
         shell: pwsh
-        run: nuget install Microsoft.ArtifactSigning.Client -Version 1.0.151 -ExcludeVersion -NonInteractive -OutputDirectory "${{ runner.temp }}/artifact-signing"
-
-      - name: Build signed installer and portable package
-        shell: pwsh
-        env:
-          LITEMATICA_WINDOWS_SIGN_PARAMS: ${{ secrets.LITEMATICA_WINDOWS_SIGN_PARAMS }}
-          LITEMATICA_WINDOWS_AZURE_SIGN_METADATA: ${{ secrets.LITEMATICA_WINDOWS_AZURE_SIGN_METADATA }}
-          LITEMATICA_WINDOWS_AZURE_SIGN_DLIB: ${{ runner.temp }}/artifact-signing/Microsoft.ArtifactSigning.Client/bin/x64/Azure.CodeSigning.Dlib.dll
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-        run: just package-windows
+        run: just package-windows --allow-unsigned
 
       - uses: actions/upload-artifact@v7
         with:
@@ -164,17 +150,10 @@ jobs:
       - uses: extractions/setup-just@v4
 
       - name: Build and package both architectures
-        env:
-          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          LP_MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
-          LP_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
-          LP_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-          LP_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
         shell: bash
         run: |
-          just package-macos aarch64
-          just package-macos x86_64
+          just package-macos aarch64 --allow-unsigned
+          just package-macos x86_64 --allow-unsigned
 
       - uses: actions/upload-artifact@v7
         with:

@@ -22,7 +22,7 @@ Use the `x86_64-pc-windows-msvc` toolchain, Visual Studio C++ Build Tools, Windo
 just package-windows
 ```
 
-The command builds a per-user installer with an editable destination, a portable ZIP, and the standalone update executable in `artifacts/`. For local packaging tests, pass `--allow-unsigned`. Releases require signing. Configure `LITEMATICA_WINDOWS_SIGN_PARAMS` for SignTool, or configure `LITEMATICA_WINDOWS_AZURE_SIGN_METADATA` with `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_CLIENT_SECRET` for Azure Artifact Signing. For local Artifact Signing, set `LITEMATICA_WINDOWS_AZURE_SIGN_DLIB` to the x64 `Azure.CodeSigning.Dlib.dll` from `Microsoft.ArtifactSigning.Client`.
+The command builds a per-user installer with an editable destination, a portable ZIP, and the standalone update executable in `artifacts/`. For local packaging tests and the current release workflow, pass `--allow-unsigned`; published Windows artifacts are unsigned until signing credentials are configured. Signed releases use `LITEMATICA_WINDOWS_SIGN_PARAMS` for SignTool, or `LITEMATICA_WINDOWS_AZURE_SIGN_METADATA` with `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_CLIENT_SECRET` for Azure Artifact Signing. For local Artifact Signing, set `LITEMATICA_WINDOWS_AZURE_SIGN_DLIB` to the x64 `Azure.CodeSigning.Dlib.dll` from `Microsoft.ArtifactSigning.Client`.
 
 ## macOS
 
@@ -34,7 +34,13 @@ just package-macos aarch64
 just package-macos x86_64
 ```
 
-Each architecture produces a `.dmg` in `artifacts/`. The app updater downloads this same disk image, verifies the replacement bundle's Developer ID signature against the installed app, and replaces the entire app. For local packaging tests, pass `--allow-unsigned`. Release Actions require `MACOS_CERTIFICATE_P12` (base64), `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGN_IDENTITY`, `MACOS_NOTARY_APPLE_ID`, `MACOS_NOTARY_TEAM_ID`, and `MACOS_NOTARY_PASSWORD`.
+Each architecture produces a `.dmg` in `artifacts/`. The current release workflow passes
+`--allow-unsigned`; the app bundle is ad-hoc signed so its resources are sealed and Gatekeeper
+recognizes the bundle, but there is no Developer ID or notarization. A quarantined download still
+needs "Open Anyway" or a local `xattr -d com.apple.quarantine`. The app updater verifies the
+replacement bundle's Developer ID signature, so signed builds are required for it. Signed releases
+use `LP_MACOS_SIGN_IDENTITY`, `MACOS_CERTIFICATE_P12` (base64), `MACOS_CERTIFICATE_PASSWORD`,
+`MACOS_NOTARY_APPLE_ID`, `MACOS_NOTARY_TEAM_ID`, and `MACOS_NOTARY_PASSWORD`.
 
 ## Linux
 

@@ -630,9 +630,13 @@ fn build_appimage(
     let tool = appimagetool(root, target_dir)?;
     check_appimagetool(&tool)?;
 
+    // zsyncmake writes <AppImage>.zsync into the current directory.
+    let artifacts_dir = appimage_path
+        .parent()
+        .with_context(|| format!("{} has no parent directory", appimage_path.display()))?;
     let mut command = Command::new(&tool);
     command
-        .current_dir(root)
+        .current_dir(artifacts_dir)
         .arg("-n")
         .arg("-u")
         .arg(&update_information)

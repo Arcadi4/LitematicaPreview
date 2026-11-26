@@ -50,12 +50,6 @@ pub fn run(args: &[OsString]) -> Result<()> {
     if env::consts::OS != "macos" {
         bail!("package-macos needs a macOS host (hdiutil, codesign, sips, and iconutil)");
     }
-    if is_ci() && options.allow_unsigned {
-        bail!(
-            "--allow-unsigned is refused in CI; a release package must be Developer ID signed, \
-             notarized, and stapled"
-        );
-    }
 
     let signing = if options.allow_unsigned {
         None
@@ -174,19 +168,6 @@ impl Arch {
             Self::X86_64 => "x86_64",
         }
     }
-}
-
-fn is_ci() -> bool {
-    ["CI", "GITHUB_ACTIONS"].iter().copied().any(env_truthy)
-}
-
-fn env_truthy(name: &str) -> bool {
-    env::var(name)
-        .map(|value| {
-            let value = value.trim();
-            value.eq_ignore_ascii_case("true") || value == "1" || value.eq_ignore_ascii_case("yes")
-        })
-        .unwrap_or(false)
 }
 
 fn env_nonempty(name: &str) -> Option<String> {
@@ -580,6 +561,8 @@ fn package(
     if let Some(signing) = signing {
         sign_app(&app, &signing.identity, signing.keychain())?;
         notarize_app(&app, &signing.credentials, work.path())?;
+    } else {
+        sign_ad_hoc(&app)?;
     }
 
     create_applications_link(&dmg_root.join("Applications"))?;
@@ -593,7 +576,7 @@ fn package(
     let mode = if signing.is_some() {
         "Developer ID signed, notarized, and stapled"
     } else {
-        "unsigned local verification build"
+        "ad-hoc signed, Developer ID unsigned"
     };
     println!("packaged {mode}");
     println!("  {}", dmg_path.display());
@@ -711,6 +694,13 @@ fn sign_app(app: &Path, identity: &str, keychain: Option<&Path>) -> Result<()> {
         sign.args(["--keychain"]).arg(keychain);
     }
     sign.arg(app);
+    command_status(&mut sign, "codesign")?;
+    verify_app(app)
+}
+
+fn sign_ad_hoc(app: &Path) -> Result<()> {
+    let mut sign = Command::new("codesign");
+    sign.args(["--force", "--deep", "--sign", "-"]).arg(app);
     command_status(&mut sign, "codesign")?;
     verify_app(app)
 }

@@ -45,9 +45,6 @@ pub fn run(args: &[OsString]) -> Result<()> {
         env::consts::OS == "windows",
         "Windows packages can only be produced on Windows."
     );
-    if is_ci() && options.allow_unsigned {
-        bail!("--allow-unsigned is refused in CI; a release package must be Authenticode signed");
-    }
 
     let root: PathBuf = crate::root();
     let version = crate::version()?;
@@ -208,7 +205,7 @@ pub fn run(args: &[OsString]) -> Result<()> {
         );
     }
     if matches!(&signing, Signing::Unsigned) {
-        println!("WARNING: these packages are unsigned. Do not publish them.");
+        println!("WARNING: these packages are unsigned.");
     }
     Ok(())
 }
@@ -601,21 +598,6 @@ fn env_nonempty(name: &str) -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-}
-
-fn is_ci() -> bool {
-    ["CI", "GITHUB_ACTIONS", "TF_BUILD"]
-        .into_iter()
-        .any(env_truthy)
-}
-
-fn env_truthy(name: &str) -> bool {
-    env::var(name)
-        .map(|value| {
-            let value = value.trim();
-            value.eq_ignore_ascii_case("true") || value == "1" || value.eq_ignore_ascii_case("yes")
-        })
-        .unwrap_or(false)
 }
 
 fn status_text(status: ExitStatus) -> String {

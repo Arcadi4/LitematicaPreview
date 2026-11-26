@@ -5,6 +5,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use litematica_preview::associations;
+use litematica_preview::browse;
+use litematica_preview::browse_preview;
+use litematica_preview::browse_thumbnail;
 use litematica_preview::file_dialog;
 use litematica_preview::formats;
 use litematica_preview::image_clipboard;
@@ -149,29 +152,6 @@ async fn bootstrap(
     .map_err(|e| format!("Unable to load the welcome screen: {e}"))?
 }
 
-#[tauri::command]
-async fn choose_file(app: AppHandle, window: WebviewWindow) -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let extensions: Vec<_> = formats::EXTENSIONS
-            .iter()
-            .map(|extension| &extension[1..])
-            .collect();
-        file_dialog::pick_files(
-            &app,
-            window,
-            "Open Minecraft schematic",
-            "Minecraft schematics",
-            &extensions,
-            false,
-        )?
-        .and_then(|files| files.into_iter().next())
-        .map(|path| resources::path_string(&path))
-        .transpose()
-    })
-    .await
-    .map_err(|e| format!("Unable to show the file picker: {e}"))?
-}
-
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PreviewProgress {
@@ -204,15 +184,7 @@ struct ViewportFailed {
 
 fn preview_path(path: String) -> Result<PathBuf, String> {
     let path = PathBuf::from(path);
-    let supported = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            formats::EXTENSIONS
-                .iter()
-                .any(|candidate| candidate[1..].eq_ignore_ascii_case(extension))
-        });
-    if !supported {
+    if !formats::is_supported_path(&path) {
         return Err(format!(
             "Choose a supported schematic: {}.",
             formats::EXTENSIONS.join(", ")
@@ -249,6 +221,7 @@ fn start_preview(
     request_id: u64,
     app: AppHandle,
     options: preview::LoadOptions,
+    neighbors: Option<Vec<String>>,
     state: State<'_, HostState>,
     viewer: State<'_, ViewerState>,
 ) -> Result<(), String> {
@@ -269,6 +242,13 @@ fn start_preview(
     let path = preview_path(path)?;
     let pack_path = state.resources.pack()?;
     let layers = state.texture_packs.layers()?;
+    // `None` is a demo or another non-browse open; `Some([])` is a single file.
+    let browse = browse_preview::neighbors(&path, neighbors);
+    // Capture the opened file's cheap identity before decoding so a source that
+    // changes during the load cannot cache the old live geometry.
+    let active_stat = browse
+        .as_ref()
+        .and_then(|_| browse_preview::source_stat(&path));
     let worker = Arc::clone(&state.worker);
     let renderer = Arc::clone(&viewer.renderer);
     let job_worker = Arc::clone(&worker);
@@ -283,9 +263,10 @@ fn start_preview(
         },
         Box::new(move |decoder| {
             let current = || job_worker.ensure_current(request_id);
+            let mut max_texture_side = 0;
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 current()?;
-                let (uploads, max_texture_side) = job_worker.with_current(request_id, || {
+                let (uploads, side) = job_worker.with_current(request_id, || {
                     with_renderer(&renderer, |renderer| {
                         (
                             renderer.upload_window(usize::from(options.thread_count.unwrap_or(1))),
@@ -293,6 +274,7 @@ fn start_preview(
                         )
                     })
                 })?;
+                max_texture_side = side;
                 let metadata = preview_process::load(
                     decoder,
                     &job_worker,
@@ -363,6 +345,24 @@ fn start_preview(
                     .unwrap_or("Unknown native panic");
                 Err(format!("The preview worker stopped unexpectedly: {detail}"))
             });
+            // Speculation starts only after the successful preview was
+            // released and announced; it is best effort and cannot fail it.
+            if result.is_ok() {
+                browse_preview::after_preview(
+                    &app,
+                    &job_worker,
+                    &renderer,
+                    request_id,
+                    &path,
+                    browse.as_deref(),
+                    &pack_path,
+                    &layers,
+                    options,
+                    max_texture_side,
+                    active_stat,
+                    decoder,
+                );
+            }
             if let Err(message) = result {
                 let _ = job_worker.with_current(request_id, || {
                     let cleanup = with_renderer(&renderer, |renderer| {
@@ -940,7 +940,11 @@ fn run() -> Result<(), String> {
         })
         .invoke_handler(tauri::generate_handler![
             bootstrap,
-            choose_file,
+            browse::choose_files,
+            browse::choose_folder,
+            browse::browse_siblings,
+            browse::browse_paths,
+            browse_thumbnail::browse_thumbnail,
             start_preview,
             preview_memory,
             copy_preview_image,

@@ -26,6 +26,7 @@ import {
   type ViewportCommand,
   type ViewportFailed,
 } from "./app-model"
+import { parseBrowseSelection, type BrowseSelection } from "./browse-model"
 import { releasePointerLock, requestPointerLock } from "./fly-controls"
 import { savedPreviewSettings, type PreviewSettings } from "./preview-settings"
 import { ViewportInputQueue } from "./viewport-input"
@@ -33,6 +34,7 @@ import { ViewportInputQueue } from "./viewport-input"
 export interface PreviewSession {
   actionBusy: boolean
   bootstrap: Bootstrap | null
+  browse: BrowseSelection | null
   busy: boolean
   checkForUpdate: () => void
   copyImage: () => void
@@ -52,12 +54,16 @@ export interface PreviewSession {
   loaded: Loaded | null
   loading: Loading | null
   nativeAction: (command: NativeCommand) => void
+  next: () => void
   notice: Notice | null
   openDialog: (dialog: DialogKind) => void
   openFile: () => void
+  openFolder: () => void
+  previous: () => void
   previewMemory: number | null
   previewSettings: PreviewSettings
   removeTexturePack: (id: string) => void
+  selectBrowse: (index: number) => void
   setDialogOpen: (open: boolean) => void
   setNotice: (notice: Notice | null) => void
   setTexturePackEnabled: (id: string, enabled: boolean) => void
@@ -74,6 +80,15 @@ export interface PreviewSession {
   viewportRef: RefObject<HTMLDivElement | null>
   zoomIn: () => void
   zoomOut: () => void
+}
+
+function browseNeighbors(selection: BrowseSelection | null): string[] | null {
+  if (!selection) return null
+  const neighbors: string[] = []
+  if (selection.index > 0) neighbors.push(selection.paths[selection.index - 1])
+  if (selection.index < selection.paths.length - 1)
+    neighbors.push(selection.paths[selection.index + 1])
+  return neighbors
 }
 
 export interface PreviewSessionOptions {
@@ -93,6 +108,8 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const [loading, setLoading] = useState<Loading | null>(null)
   const [previewMemory, setPreviewMemory] = useState<number | null>(null)
   const [loaded, setLoaded] = useState<Loaded | null>(null)
+  const [browse, setBrowse] = useState<BrowseSelection | null>(null)
+  const [focusRequest, setFocusRequest] = useState(0)
   const [rawNotice, setRawNotice] = useState<Notice | null>(null)
   const [statusNotice, setStatusNotice] = useState<Notice | null>(null)
   const [viewportError, setViewportError] = useState<string | null>(null)
@@ -123,6 +140,8 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   const texturePacksRef = useRef(texturePacks)
   const texturePackBusyRef = useRef(false)
   const activePathRef = useRef<string | null>(null)
+  const browseRef = useRef<BrowseSelection | null>(null)
+  const browseToken = useRef(0)
   const mounted = useRef(false)
   const generation = useRef(0)
   const initialPathConsumed = useRef(Boolean(initialError))
@@ -157,6 +176,26 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   }, [])
 
   const isCurrent = useCallback((id: number) => mounted.current && generation.current === id, [])
+
+  const applyBrowse = useCallback((selection: BrowseSelection | null) => {
+    browseRef.current = selection
+    setBrowse(selection)
+  }, [])
+
+  const clearBrowse = useCallback(() => {
+    browseToken.current += 1
+    applyBrowse(null)
+  }, [applyBrowse])
+
+  // Opening a selection hides the welcome panel in the same commit; focus only
+  // works once the stage is visible, so the intent runs after that commit.
+  useEffect(() => {
+    if (focusRequest === 0) return
+    const frame = requestAnimationFrame(() => {
+      viewportRef.current?.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [focusRequest])
 
   // Serialize title updates to prevent delayed calls restoring stale names.
   const updateTitle = useCallback(
@@ -246,9 +285,10 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     activePathRef.current = null
     cancelNative(id)
     clearView()
+    clearBrowse()
     setRawNotice(null)
     updateTitle(null, id)
-  }, [cancelNative, clearView, updateTitle])
+  }, [cancelNative, clearBrowse, clearView, updateTitle])
 
   const fit = useCallback(() => {
     stopFlying()
@@ -422,7 +462,6 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         setLoading(null)
         setPreviewMemory(null)
         updateTitle(request.path, request.id)
-        viewportRef.current?.focus({ preventScroll: true })
       }).then(track),
       listen<PreviewFailed>("preview-failed", ({ payload }) => {
         const request = pendingRequest.current
@@ -468,7 +507,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   }, [failViewport, isCurrent, updateTitle])
 
   const loadPath = useCallback(
-    async (path: string) => {
+    async (path: string, neighbors: string[] | null = null) => {
       if (!mounted.current) return
       // Each request snapshots settings, even if they change during decoding.
       const settings = previewSettingsRef.current
@@ -506,6 +545,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         await invoke("start_preview", {
           path,
           requestId: id,
+          neighbors,
           options,
         })
       } catch (error) {
@@ -520,9 +560,67 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     [cancelNative, clearView, isCurrent, updateTitle],
   )
 
+  const openSelection = useCallback(
+    (raw: unknown, focusViewport: boolean) => {
+      const selection = parseBrowseSelection(raw)
+      if (!selection) return false
+      browseToken.current += 1
+      applyBrowse(selection)
+      if (focusViewport) setFocusRequest((value) => value + 1)
+      void loadPath(selection.paths[selection.index], browseNeighbors(selection))
+      return true
+    },
+    [applyBrowse, loadPath],
+  )
+
+  const openPathWithSiblings = useCallback(
+    async (path: string, focusViewport: boolean) => {
+      const token = ++browseToken.current
+      let raw: unknown = null
+      try {
+        raw = await invoke<unknown>("browse_siblings", { path })
+      } catch {
+        // A directory that cannot be listed still opens as a single-file selection.
+      }
+      if (!mounted.current || token !== browseToken.current) return
+      if (!openSelection(raw, focusViewport))
+        openSelection({ paths: [path], index: 0 }, focusViewport)
+    },
+    [openSelection],
+  )
+
+  const selectBrowseIndex = useCallback(
+    (index: number, focusViewport: boolean) => {
+      const current = browseRef.current
+      if (!current || !Number.isInteger(index) || index < 0 || index >= current.paths.length) return
+      browseToken.current += 1
+      const selection = index === current.index ? current : { paths: current.paths, index }
+      if (selection !== current) applyBrowse(selection)
+      if (focusViewport) setFocusRequest((value) => value + 1)
+      void loadPath(selection.paths[index], browseNeighbors(selection))
+    },
+    [applyBrowse, loadPath],
+  )
+
+  const selectBrowse = useCallback(
+    (index: number) => selectBrowseIndex(index, false),
+    [selectBrowseIndex],
+  )
+
+  const previous = useCallback(() => {
+    const current = browseRef.current
+    if (current && current.index > 0) selectBrowseIndex(current.index - 1, false)
+  }, [selectBrowseIndex])
+
+  const next = useCallback(() => {
+    const current = browseRef.current
+    if (current && current.index < current.paths.length - 1)
+      selectBrowseIndex(current.index + 1, false)
+  }, [selectBrowseIndex])
+
   const reloadActivePreview = useCallback(() => {
     const path = activePathRef.current
-    if (path) void loadPath(path)
+    if (path) void loadPath(path, browseNeighbors(browseRef.current))
   }, [loadPath])
 
   const beginTexturePackAction = useCallback(() => {
@@ -646,34 +744,88 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     [removeTexturePack],
   )
 
-  const chooseFile = useCallback(async () => {
-    if (!mounted.current || !bootstrapRef.current || choosingRef.current) return
-    stopFlying()
-    choosingRef.current = true
-    setChoosing(true)
-    const id = generation.current
-    // Canceling the picker preserves the active preview or load.
-    try {
-      const path = await invoke<string | null>("choose_file")
-      if (path && isCurrent(id)) void loadPath(path)
-    } catch (error) {
-      if (isCurrent(id)) setRawNotice({ intent: "error", message: errorMessage(error) })
-    } finally {
-      choosingRef.current = false
-      if (mounted.current) setChoosing(false)
-    }
-  }, [isCurrent, loadPath, stopFlying])
-
-  const loadDemo = useCallback(
-    (path: string) => {
-      void loadPath(path)
+  const chooseSelection = useCallback(
+    async (command: "choose_files" | "choose_folder") => {
+      if (!mounted.current || !bootstrapRef.current || choosingRef.current) return
+      stopFlying()
+      choosingRef.current = true
+      setChoosing(true)
+      const id = generation.current
+      // Canceling the picker preserves the active preview or load.
+      try {
+        const result = await invoke<unknown>(command)
+        if (isCurrent(id)) openSelection(result, true)
+      } catch (error) {
+        if (isCurrent(id)) setRawNotice({ intent: "error", message: errorMessage(error) })
+      } finally {
+        choosingRef.current = false
+        if (mounted.current) setChoosing(false)
+      }
     },
-    [loadPath],
+    [isCurrent, openSelection, stopFlying],
   )
 
   const openFile = useCallback(() => {
-    void chooseFile()
-  }, [chooseFile])
+    void chooseSelection("choose_files")
+  }, [chooseSelection])
+
+  const openFolder = useCallback(() => {
+    void chooseSelection("choose_folder")
+  }, [chooseSelection])
+
+  const openDropped = useCallback(
+    async (paths: string[]) => {
+      const extensions = bootstrapRef.current?.extensions
+      if (!extensions) {
+        setRawNotice({
+          intent: "info",
+          message: "The application is still starting. Please drop your file again in a moment.",
+        })
+        return
+      }
+      const supported = paths.filter((candidate) =>
+        extensions.some((extension) => candidate.toLowerCase().endsWith(extension.toLowerCase())),
+      )
+      if (supported.length === 0) {
+        setRawNotice({
+          intent: "error",
+          message: `No supported schematic was dropped. Supported formats: ${extensions.join(", ")}.`,
+        })
+        return
+      }
+      const unique = [...new Set(supported)]
+      if (unique.length === 1) {
+        void openPathWithSiblings(unique[0], true)
+        return
+      }
+      const token = ++browseToken.current
+      try {
+        const result = await invoke<unknown>("browse_paths", { paths: unique })
+        if (!mounted.current || token !== browseToken.current) return
+        if (result === null) {
+          setRawNotice({
+            intent: "error",
+            message: `No supported schematic was dropped. Supported formats: ${extensions.join(", ")}.`,
+          })
+          return
+        }
+        if (openSelection(result, true)) return
+      } catch {
+        // Older hosts cannot normalize a batch; keep the dropped files as a selection.
+      }
+      if (!mounted.current || token !== browseToken.current) return
+      openSelection({ paths: unique, index: 0 }, true)
+    },
+    [openPathWithSiblings, openSelection],
+  )
+
+  const loadDemo = useCallback(
+    (path: string) => {
+      clearBrowse()
+      void loadPath(path)
+    },
+    [clearBrowse, loadPath],
+  )
 
   const nativeAction = useCallback(
     async (command: NativeCommand) => {
@@ -803,7 +955,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
         if (!initialPathConsumed.current) {
           initialPathConsumed.current = true
           if (result.initialPath && openInitialPath && viewportErrorRef.current === null)
-            void loadPath(result.initialPath)
+            void openPathWithSiblings(result.initialPath, true)
         }
       })
       .catch((error: unknown) => {
@@ -818,26 +970,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
           setDragging(true)
         } else if (payload.type === "drop") {
           setDragging(false)
-          const extensions = bootstrapRef.current?.extensions
-          if (!extensions) {
-            setRawNotice({
-              intent: "info",
-              message:
-                "The application is still starting. Please drop your file again in a moment.",
-            })
-            return
-          }
-          const path = payload.paths.find((candidate) =>
-            extensions.some((extension) =>
-              candidate.toLowerCase().endsWith(extension.toLowerCase()),
-            ),
-          )
-          if (path) void loadPath(path)
-          else
-            setRawNotice({
-              intent: "error",
-              message: `No supported schematic was dropped. Supported formats: ${extensions.join(", ")}.`,
-            })
+          void openDropped(payload.paths)
         }
       })
       .then((dispose) => {
@@ -864,7 +997,8 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     checkForUpdate,
     failViewport,
     isCurrent,
-    loadPath,
+    openDropped,
+    openPathWithSiblings,
     updatePreviewSettings,
     viewportQueue,
   ])
@@ -930,6 +1064,7 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
   return {
     actionBusy,
     bootstrap,
+    browse,
     busy: !bootstrap || choosing,
     checkForUpdate: () => void checkForUpdate(),
     copyImage,
@@ -951,12 +1086,16 @@ export function usePreviewSession({ initialError }: PreviewSessionOptions) {
     loaded,
     loading,
     nativeAction: runNativeAction,
+    next,
     notice,
     openDialog,
     openFile,
+    openFolder,
+    previous,
     previewMemory,
     previewSettings,
     removeTexturePack: requestRemoveTexturePack,
+    selectBrowse,
     setDialogOpen: requestDialogOpen,
     setNotice: clearNotice,
     setTexturePackEnabled: requestSetTexturePackEnabled,

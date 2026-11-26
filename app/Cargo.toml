@@ -1,6 +1,6 @@
 [package]
 name = "litematica-preview"
-version = "0.7.3"
+version = "1.0.0-rc.1"
 rust-version.workspace = true
 edition.workspace = true
 publish.workspace = true

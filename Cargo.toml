@@ -1,6 +1,11 @@
 [workspace]
-members = ["src-tauri"]
+members = ["app", "xtask"]
 resolver = "2"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.100"
+publish = false
 
 # Debug info is the most expensive part of an unoptimized build. Line tables
 # keep the host's panic locations readable; dependency debug info is never
@@ -16,4 +21,13 @@ lto = "thin"
 codegen-units = 1
 # A bad schematic must not terminate the window or poison the cached pack.
 panic = "unwind"
-strip = "debuginfo"
+strip = "symbols"
+
+# Rune's native backends require the patches from the same revision as its crates.
+[patch.crates-io]
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "6a68ed75ff14e740eac156d9c2ab5455136d5a37" }
+winit = { git = "https://github.com/anomalyco/rune", rev = "6a68ed75ff14e740eac156d9c2ab5455136d5a37" }
+sctk-adwaita = { git = "https://github.com/anomalyco/rune", rev = "6a68ed75ff14e740eac156d9c2ab5455136d5a37" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "6a68ed75ff14e740eac156d9c2ab5455136d5a37" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "6a68ed75ff14e740eac156d9c2ab5455136d5a37" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "6a68ed75ff14e740eac156d9c2ab5455136d5a37" }

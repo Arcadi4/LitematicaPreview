@@ -14,9 +14,10 @@ permissions:
   contents: write
 
 jobs:
-  # `check` gates the whole workflow. When the GitHub release already exists
-  # (a re-run of a published tag) it reports `exists=true` and every downstream
-  # job skips, so no build runs against an already-published release.
+  # `check` is the single source of release state. `exists=true` means a
+  # previous attempt created the GitHub release, so builds are skipped and the
+  # publish job restores the published assets from GitHub to repair the mirror,
+  # apt repository, or Homebrew Cask without rebuilding.
   check:
     name: Validate release tag
     runs-on: ubuntu-latest
@@ -25,52 +26,24 @@ jobs:
       prerelease: ${{ steps.check_tag.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/setup@v3
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: extractions/setup-just@v4
+
       - name: Validate release tag
         id: check_tag
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          tag="$GITHUB_REF_NAME"
-          if [[ -z "$tag" ]]; then
-            echo "::error::GITHUB_REF_NAME is empty"
-            exit 1
-          fi
+        run: just release-check "$GITHUB_REF_NAME"
 
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::Tag '$tag' is malformed. Expected format: vMAJOR.MINOR.PATCH[-PRERELEASE] (e.g. v0.1.0 or v0.1.0-rc.1)"
-            exit 1
-          fi
-
-          if ! pnpm run version:check "$tag"; then
-            exit 1
-          fi
-
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release '$tag' already exists on GitHub. Skipping build and release publication."
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          if [[ "$tag" =~ - ]]; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          fi
-
-  # The two package builds are independent and run in parallel; publishing only
-  # collects their artifacts. Lint, format, and tests gate the default branch in
-  # `ci.yml`, so a tag does not repeat them.
   linux:
     name: Build Linux packages
-    runs-on: ubuntu-22.04 # build on the oldest LTS for maximum compatibility
+    runs-on: ubuntu-22.04
     needs: check
     if: needs.check.outputs.exists != 'true'
     env:
       CARGO_TARGET_DIR: target
-      CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v7
 
@@ -81,53 +54,38 @@ jobs:
             build-essential \
             curl \
             file \
-            libayatana-appindicator3-dev \
-            libgtk-3-dev \
-            librsvg2-dev \
-            libssl-dev \
-            libvulkan-dev \
-            libwebkit2gtk-4.1-dev \
-            libxdo-dev \
-            patchelf \
-            wget
+            gnupg \
+            libwayland-dev \
+            libxkbcommon-dev \
+            zsync
 
-      - uses: pnpm/setup@v3
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-unknown-linux-gnu
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
           shared-key: release-linux
           save-if: false
 
-      # `tauri build` runs `beforeBuildCommand` (`pnpm run build`), so the
-      # frontend is type-checked and bundled before the Rust release build.
-      - name: Build signed-repository Debian package and AppImage
-        if: needs.check.outputs.prerelease != 'true'
+      - uses: extractions/setup-just@v4
+
+      - name: Build Debian package and AppImage
         env:
           LP_APT_BASE_URL: ${{ vars.APT_BASE_URL }}
           LP_APT_PUBLIC_KEY: ${{ secrets.APT_GPG_PUBLIC_KEY }}
-        run: pnpm exec vpx scripts/build-linux.ts --apt
-      - name: Build prerelease Debian package and AppImage
-        if: needs.check.outputs.prerelease == 'true'
-        run: pnpm exec vpx scripts/build-linux.ts
+        shell: bash
+        run: just package-linux ${{ needs.check.outputs.prerelease != 'true' && '--apt' || '' }}
 
       - uses: actions/upload-artifact@v7
         with:
           name: LitematicaPreview-${{ github.ref_name }}-linux
           path: |
-            artifacts/*-x86_64.deb
-            artifacts/*-x86_64.AppImage
+            artifacts/LitematicaPreview-*-x86_64.deb
+            artifacts/LitematicaPreview-*-x86_64.AppImage
+            artifacts/LitematicaPreview-*-x86_64.AppImage.zsync
           if-no-files-found: error
-
-      - name: Upload build logs
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: LitematicaPreview-${{ github.ref_name }}-linux-build-logs
-          path: artifacts/logs/
-          if-no-files-found: ignore
 
   windows:
     name: Build Windows packages
@@ -135,226 +93,175 @@ jobs:
     needs: check
     if: needs.check.outputs.exists != 'true'
     env:
-      RUSTFLAGS: "-C target-feature=+crt-static"
       CARGO_TARGET_DIR: target
-      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+      RUSTFLAGS: "-C target-feature=+crt-static"
     steps:
       - uses: actions/checkout@v7
-
-      - uses: pnpm/setup@v3
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
           shared-key: release-windows
           save-if: false
 
-      # `tauri build` runs `beforeBuildCommand` (`pnpm run build`), so the
-      # frontend is type-checked and bundled before the Rust release build.
-      - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: latest
-          dotnet-channel: STS
-      - name: Install Velopack
-        run: dotnet tool install --global vpk
+      - uses: extractions/setup-just@v4
 
-      - name: Build setup and portable packages
-        run: pnpm exec vpx scripts/build.ts --allow-unsigned
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress --yes
+
+      - name: Install Artifact Signing client
+        if: env.ARTIFACT_SIGNING == 'true'
+        env:
+          ARTIFACT_SIGNING: ${{ secrets.LITEMATICA_WINDOWS_AZURE_SIGN_METADATA != '' }}
+        shell: pwsh
+        run: nuget install Microsoft.ArtifactSigning.Client -Version 1.0.151 -ExcludeVersion -NonInteractive -OutputDirectory "${{ runner.temp }}/artifact-signing"
+
+      - name: Build signed installer and portable package
+        shell: pwsh
+        env:
+          LITEMATICA_WINDOWS_SIGN_PARAMS: ${{ secrets.LITEMATICA_WINDOWS_SIGN_PARAMS }}
+          LITEMATICA_WINDOWS_AZURE_SIGN_METADATA: ${{ secrets.LITEMATICA_WINDOWS_AZURE_SIGN_METADATA }}
+          LITEMATICA_WINDOWS_AZURE_SIGN_DLIB: ${{ runner.temp }}/artifact-signing/Microsoft.ArtifactSigning.Client/bin/x64/Azure.CodeSigning.Dlib.dll
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: just package-windows
 
       - uses: actions/upload-artifact@v7
         with:
           name: LitematicaPreview-${{ github.ref_name }}-windows
           path: |
-            artifacts/*-setup.exe
-            artifacts/*-portable.zip
-            artifacts/velopack/
+            artifacts/LitematicaPreview-*-x86_64-setup.exe
+            artifacts/LitematicaPreview-*-x86_64-portable.zip
+            artifacts/LitematicaPreview-windows-x86_64.exe
           if-no-files-found: error
 
-      - name: Upload build logs
-        if: always()
-        uses: actions/upload-artifact@v7
+  macos:
+    name: Build macOS packages
+    runs-on: macos-15
+    needs: check
+    if: needs.check.outputs.exists != 'true'
+    env:
+      CARGO_TARGET_DIR: target
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          name: LitematicaPreview-${{ github.ref_name }}-windows-build-logs
-          path: artifacts/logs/
-          if-no-files-found: ignore
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: release-macos
+          save-if: false
+
+      - uses: extractions/setup-just@v4
+
+      - name: Build and package both architectures
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          LP_MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          LP_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          LP_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+          LP_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+        shell: bash
+        run: |
+          just package-macos aarch64
+          just package-macos x86_64
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: LitematicaPreview-${{ github.ref_name }}-macos
+          path: |
+            artifacts/LitematicaPreview-*-aarch64.dmg
+            artifacts/LitematicaPreview-*-x86_64.dmg
+          if-no-files-found: error
 
   publish:
     name: Publish release
     runs-on: ubuntu-latest
-    needs: [check, linux, windows]
-    if: needs.check.outputs.exists != 'true'
+    concurrency:
+      group: publish-release-artifacts
+      cancel-in-progress: false
+    needs: [check, linux, windows, macos]
+    # Build failures stop publication; a pre-existing release runs only the
+    # idempotent repair path, so skipped builds are expected.
+    if: >-
+      always() &&
+      needs.check.result == 'success' &&
+      (needs.check.outputs.exists == 'true' ||
+        (needs.linux.result == 'success' &&
+         needs.windows.result == 'success' &&
+         needs.macos.result == 'success'))
     steps:
       - uses: actions/checkout@v7
 
-      - uses: pnpm/setup@v3
-
       - name: Download Linux packages
+        if: needs.check.outputs.exists != 'true'
         uses: actions/download-artifact@v8
         with:
           name: LitematicaPreview-${{ github.ref_name }}-linux
           path: artifacts
 
       - name: Download Windows packages
+        if: needs.check.outputs.exists != 'true'
         uses: actions/download-artifact@v8
         with:
           name: LitematicaPreview-${{ github.ref_name }}-windows
           path: artifacts
 
-      - name: Generate package checksums
-        run: pnpm run checksums --win --linux
-
-      - uses: actions/upload-artifact@v7
+      - name: Download macOS packages
+        if: needs.check.outputs.exists != 'true'
+        uses: actions/download-artifact@v8
         with:
-          name: LitematicaPreview-${{ github.ref_name }}-checksums
-          path: artifacts/SHA256SUMS.txt
-          if-no-files-found: error
+          name: LitematicaPreview-${{ github.ref_name }}-macos
+          path: artifacts
 
-      - name: Install Cloudflare CLI
-        run: npm install --global cf@1.0.0-beta.28
-      - name: Install apt repository tools
-        if: needs.check.outputs.prerelease != 'true'
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: extractions/setup-just@v4
+
+      - name: Install publishing tools
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends reprepro gnupg
+          npm install --global cf@1.0.0-rc.3
+
+      - name: Publish GitHub release, R2 artifacts, and update mirror
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: just release-publish "$GITHUB_REF_NAME"
+
       - name: Publish apt repository
         if: needs.check.outputs.prerelease != 'true'
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          LP_APT_BASE_URL: ${{ vars.APT_BASE_URL }}
           LP_APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
           LP_APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
           LP_APT_GPG_FINGERPRINT: ${{ vars.APT_GPG_FINGERPRINT }}
-          LP_APT_BASE_URL: ${{ vars.APT_BASE_URL }}
           LP_APT_R2_BUCKET: apt-repo
-        run: |
-          version="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
-          pnpm exec vpx scripts/apt-publish.ts --deb "artifacts/LitematicaPreview-${version}-x86_64.deb"
-      - name: Publish downloads and update feed
-        env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          IS_PRERELEASE: ${{ needs.check.outputs.prerelease }}
         shell: bash
-        run: |
-          set -euo pipefail
-          for file in artifacts/*-setup.exe artifacts/*-portable.zip artifacts/*.AppImage artifacts/SHA256SUMS.txt; do
-            test -f "$file"
-            cf r2 objects put "litematica-preview/releases/${GITHUB_REF_NAME}/${file##*/}" --bucket-name apps-download --file "$file"
-          done
-          if [[ "$IS_PRERELEASE" != "true" ]]; then
-            for file in artifacts/velopack/*; do
-              test -f "$file"
-              [[ "${file##*/}" == "releases.win.json" ]] && continue
-              cf r2 objects put "litematica-preview/windows/${file##*/}" --bucket-name apps-download --file "$file"
-            done
-            cf r2 objects put "litematica-preview/windows/releases.win.json" --bucket-name apps-download --content-type application/json --file artifacts/velopack/releases.win.json
-          fi
+        run: just release-apt "$GITHUB_REF_NAME"
 
-      - name: Prepare release notes
-        shell: bash
-        run: |
-          node --input-type=module - "$GITHUB_REF_NAME" "$RUNNER_TEMP/release-notes.md" <<'NODE'
-          import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-
-          const [, , tag, output] = process.argv
-          let notes = ''
-          if (existsSync('CHANGELOG.md')) {
-            const lines = readFileSync('CHANGELOG.md', 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/)
-            const start = lines.findIndex((line) => line.trimEnd() === `# ${tag}`)
-            if (start !== -1) {
-              const section = []
-              let fence = null
-              for (const line of lines.slice(start + 1)) {
-                const marker = line.match(/^ {0,3}(`{3,}|~{3,})/)
-                if (fence) {
-                  section.push(line)
-                  if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length &&
-                      /^ {0,3}(?:`{3,}|~{3,})[ \t]*$/.test(line)) fence = null
-                } else if (marker) {
-                  fence = marker[1]
-                  section.push(line)
-                } else if (/^#(?:[ \t]|$)/.test(line)) {
-                  break
-                } else {
-                  section.push(line.replace(/^#{2,6}(?=[ \t])/, (heading) => heading.slice(1)))
-                }
-              }
-              while (section.length && !section[0].trim()) section.shift()
-              while (section.length && !section.at(-1).trim()) section.pop()
-              notes = section.join('\n')
-            }
-          }
-
-          const install = `# How to install
-
-          ## Windows x64
-
-          - A one-click installer (\`LitematicaPreview-<version>-x86_64-setup.exe\`): Installs per-user without requiring administrator privileges.
-          - A portable .zip package (\`LitematicaPreview-<version>-x86_64-portable.zip\`): Download and extract the portable archive and run LitematicaPreview.exe.
-
-          ## Linux x64
-
-          - A Debian package (\`LitematicaPreview-<version>-x86_64.deb\`): Install with \`sudo apt install ./LitematicaPreview-<version>-x86_64.deb\`.
-          - An AppImage (\`LitematicaPreview-<version>-x86_64.AppImage\`): Run \`chmod +x\` on the file, then launch it.
-
-          Linux releases target Ubuntu 22.04 and need GTK 3, WebKitGTK 4.1, Vulkan with a compatible driver, and xdg-utils.`
-
-          writeFileSync(output, `${notes ? `${notes}\n\n` : ''}${install}\n`)
-          NODE
-
-      - name: Publish GitHub Release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          IS_PRERELEASE: ${{ needs.check.outputs.prerelease }}
-        run: |
-          tag="$GITHUB_REF_NAME"
-
-          version="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
-          setup_file="artifacts/LitematicaPreview-${version}-x86_64-setup.exe"
-          zip_file="artifacts/LitematicaPreview-${version}-x86_64-portable.zip"
-          deb_file="artifacts/LitematicaPreview-${version}-x86_64.deb"
-          appimage_file="artifacts/LitematicaPreview-${version}-x86_64.AppImage"
-          checksum_file="artifacts/SHA256SUMS.txt"
-
-          if [[ ! -f "$setup_file" ]]; then
-            echo "::error::Installer file not found"
-            exit 1
-          fi
-          if [[ ! -f "$zip_file" ]]; then
-            echo "::error::Portable zip file not found: $zip_file"
-            exit 1
-          fi
-          if [[ ! -f "$deb_file" ]]; then
-            echo "::error::Debian package not found: $deb_file"
-            exit 1
-          fi
-          if [[ ! -f "$appimage_file" ]]; then
-            echo "::error::AppImage file not found: $appimage_file"
-            exit 1
-          fi
-          if [[ ! -f "$checksum_file" ]]; then
-            echo "::error::Checksum file not found: $checksum_file"
-            exit 1
-          fi
-
-          extra_flags=()
-          if [[ "$IS_PRERELEASE" == "true" ]]; then
-            extra_flags+=(--prerelease)
-          fi
-
-          echo "Publishing release for $tag..."
-          gh release create "$tag" \
-            "$setup_file" \
-            "$zip_file" \
-            "$deb_file" \
-            "$appimage_file" \
-            "$checksum_file" \
-            --title "Litematica Preview $tag" \
-            --notes-file "$RUNNER_TEMP/release-notes.md" \
-            --generate-notes \
-            --verify-tag \
-            "${extra_flags[@]}"
+  homebrew:
+    name: Publish Homebrew Cask
+    needs: [check, publish]
+    if: needs.check.outputs.prerelease != 'true' && needs.publish.result == 'success'
+    uses: ./.github/workflows/homebrew.yml
+    with:
+      tag: ${{ github.ref_name }}
+      repair: ${{ needs.check.outputs.exists == 'true' }}
+    secrets:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

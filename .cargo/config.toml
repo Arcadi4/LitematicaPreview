@@ -1,0 +1,3 @@
+[alias]
+# Works from the repository root and any subdirectory of the workspace.
+xtask = "run --package xtask --"

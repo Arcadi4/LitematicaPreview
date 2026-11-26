@@ -2,47 +2,49 @@
 
 Platform builds, signing, packaging, and release publishing for Litematica Preview.
 
-## Windows
+## Development
 
-- Node.js 24 LTS and pnpm
-- Rust stable toolchain (`x86_64-pc-windows-msvc`)
-- Visual Studio C++ Build Tools (Desktop development with C++, x64 MSVC, Windows SDK)
-- .NET 10 SDK with Velopack: `dotnet tool install --global vpk --version 1.2.161`
+Install stable Rust and `just`. The app builds from the workspace lockfile.
 
 ```bash
-git clone https://github.com/Arcadi4/LitematicaPreview.git
-cd LitematicaPreview
-
-rustup target add x86_64-pc-windows-msvc
-pnpm run build:win
+just dev
+just build
+just check
 ```
 
-Set `LITEMATICA_WINDOWS_SIGN_PARAMS` for `signtool` arguments or `LITEMATICA_WINDOWS_AZURE_SIGN_FILE` for Azure Artifact Signing metadata. Local unsigned test builds only: `pnpm run build:win -- --allow-unsigned`.
+`just` calls `cargo xtask` for repository tasks. Set `LP_CORE_PATH` to use a local checkout of `litematica-preview-core`. Do not commit a lockfile resolved with the override.
 
-CI accepts `LITEMATICA_WINDOWS_SIGN_PARAMS`, or `LITEMATICA_WINDOWS_AZURE_SIGN_METADATA` with `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_CLIENT_SECRET` as GitHub Actions secrets. Supply the signing provider's certificate or Azure Artifact Signing configuration before a release.
+## Windows
 
-Build outputs are written to `artifacts/`: `*-setup.exe`, `*-portable.zip`, and a `velopack/` directory holding `releases.win.json` plus the full (and optional delta) `.nupkg` files for `https://update.tanh.moe/litematica-preview/windows/`. The runnable staging directory remains `x86_64/`.
-Cargo output uses the workspace `target/` directory by default; set `CARGO_TARGET_DIR` to use another directory. The release workflow shares this directory and the Windows MSVC target between tests and packaging.
-The Cargo package keeps `LitematicaPreview` as `default-run` so Tauri can select the application alongside the `pressure` binary.
+Use the `x86_64-pc-windows-msvc` toolchain, Visual Studio C++ Build Tools, Windows SDK, and Inno Setup.
+
+```powershell
+just package-windows
+```
+
+The command builds a per-user installer with an editable destination, a portable ZIP, and the standalone update executable in `artifacts/`. For local packaging tests, pass `--allow-unsigned`. Releases require signing. Configure `LITEMATICA_WINDOWS_SIGN_PARAMS` for SignTool, or configure `LITEMATICA_WINDOWS_AZURE_SIGN_METADATA` with `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_CLIENT_SECRET` for Azure Artifact Signing. For local Artifact Signing, set `LITEMATICA_WINDOWS_AZURE_SIGN_DLIB` to the x64 `Azure.CodeSigning.Dlib.dll` from `Microsoft.ArtifactSigning.Client`.
+
+## macOS
+
+Use Xcode and install both Rust desktop targets:
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+just package-macos aarch64
+just package-macos x86_64
+```
+
+Each architecture produces a `.dmg` in `artifacts/`. The app updater downloads this same disk image, verifies the replacement bundle's Developer ID signature against the installed app, and replaces the entire app. For local packaging tests, pass `--allow-unsigned`. Release Actions require `MACOS_CERTIFICATE_P12` (base64), `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGN_IDENTITY`, `MACOS_NOTARY_APPLE_ID`, `MACOS_NOTARY_TEAM_ID`, and `MACOS_NOTARY_PASSWORD`.
 
 ## Linux
 
-Use a Linux x64 host with Node.js 24, pnpm 12, and Rust stable. On Ubuntu 22.04, install the native build dependencies:
+Build on Linux x86-64. Install Rust, `just`, `build-essential`, `curl`, `file`, `libwayland-dev`, `libxkbcommon-dev`, `pkg-config`, `gnupg`, `xz-utils`, and `zsync`. The published packages target Ubuntu 22.04 or newer and need a compatible Vulkan driver.
 
 ```bash
-sudo apt-get update
-sudo apt-get install --yes build-essential curl wget file pkg-config \
-  libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev libssl-dev librsvg2-dev \
-  libayatana-appindicator3-dev libvulkan-dev mesa-vulkan-drivers patchelf
+just package-linux
 ```
 
-```bash
-pnpm install --frozen-lockfile
-rustup target add x86_64-unknown-linux-gnu
-pnpm run build:linux
-```
-
-The Tauri build prepares the frontend and bundles resources. Versioned `.deb` and `.AppImage` files are written to `artifacts/`; `CARGO_TARGET_DIR` overrides the Cargo output directory. Run `pnpm run checksums --linux` for Linux packages, or pass both `--win --linux` for a combined release.
+The command creates a `.deb`, an `.AppImage`, and its `.zsync` metadata in `artifacts/`. The Debian binary is built with `managed-install`, which disables in-app updates. The AppImage bundles the pinned upstream [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate/issues) and contains its own update information. `LP_APPIMAGETOOL` can select a local appimagetool for packaging.
 
 ### Publish the apt repository
 
@@ -51,20 +53,20 @@ A release build enrolls the signed apt repository in the Debian package with `--
 ```bash
 LP_APT_BASE_URL=https://apt.example.com \
 LP_APT_PUBLIC_KEY_FILE=archive-public-key.asc \
-pnpm run build:linux:apt
+just package-linux --apt
 ```
 
-`build:linux:apt` fails when the base URL or a usable public key is missing, and it verifies that the generated `.deb` contains the rendered source and keyring bytes. The base URL must use `https`; it is the public custom domain that serves the bucket.
+`--apt` requires the base URL and public key. The base URL must use `https` and point to the bucket's custom domain.
 
 Publishing needs `reprepro`, GnuPG, the Cloudflare CLI (`cf`), and the released `.deb`:
 
 ```bash
-pnpm run apt:publish -- --deb artifacts/LitematicaPreview-<version>-x86_64.deb
+just apt-publish --deb artifacts/LitematicaPreview-<version>-x86_64.deb
 ```
 
 The publisher rebuilds a latest-only `stable`/`main`/`amd64` reprepro distribution, verifies `InRelease` with the keyring embedded in the package, then writes the pool package, the `Packages` indexes and their immutable by-hash copies, `Release` and `Release.gpg`, and `InRelease` last. It retains old pool and by-hash objects for clients using an earlier index.
 
-Environment: `LP_APT_BASE_URL`, `LP_APT_GPG_PRIVATE_KEY` (or `LP_APT_GPG_PRIVATE_KEY_FILE`), optional `LP_APT_GPG_PASSPHRASE` and `LP_APT_GPG_FINGERPRINT`, `LP_APT_R2_BUCKET`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and optional `LP_APT_R2_JURISDICTION`. `--dry-run` builds, signs, and verifies the repository without uploading. Publication stops at the uploads: the public custom domain sits behind the zone's WAF and bot products, which can refuse the publisher while serving clients the same object, so a fetch-back does not gate the release.
+Environment: `LP_APT_BASE_URL`, `LP_APT_GPG_PRIVATE_KEY` (or `LP_APT_GPG_PRIVATE_KEY_FILE`), optional `LP_APT_GPG_PASSPHRASE` and `LP_APT_GPG_FINGERPRINT`, `LP_APT_R2_BUCKET`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, and optional `LP_APT_R2_JURISDICTION`. `--dry-run` builds, signs, and verifies the repository without uploading.
 
 Configure the custom domain so `dists/stable/InRelease` and the `Packages` indexes are not cached, or bypass the cache for `dists/`. A stale cached index can leave clients requesting objects from a different repository generation.
 
@@ -72,22 +74,18 @@ Rotating the signing key needs a transitional release: apt verifies `InRelease` 
 
 ## Nix
 
-The flake builds an unpacked Linux x64 app from this checkout and lives at the
-repository root.
+`nix build`, `nix run`, and `nix develop` use the workspace's native app. Nix manages updates.
 
-```bash
-nix build .#litematica-preview
-nix run .
-nix develop
-```
+## Release publication
 
-`nix build` writes the app to `result/`: the launcher is
-`result/bin/LitematicaPreview`, bundled resources are under
-`result/lib/Litematica Preview/`, and the desktop entry, icon, and MIME
-definition are under `result/share/`. The frontend and Cargo dependencies are
-fetched from their lockfiles. Use `pnpm run build:linux` for `.deb` and
-`.AppImage` release packages; the flake does not produce those bundles.
+The release workflow validates the version tag against `app/Cargo.toml`, builds all platforms, and publishes versioned artifacts and `SHA256SUMS.txt` to GitHub and the `apps-download` R2 bucket via `cf`. Stable releases update the Cloudflare manifest last at `https://download.tanh.moe/litematica-preview/v1/latest.json`. Prereleases do not change the stable manifest, apt repository, or Homebrew Cask.
 
-## Release verification
+The existing `update.tanh.moe` Worker and `litematica-preview/windows/` objects remain live for Velopack clients. Rune does not use or publish to that endpoint. See [#65](https://github.com/Arcadi4/LitematicaPreview/issues/65) for retirement.
 
-Before treating a Linux release as stable, verify live composition on both X11 and Wayland: first load, Home/cancellation, resize/maximize/fullscreen, HiDPI, pointer and keyboard input, native dialog modality, minimize/restore, and translucent overlays during prolonged rendering. Container or offscreen checks do not establish physical-desktop or driver compatibility.
+Stable publication also updates `Casks/litematica-preview.rb` in `Arcadi4/homebrew-tap`. Configure `HOMEBREW_TAP_TOKEN` as a fine-grained token with Contents read/write on that tap only.
+
+Before release, verify native launch, document opening, tab changes, resizing, input, and image export on each supported desktop. Exercise both X11 and Wayland on Linux. Cross-compilation and headless images do not verify native window integration.
+
+## Icon artwork
+
+The app packages a subset of [Microsoft Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons/tree/a3de63245b4fa49c30e20d9838593a105affe774), MIT-licensed. The vendored files in `app/icons/` are the Regular 20-point SVG bodies with theme-controlled `currentColor` fills for Rune Kit.

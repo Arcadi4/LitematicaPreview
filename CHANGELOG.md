@@ -2,7 +2,17 @@
 
 ## Features
 
-- Browse schematic folders and batches: Open Files selects several files, Open Folder opens a directory, and opening one file finds supported schematics beside it without recursing into subfolders. The list sorts alphabetically by filename, the arrow keys switch previews while the preview is focused without wrapping at either end, nearby files preload within a bounded internal budget, and content-hash thumbnails persist using bundled textures ([#13](https://github.com/Arcadi4/LitematicaPreview/issues/13)).
+- Replace the desktop interface with the native Rune UI and add macOS support.
+- Open several schematics in one window with tabs ([#63](https://github.com/Arcadi4/LitematicaPreview/issues/63)). Browse supported files in the same directory with cached vanilla-texture thumbnails ([#13](https://github.com/Arcadi4/LitematicaPreview/issues/13)).
+- Configure preview and spectator key bindings, spectator mouse sensitivity, and field of view in Preferences ([#53](https://github.com/Arcadi4/LitematicaPreview/issues/53), [#54](https://github.com/Arcadi4/LitematicaPreview/issues/54)).
+- Choose the install directory in Windows Setup ([#60](https://github.com/Arcadi4/LitematicaPreview/issues/60)).
+- Select GitHub or Cloudflare for in-app updates on Windows and macOS. AppImage uses AppImageUpdate, and apt manages Debian package upgrades.
+- Render the preview with a transparent background. PNG and clipboard exports keep transparency; JPEG exports flatten over the dark backdrop.
+- Strip symbols from release binaries to reduce download size.
+
+## Fixes
+
+- Record key bindings from the active keyboard layout, so non-QWERTY layouts no longer store a QWERTY key.
 
 # v0.7.0
 

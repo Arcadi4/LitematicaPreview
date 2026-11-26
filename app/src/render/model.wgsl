@@ -25,7 +25,15 @@ struct Part {
     alpha_mode: f32,
 };
 
+struct Light {
+    // xyz: direction toward the light; w: ambient level.
+    direction: vec4<f32>,
+    // x: directional sunlight level. Remaining components are unused padding.
+    levels: vec4<f32>,
+};
+
 @group(0) @binding(0) var<uniform> camera: Camera;
+@group(0) @binding(1) var<uniform> lighting: Light;
 @group(1) @binding(0) var<uniform> part: Part;
 @group(1) @binding(1) var block_texture: texture_2d<f32>;
 @group(1) @binding(2) var block_sampler: sampler;
@@ -83,7 +91,8 @@ fn fragment_scene(
         discard;
     }
     let normal = normalize(input.normal.xyz) * select(-1.0, 1.0, front_facing);
-    let light = 0.68 + 0.32 * max(dot(normal, normalize(vec3<f32>(1.0, 1.4, 0.8))), 0.0);
+    let light = lighting.direction.w
+        + lighting.levels.x * max(dot(normal, normalize(lighting.direction.xyz)), 0.0);
     let alpha = select(1.0, base.a, part.alpha_mode == 2.0);
     return vec4<f32>(base.rgb * light, alpha);
 }

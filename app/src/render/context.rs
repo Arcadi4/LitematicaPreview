@@ -14,6 +14,7 @@
 
 use crate::render::camera::{Camera, FrameCamera};
 use crate::render::capture::CaptureJob;
+use crate::render::lighting::FrameLighting;
 use crate::render::pipelines::{CAMERA_UNIFORM_BYTES, Pipelines};
 use crate::render::scene::Scene;
 use crate::render::upload::{DeviceStatus, UploadPermit, UploadWindow};
@@ -80,6 +81,7 @@ pub struct LiveScene {
     /// Source or final model bounds; used to fit canonical thumbnails.
     model_bounds: Option<([f32; 3], [f32; 3])>,
     has_visible_batch: bool,
+    lighting: FrameLighting,
     /// Reused presentation target, replaced only when the effect size changes.
     presentation: Option<PresentationTarget>,
     depth_view: Option<wgpu::TextureView>,
@@ -98,6 +100,7 @@ struct EncodedFrame {
     grid: FrameCamera,
     scene: FrameCamera,
     grid_visible: bool,
+    lighting: FrameLighting,
     revision: u64,
 }
 
@@ -118,13 +121,20 @@ impl LiveScene {
         Self {
             device: device.clone(),
             queue: queue.clone(),
-            pipelines: Arc::new(Pipelines::new(device, samples, TARGET_FORMAT, DEPTH_FORMAT)),
+            pipelines: Arc::new(Pipelines::new(
+                device,
+                queue,
+                samples,
+                TARGET_FORMAT,
+                DEPTH_FORMAT,
+            )),
             format: TARGET_FORMAT,
             samples,
             scene: None,
             device_status: DeviceStatus::passive(device.clone()),
             model_bounds: None,
             has_visible_batch: false,
+            lighting: FrameLighting::default(),
             presentation: None,
             depth_view: None,
             color_view: None,
@@ -150,6 +160,7 @@ impl LiveScene {
             device_status: Arc::clone(&self.device_status),
             model_bounds: None,
             has_visible_batch: false,
+            lighting: self.lighting,
             presentation: None,
             depth_view: None,
             color_view: None,
@@ -163,6 +174,14 @@ impl LiveScene {
     /// its own camera state are unchanged.
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Replaces the scene lighting and invalidates the cached frame.
+    pub fn set_lighting(&mut self, lighting: FrameLighting) {
+        if self.lighting != lighting {
+            self.lighting = lighting;
+            self.revision = self.revision.wrapping_add(1);
+        }
     }
 
     /// The most recently encoded presentation view, if one exists. Its pixels
@@ -279,6 +298,7 @@ impl LiveScene {
                     && last.grid == grid
                     && last.scene == scene_frame
                     && last.grid_visible == grid_visible
+                    && last.lighting == self.lighting
             });
         if unchanged {
             return Ok(&self
@@ -292,6 +312,7 @@ impl LiveScene {
             self.rebuild_attachments(size);
         }
         self.pipelines.write_cameras(&self.queue, grid, scene_frame);
+        self.pipelines.write_lighting(&self.queue, self.lighting);
         let target = &self
             .presentation
             .as_ref()
@@ -309,6 +330,7 @@ impl LiveScene {
             grid,
             scene: scene_frame,
             grid_visible,
+            lighting: self.lighting,
             revision: self.revision,
         });
         Ok(&self
@@ -372,6 +394,7 @@ impl LiveScene {
             camera.frame_camera(true),
             camera.frame_camera(false),
         );
+        self.pipelines.write_lighting(&self.queue, self.lighting);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -715,7 +738,7 @@ impl ThumbnailRenderer {
 
     fn with_status(device: &wgpu::Device, queue: &wgpu::Queue, status: Arc<DeviceStatus>) -> Self {
         let samples = preferred_samples(device);
-        let pipelines = Pipelines::new(device, samples, TARGET_FORMAT, DEPTH_FORMAT);
+        let pipelines = Pipelines::new(device, queue, samples, TARGET_FORMAT, DEPTH_FORMAT);
         let scene = Scene::new(device.clone(), queue.clone());
         let uploads = Arc::new(UploadWindow::with_device(Arc::clone(&status), 1));
         Self {

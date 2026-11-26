@@ -9,6 +9,7 @@
 //!   translucent layers still stack in blend order.
 
 use crate::render::camera::FrameCamera;
+use crate::render::lighting::{FrameLighting, LIGHT_UNIFORM_BYTES};
 
 /// Uniform byte length of the shader `Camera` struct: `mat4x4<f32>` plus the
 /// 16-aligned `vec3<f32>` offset.
@@ -92,6 +93,7 @@ pub struct Pipelines {
     /// Grid uses a zero camera offset; the scene uses `-centre`.
     grid_camera_buffer: wgpu::Buffer,
     scene_camera_buffer: wgpu::Buffer,
+    light_buffer: wgpu::Buffer,
     grid_camera: wgpu::BindGroup,
     scene_camera: wgpu::BindGroup,
     clamp_sampler: wgpu::Sampler,
@@ -111,6 +113,7 @@ impl Pipelines {
     /// format the targets use.
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         samples: u32,
         surface_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
@@ -127,16 +130,28 @@ impl Pipelines {
         });
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("camera layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
         let part_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("part layout"),
@@ -180,21 +195,40 @@ impl Pipelines {
         };
         let grid_camera_buffer = create_camera("grid camera uniform");
         let scene_camera_buffer = create_camera("scene camera uniform");
+        let light_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("scene lighting uniform"),
+            size: LIGHT_UNIFORM_BYTES,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&light_buffer, 0, &FrameLighting::default().encode());
         let grid_camera = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("grid camera bind group"),
             layout: &camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: grid_camera_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: grid_camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: light_buffer.as_entire_binding(),
+                },
+            ],
         });
         let scene_camera = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("scene camera bind group"),
             layout: &camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: scene_camera_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: scene_camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: light_buffer.as_entire_binding(),
+                },
+            ],
         });
         // NEAREST filtering, no mips; atlas and material samplers differ only
         // in address mode.
@@ -398,6 +432,7 @@ impl Pipelines {
             part_layout,
             grid_camera_buffer,
             scene_camera_buffer,
+            light_buffer,
             grid_camera,
             scene_camera,
             clamp_sampler,
@@ -416,6 +451,11 @@ impl Pipelines {
     pub fn write_cameras(&self, queue: &wgpu::Queue, grid: FrameCamera, scene: FrameCamera) {
         queue.write_buffer(&self.grid_camera_buffer, 0, &grid.encode());
         queue.write_buffer(&self.scene_camera_buffer, 0, &scene.encode());
+    }
+
+    /// Uploads the lighting used by the next scene pass.
+    pub fn write_lighting(&self, queue: &wgpu::Queue, lighting: FrameLighting) {
+        queue.write_buffer(&self.light_buffer, 0, &lighting.encode());
     }
 
     pub(crate) fn grid_camera(&self) -> &wgpu::BindGroup {

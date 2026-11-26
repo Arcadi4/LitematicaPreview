@@ -15,7 +15,7 @@ fn dx12_startup_pipelines_validate() {
     }))
     .expect("A hardware Direct3D 12 adapter is required");
     println!("Adapter: {:?}", adapter.get_info());
-    let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("startup pipeline validation"),
         required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
         ..Default::default()
@@ -25,6 +25,7 @@ fn dx12_startup_pipelines_validate() {
         let errors = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let _pipelines = render::pipelines::Pipelines::new(
             &device,
+            &queue,
             samples,
             wgpu::TextureFormat::Bgra8UnormSrgb,
             wgpu::TextureFormat::Depth24Plus,

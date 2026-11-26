@@ -46,4 +46,5 @@ fluent_icons! {
     Keyboard => "keyboard",
     Gauge => "gauge",
     Color => "color",
+    Sun => "weather_sunny",
 }

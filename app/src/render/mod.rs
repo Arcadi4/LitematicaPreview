@@ -2,6 +2,7 @@
 pub mod camera;
 pub mod capture;
 pub mod context;
+pub mod lighting;
 pub mod math;
 pub mod pipelines;
 pub mod scene;

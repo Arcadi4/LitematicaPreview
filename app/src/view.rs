@@ -18,6 +18,7 @@ use crate::preferences::Action;
 use crate::{preferences_ui, preview, update};
 
 pub(crate) const SCENE_EFFECT: u32 = 1;
+pub(crate) const LIGHTING_SCENE: &str = "lighting-scene";
 /// Rune Kit's tab pill radius, so the active tab's wash sits flush in its surface.
 const TAB_RADIUS: f32 = 6.0;
 /// Rune Kit's title bar height, Large toggle size, and the gap to a control beside it.

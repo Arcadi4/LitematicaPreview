@@ -798,6 +798,16 @@ fn preferences(s: &App, cx: &mut Cx<App>, kit: &Kit) -> El {
         .hide_sidebar_toggle()
         .reduced_motion(cx.is_reduced_motion())
         .build(kit)
+        .children(
+            (s.preferences_section == preferences_ui::PreferencesSection::Appearance).then(|| {
+                rune::effect(preferences_ui::SKY_LIGHT_EFFECT)
+                    .absolute(0.0, 0.0)
+                    .w_full()
+                    .h_full()
+                    .inert()
+                    .a11y_hidden()
+            }),
+        )
 }
 
 fn page_shell(cx: &mut Cx<App>, kit: &Kit, title: &str, body: El) -> El {

@@ -2,8 +2,7 @@
 //! behaviour. Every change saves immediately through `App::save_preferences`.
 //!
 //! The window's sidebar lists the [`PreferencesSection`]s and the main pane shows the selected
-//! one, so a long controls list never becomes one unstructured scroll. A section is a stack of
-//! [`group`]s of [`setting`] rows.
+//! one. List sections use [`group`]s of [`setting`] rows.
 //!
 //! Key recording uses two paths. The recorder control captures keys focus navigation or button
 //! activation would take first, and `recording_key` records everything else from the window's
@@ -153,11 +152,10 @@ fn reset_all(s: &mut App) {
     s.save_preferences();
 }
 
-/// The selected section, in a scrolling column centred in the main pane. The shell supplies
-/// the sidebar and the title.
+/// The shell supplies the sidebar and the title.
 pub fn view(s: &App, k: &Kit) -> El {
     let groups = match s.preferences_section {
-        PreferencesSection::Appearance => appearance(s, k),
+        PreferencesSection::Appearance => return appearance(s, k),
         PreferencesSection::Controls => controls(s, k),
         PreferencesSection::Performance => performance(s, k),
         PreferencesSection::Updates => updates(s, k),
@@ -296,14 +294,18 @@ fn toggle_setting(
     setting(k, key, label, Some(description), control)
 }
 
-fn appearance(s: &App, k: &Kit) -> Vec<El> {
+pub(crate) const SKY_EFFECT: u32 = 2;
+pub(crate) const SKY_LIGHT_EFFECT: u32 = 3;
+pub(crate) const SKY: &str = "overworld-sky";
+pub(crate) const THEME_DOCK: &str = "theme-dock";
+
+fn appearance(s: &App, k: &Kit) -> El {
     let selected = match s.preferences.theme {
         Theme::System => 0,
         Theme::Light => 1,
         Theme::Dark => 2,
     };
-    let theme_description =
-        "Follow the system appearance, or pick a theme. The preview background stays dark.";
+    let theme_description = "Choose between light/dark theme.";
     let theme = SegmentedControl::new(&["System", "Light", "Dark"], Some(selected))
         .label("Theme")
         .width(Some(232.0))
@@ -316,15 +318,34 @@ fn appearance(s: &App, k: &Kit) -> Vec<El> {
             s.save_preferences();
         })
         .build(k)
-        .description(theme_description)
-        .focus_group();
-    vec![group(
-        k,
-        "appearance-theme",
-        None,
-        vec![setting(k, "theme", "Theme", Some(theme_description), theme)],
-        None,
-    )]
+        .description(theme_description);
+
+    let footer = col()
+        .items_center()
+        .gap(9.0)
+        .child(col().key(THEME_DOCK).px(5.0).py(5.0).child(theme));
+    col()
+        .w_full()
+        .h_full()
+        .child(
+            rune::effect(SKY_EFFECT)
+                .key(SKY)
+                .absolute(0.0, 0.0)
+                .w_full()
+                .h_full()
+                .inert()
+                .a11y_hidden(),
+        )
+        .child(
+            col()
+                .w_full()
+                .h_full()
+                .px(24.0)
+                .py(24.0)
+                .justify_end()
+                .items_center()
+                .child(footer),
+        )
 }
 
 fn controls(s: &App, k: &Kit) -> Vec<El> {

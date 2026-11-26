@@ -5,6 +5,7 @@
 - Replace the desktop interface with the native Rune UI and add macOS support.
 - Open several schematics in one window with tabs ([#63](https://github.com/Arcadi4/LitematicaPreview/issues/63)). Browse supported files in the same directory with cached vanilla-texture thumbnails ([#13](https://github.com/Arcadi4/LitematicaPreview/issues/13)).
 - Configure preview and spectator key bindings, spectator mouse sensitivity, and field of view in Preferences ([#53](https://github.com/Arcadi4/LitematicaPreview/issues/53), [#54](https://github.com/Arcadi4/LitematicaPreview/issues/54)).
+- Choose the interface theme beneath a Minecraft sun or moon. The view turns slightly toward the pointer, shifting highlights and shadows across the controls. Reduced Motion keeps the scene still.
 - Choose the install directory in Windows Setup ([#60](https://github.com/Arcadi4/LitematicaPreview/issues/60)).
 - Select GitHub or Cloudflare for in-app updates on Windows and macOS. AppImage uses AppImageUpdate, and apt manages Debian package upgrades.
 - Render the preview with a transparent background. PNG and clipboard exports keep transparency; JPEG exports flatten over the dark backdrop.
